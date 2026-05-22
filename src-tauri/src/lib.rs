@@ -862,6 +862,12 @@ async fn load_settings() -> Result<Settings, String> {
 }
 
 #[tauri::command]
+async fn get_app_version(app: tauri::AppHandle) -> Result<String, String> {
+    let version = app.config().version.clone().unwrap_or_else(|| "0.0.0".to_string());
+    Ok(version)
+}
+
+#[tauri::command]
 async fn get_llamacpp_version(app: tauri::AppHandle) -> Result<String, String> {
     let server_path = get_llama_server_path(Some(&app))?;
 
@@ -1015,6 +1021,7 @@ pub fn run() {
             get_model_status,
             save_settings,
             load_settings,
+            get_app_version,
             get_llamacpp_version,
             check_update,
         ])

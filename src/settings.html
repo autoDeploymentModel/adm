@@ -620,7 +620,7 @@
           <table class="version-table">
             <tr>
               <td>ADM 版本</td>
-              <td id="v-adm">0.1.0 <span id="update-badge" style="display:none;color:#4caf50;font-size:12px;margin-left:6px;">✓ 最新</span></td>
+              <td id="v-adm">检测中... <span id="update-badge" style="display:none;color:#4caf50;font-size:12px;margin-left:6px;">✓ 最新</span></td>
             </tr>
             <tr>
               <td style="padding-top:20px;" colspan="2">
@@ -793,6 +793,13 @@
     });
 
     async function loadVersionInfo() {
+      try {
+        const admVersion = await invoke("get_app_version");
+        document.getElementById("v-adm").innerHTML = admVersion + ' <span id="update-badge" style="display:none;color:#4caf50;font-size:12px;margin-left:6px;">✓ 最新</span>';
+      } catch (e) {
+        document.getElementById("v-adm").textContent = "未知";
+      }
+
       try {
         const version = await invoke("get_llamacpp_version");
         document.getElementById("v-llamacpp").textContent = version || "未知";
