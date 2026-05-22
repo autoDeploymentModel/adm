@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>模型列表</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      height: 100vh;
+      overflow-y: auto;
+      user-select: none;
+    }
+
+    main {
+      padding: 20px;
+    }
+
+    .page-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: #ffffff;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .page-title::before {
+      content: "";
+      display: inline-block;
+      width: 4px;
+      height: 18px;
+      background: #6c63ff;
+      border-radius: 2px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #16213e;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    thead {
+      background: #0f3460;
+    }
+
+    th {
+      padding: 12px 16px;
+      text-align: left;
+      font-weight: 600;
+      font-size: 13px;
+      color: #a0a0c0;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    th:last-child {
+      text-align: center;
+    }
+
+    td {
+      padding: 12px 16px;
+      border-top: 1px solid #1a1a3e;
+      font-size: 14px;
+    }
+
+    td:last-child {
+      text-align: center;
+    }
+
+    tbody tr:hover {
+      background: #1a2744;
+    }
+
+    .model-name {
+      font-weight: 500;
+      color: #ffffff;
+    }
+
+    .model-size {
+      color: #a0a0c0;
+    }
+
+    .ram-need {
+      color: #a0a0c0;
+    }
+
+    .feature-badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .feature-supported {
+      background: rgba(76, 175, 80, 0.15);
+      color: #4caf50;
+      border: 1px solid rgba(76, 175, 80, 0.3);
+    }
+
+    .feature-unsupported {
+      background: rgba(150, 150, 150, 0.1);
+      color: #808080;
+      border: 1px solid rgba(150, 150, 150, 0.2);
+    }
+
+    .status-badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .status-available {
+      background: rgba(76, 175, 80, 0.15);
+      color: #4caf50;
+      border: 1px solid rgba(76, 175, 80, 0.3);
+    }
+
+    .status-unavailable {
+      background: rgba(244, 67, 54, 0.15);
+      color: #f44336;
+      border: 1px solid rgba(244, 67, 54, 0.3);
+    }
+
+    .status-running {
+      background: rgba(33, 150, 243, 0.15);
+      color: #2196f3;
+      border: 1px solid rgba(33, 150, 243, 0.3);
+    }
+
+    .btn {
+      display: inline-block;
+      padding: 5px 14px;
+      border: none;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      margin: 0 3px;
+    }
+
+    .btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .btn-download {
+      background: #6c63ff;
+      color: #fff;
+    }
+
+    .btn-download:hover:not(:disabled) {
+      background: #5a52d5;
+    }
+
+    .btn-download.downloaded {
+      background: #2e7d32;
+      cursor: default;
+    }
+
+    .btn-start {
+      background: #1e88e5;
+      color: #fff;
+    }
+
+    .btn-start:hover:not(:disabled) {
+      background: #1565c0;
+    }
+
+    .btn-view {
+      background: #00897b;
+      color: #fff;
+    }
+
+    .btn-view:hover:not(:disabled) {
+      background: #00695c;
+    }
+
+    .btn-stop {
+      background: #e53935;
+      color: #fff;
+    }
+
+    .btn-stop:hover:not(:disabled) {
+      background: #c62828;
+    }
+
+    .actions-cell {
+      white-space: nowrap;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #606080;
+    }
+
+    .empty-state p {
+      font-size: 14px;
+    }
+
+    .loading-spinner {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(108, 99, 255, 0.3);
+      border-top-color: #6c63ff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .error-toast {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: #c62828;
+      color: #fff;
+      padding: 12px 20px;
+      border-radius: 8px;
+      font-size: 13px;
+      z-index: 1000;
+      animation: slideIn 0.3s ease;
+      max-width: 400px;
+    }
+
+    @keyframes slideIn {
+      from { transform: translateX(100%); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="page-title">模型列表</div>
+    <table id="model-table">
+      <thead>
+        <tr>
+          <th>模型名称</th>
+          <th>模型大小</th>
+          <th>内存需求</th>
+          <th>工具调用</th>
+          <th>推理</th>
+          <th>图片识别</th>
+          <th>状态</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="model-tbody">
+        <tr>
+          <td colspan="8" style="text-align:center; padding:40px;">
+            <span class="loading-spinner"></span>正在加载模型列表...
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </main>
+
+  <script>
+    const invoke = window.__TAURI_INTERNALS__?.invoke || window.__TAURI__?.core?.invoke;
+    const listen = window.__TAURI_INTERNALS__?.listen || window.__TAURI__?.event?.listen;
+
+    let modelList = [];
+    let localModels = [];
+    let partFiles = {};  // { model_id: existing_size }
+    let systemInfo = null;
+    let runningModelId = null;
+    let runningModelPort = null;
+
+    function formatBytes(bytes) {
+      if (bytes === 0) return "0 B";
+      const k = 1024;
+      const sizes = ["B", "KB", "MB", "GB", "TB"];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + sizes[i];
+    }
+
+    function isModelAvailable(needRam) {
+      if (!systemInfo) return false;
+      const ramc = (systemInfo.total_ram + systemInfo.total_vram) / (1024 * 1024 * 1024);
+      return ramc >= parseInt(needRam);
+    }
+
+    function isModelDownloaded(modelId) {
+      return localModels.includes(modelId);
+    }
+
+    function showToast(message) {
+      const existing = document.querySelector(".error-toast");
+      if (existing) existing.remove();
+      const toast = document.createElement("div");
+      toast.className = "error-toast";
+      toast.textContent = message;
+      document.body.appendChild(toast);
+      setTimeout(() => toast.remove(), 4000);
+    }
+
+    function navigateTo(page) {
+      window.parent.postMessage({ type: "navigate", page: page }, "*");
+    }
+
+    function renderModelTable() {
+      const tbody = document.getElementById("model-tbody");
+
+      if (modelList.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="8" class="empty-state"><p>暂无可用模型</p></td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = "";
+
+      modelList.forEach((model) => {
+        const available = isModelAvailable(model.need_ram);
+        const downloaded = isModelDownloaded(model.model_id);
+        const isRunning = runningModelId === model.model_id;
+
+        const tr = document.createElement("tr");
+
+        let statusHtml = "";
+        if (isRunning) {
+          statusHtml = '<span class="status-badge status-running">已启动</span>';
+        } else if (available) {
+          statusHtml = '<span class="status-badge status-available">可用</span>';
+        } else {
+          statusHtml = '<span class="status-badge status-unavailable">不可用</span>';
+        }
+
+        // 检查是否有未完成的 .part 文件
+        const partSize = partFiles[model.model_id];
+        const safeModelId = model.model_id.replace(/"/g, '"');
+        let downloadBtnHtml = "";
+        if (downloaded) {
+          downloadBtnHtml = '<button class="btn btn-download downloaded" disabled>已下载</button>';
+        } else if (partSize && partSize > 0) {
+          downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-url="' + model.model_url.replace(/"/g, '"') + '" onclick="handleDownload(this)">继续下载</button>';
+        } else if (available) {
+          downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-url="' + model.model_url.replace(/"/g, '"') + '" onclick="handleDownload(this)">下载</button>';
+        } else {
+          downloadBtnHtml = '<button class="btn btn-download" disabled>下载</button>';
+        }
+
+        let actionsHtml = "";
+        if (isRunning) {
+          actionsHtml = '<button class="btn btn-view" onclick="goModel(\'' + model.model_id.replace(/'/g, "\\'") + '\')">查看模型</button>';
+          actionsHtml += '<button class="btn btn-stop" data-stop-btn="' + safeModelId + '" onclick="handleStop(this)">关闭模型</button>';
+        } else if (downloaded && available) {
+          actionsHtml = '<button class="btn btn-start" data-start-btn="' + safeModelId + '" onclick="handleStart(this)">启动</button>';
+        } else if (downloaded) {
+          actionsHtml = '<button class="btn btn-start" disabled>启动</button>';
+        } else {
+          actionsHtml = '';
+        }
+
+        const toolsBadge = model.support_tools
+          ? '<span class="feature-badge feature-supported">支持</span>'
+          : '<span class="feature-badge feature-unsupported">不支持</span>';
+
+        const reasoningBadge = model.support_reasoning
+          ? '<span class="feature-badge feature-supported">支持</span>'
+          : '<span class="feature-badge feature-unsupported">不支持</span>';
+
+        const imagesBadge = model.support_images
+          ? '<span class="feature-badge feature-supported">支持</span>'
+          : '<span class="feature-badge feature-unsupported">不支持</span>';
+
+        tr.innerHTML =
+          '<td class="model-name">' + model.model_id + '</td>' +
+          '<td class="model-size">' + model.model_size + '</td>' +
+          '<td class="ram-need">' + model.need_ram + ' GB</td>' +
+          '<td>' + toolsBadge + '</td>' +
+          '<td>' + reasoningBadge + '</td>' +
+          '<td>' + imagesBadge + '</td>' +
+          '<td>' + statusHtml + '</td>' +
+          '<td class="actions-cell">' + downloadBtnHtml + ' ' + actionsHtml + '</td>';
+
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function handleDownload(btn) {
+      const modelId = btn.dataset.modelId;
+      const modelUrl = btn.dataset.modelUrl;
+      if (btn) {
+        // 如果有 part 文件，显示 "续传中..." 而不是 "0%"
+        const hasPart = partFiles[modelId] && partFiles[modelId] > 0;
+        btn.textContent = hasPart ? "继续下载中..." : "0%";
+        btn.disabled = true;
+      }
+
+      try {
+        await invoke("download_model", { modelId: modelId, modelUrl: modelUrl });
+      } catch (e) {
+        showToast("下载失败: " + e);
+        if (btn) {
+          btn.textContent = "下载";
+          btn.disabled = false;
+        }
+      }
+    }
+
+    async function handleStart(btn) {
+      const modelId = btn.dataset.startBtn;
+      try {
+        const settings = await invoke("load_settings");
+        const params = settings.launch_params;
+
+        btn.textContent = "启动中...";
+        btn.disabled = true;
+
+        await invoke("start_model", { modelId: modelId, params: params });
+      } catch (e) {
+        showToast("启动失败: " + e);
+        renderModelTable();
+      }
+    }
+
+    async function handleStop(btn) {
+      try {
+        await invoke("stop_model");
+        runningModelId = null;
+        runningModelPort = null;
+        renderModelTable();
+      } catch (e) {
+        showToast("停止失败: " + e);
+      }
+    }
+
+    function goModel(modelId) {
+      const port = runningModelPort || 8080;
+      navigateTo("model_chat.html?model_id=" + encodeURIComponent(modelId) + "&port=" + port);
+    }
+
+    async function init() {
+      try {
+        systemInfo = await invoke("get_system_info");
+
+        try {
+          const gpuInfo = await invoke("plugin:hwinfo|get_gpu_info");
+          if (gpuInfo && gpuInfo.vramMb) {
+            systemInfo.total_vram = gpuInfo.vramMb * 1024 * 1024;
+            systemInfo.has_gpu = true;
+          }
+        } catch (_) {}
+
+        try {
+          const ramInfo = await invoke("plugin:hwinfo|get_ram_info");
+          if (ramInfo && ramInfo.sizeMb) {
+            systemInfo.total_ram = ramInfo.sizeMb * 1024 * 1024;
+          }
+        } catch (_) {}
+      } catch (e) {
+        console.error("获取系统信息失败:", e);
+      }
+
+      try {
+        localModels = await invoke("scan_local_models");
+      } catch (e) {
+        console.error("扫描本地模型失败:", e);
+      }
+
+      // 扫描未完成的 .part 文件，恢复进度显示
+      try {
+        const parts = await invoke("scan_part_files");
+        partFiles = {};
+        for (const p of parts) {
+          partFiles[p.model_id] = p.existing_size;
+        }
+      } catch (e) {
+        console.error("扫描未完成下载失败:", e);
+      }
+
+      try {
+        const status = await invoke("get_model_status");
+        if (status.running) {
+          runningModelId = status.model_id;
+          runningModelPort = status.port;
+        }
+      } catch (e) {
+        console.error("获取模型状态失败:", e);
+      }
+
+      try {
+        modelList = await invoke("fetch_model_list");
+      } catch (e) {
+        showToast("获取模型列表失败: " + e);
+      }
+
+      renderModelTable();
+    }
+
+    // 通过 postMessage 接收主窗口转发的 Tauri 事件
+    function setupMessageListener() {
+      window.addEventListener("message", function (event) {
+        const data = event.data;
+        if (!data || !data.type || !data.payload) return;
+
+        const { model_id, progress, error, port } = data.payload;
+
+        switch (data.type) {
+          case "download-progress": {
+            const btn = document.querySelector('[data-model-id="' + model_id + '"]');
+            if (btn) {
+              btn.textContent = progress + "%";
+            }
+            break;
+          }
+          case "download-complete": {
+            if (!localModels.includes(model_id)) {
+              localModels.push(model_id);
+            }
+            // 清理 partFiles 记录
+            delete partFiles[model_id];
+            renderModelTable();
+            break;
+          }
+          case "download-error": {
+            showToast("下载失败 [" + model_id + "]: " + error);
+            renderModelTable();
+            break;
+          }
+          case "model-started": {
+            runningModelId = model_id;
+            runningModelPort = port;
+            renderModelTable();
+            break;
+          }
+          case "model-stopped": {
+            runningModelId = null;
+            runningModelPort = null;
+            renderModelTable();
+            break;
+          }
+          case "model-error": {
+            showToast("模型错误 [" + model_id + "]: " + error);
+            break;
+          }
+        }
+      });
+    }
+
+    setupMessageListener();
+    init();
+  </script>
+</body>
+</html>

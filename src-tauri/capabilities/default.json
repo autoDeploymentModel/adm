@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for the main window",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:event:allow-listen",
+    "core:event:allow-emit",
+    "opener:default",
+    "core:window:default",
+    "core:window:allow-center",
+    "hwinfo:allow-cpu-info",
+    "hwinfo:allow-gpu-info",
+    "hwinfo:allow-ram-info",
+    "hwinfo:allow-os-info"
+  ]
+}

@@ -1,0 +1,66 @@
+use std::path::Path;
+
+fn main() {
+    tauri_build::build();
+
+    // 仅在 Windows 上设置子系统为 WINDOWS，避免命令行窗口
+    #[cfg(target_os = "windows")]
+    println!("cargo:rustc-link-arg=/SUBSYSTEM:WINDOWS");
+
+    // 合并平台特定的资源配置
+    #[cfg(target_os = "windows")]
+    {
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+        let main_config_path = Path::new(&manifest_dir).join("tauri.conf.json");
+        let platform_config_path = Path::new(&manifest_dir).join("tauri.conf.windows.json");
+        
+        if platform_config_path.exists() && main_config_path.exists() {
+            // 读取主配置
+            let main_config = std::fs::read_to_string(&main_config_path)
+                .expect("无法读取主配置文件");
+            let mut main_value: serde_json::Value = serde_json::from_str(&main_config)
+                .expect("解析主配置文件失败");
+            
+            // 读取平台特定配置
+            let platform_config = std::fs::read_to_string(&platform_config_path)
+                .expect("无法读取平台配置文件");
+            let platform_value: serde_json::Value = serde_json::from_str(&platform_config)
+                .expect("解析平台配置文件失败");
+            
+            // 提取平台资源配置
+            if let Some(platform_resources) = platform_value
+                .pointer("/bundle/resources")
+                .and_then(|r| r.as_array())
+            {
+                // 确保主配置有 bundle.resources
+                if main_value.pointer("/bundle/resources").is_none() {
+                    main_value["bundle"] = serde_json::json!({
+                        "resources": []
+                    });
+                } else if main_value.pointer("/bundle/resources").and_then(|r| r.as_array()).is_none() {
+                    main_value["bundle"]["resources"] = serde_json::json!([]);
+                }
+                
+                // 添加平台特定的资源（避免重复）
+                let resources = main_value["bundle"]["resources"].as_array_mut().unwrap();
+                for resource in platform_resources {
+                    if !resources.contains(resource) {
+                        resources.push(resource.clone());
+                    }
+                }
+            }
+            
+            // 将合并后的配置写入到 gen 目录
+            let gen_dir = Path::new(&manifest_dir).join("gen");
+            std::fs::create_dir_all(&gen_dir).ok();
+            let merged_config_path = gen_dir.join("tauri.merged.conf.json");
+            let merged_config = serde_json::to_string_pretty(&main_value)
+                .expect("序列化合并后的配置失败");
+            std::fs::write(&merged_config_path, merged_config)
+                .expect("无法写入合并后的配置文件");
+            
+            println!("cargo:warning=合并后的资源配置: {:?}", 
+                main_value.pointer("/bundle/resources"));
+        }
+    }
+}

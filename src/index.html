@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ADM</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    #app {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    #content-frame {
+      flex: 1;
+      width: 100%;
+      border: none;
+      background: #1a1a2e;
+    }
+
+    #hardware-bar {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      background: #0f3460;
+      padding: 4px 16px;
+      font-size: 12px;
+      color: #a0a0c0;
+      border-top: 1px solid #1a1a3e;
+      flex-shrink: 0;
+    }
+
+
+    #home-btn,
+    #settings-btn {
+      cursor: pointer;
+      font-size: 13px;
+      padding: 2px 10px;
+      border-right: 1px solid #2a2a4e;
+      margin-right: 10px;
+      transition: color 0.2s;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1px;
+    }
+
+    .btn-icon {
+      font-size: 20px;
+      line-height: 1;
+    }
+
+    .btn-text {
+      font-size: 11px;
+      font-weight: 500;
+    }
+
+    #home-btn:hover,
+    #settings-btn:hover {
+      color: #6c63ff;
+    }
+
+    #hw-items {
+      display: flex;
+      align-items: center;
+      margin-left: auto;
+    }
+
+    .hw-item {
+      padding: 0 12px;
+      border-right: 1px solid #2a2a4e;
+    }
+
+    .hw-item:last-child {
+      border-right: none;
+    }
+
+    .hw-label {
+      color: #c0c0e0;
+      margin-right: 4px;
+      white-space: nowrap;
+      max-width: 200px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: inline-block;
+      vertical-align: bottom;
+    }
+
+    .hw-value {
+      color: #f0f0ff;
+      font-weight: 600;
+    }
+
+    /* 更新弹窗样式 */
+    #update-overlay {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.6);
+      z-index: 9999;
+      justify-content: center;
+      align-items: center;
+    }
+    #update-overlay.show {
+      display: flex;
+    }
+    #update-dialog {
+      background: #16213e;
+      border: 1px solid #2a2a4e;
+      border-radius: 12px;
+      padding: 28px 32px;
+      max-width: 460px;
+      width: 90%;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    }
+    #update-dialog .update-icon {
+      font-size: 40px;
+      text-align: center;
+      margin-bottom: 12px;
+    }
+    #update-dialog .update-title {
+      font-size: 20px;
+      font-weight: 600;
+      color: #ffffff;
+      text-align: center;
+      margin-bottom: 8px;
+    }
+    #update-dialog .update-desc {
+      font-size: 14px;
+      color: #a0a0c0;
+      text-align: center;
+      margin-bottom: 20px;
+      line-height: 1.6;
+    }
+    #update-dialog .update-info-row {
+      display: flex;
+      justify-content: center;
+      gap: 24px;
+      margin-bottom: 20px;
+      font-size: 13px;
+    }
+    #update-dialog .update-info-row .info-item {
+      text-align: center;
+    }
+    #update-dialog .update-info-row .info-label {
+      color: #8080a0;
+      font-size: 11px;
+    }
+    #update-dialog .update-info-row .info-value {
+      color: #e0e0e0;
+      font-weight: 500;
+      margin-top: 2px;
+    }
+    #update-dialog .update-buttons {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+    }
+    #update-dialog .update-btn-primary {
+      background: #6c63ff;
+      color: #fff;
+      border: none;
+      padding: 10px 28px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    #update-dialog .update-btn-primary:hover {
+      background: #5a52d5;
+    }
+    #update-dialog .update-btn-secondary {
+      background: rgba(255, 255, 255, 0.1);
+      color: #e0e0e0;
+      border: none;
+      padding: 10px 28px;
+      border-radius: 8px;
+      font-size: 14px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    #update-dialog .update-btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+    #update-dialog .checking-text {
+      text-align: center;
+      color: #8080a0;
+      font-size: 14px;
+      padding: 20px 0;
+    }
+    #update-dialog .checking-text .spinner {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 2px solid #2a2a4e;
+      border-top-color: #6c63ff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <!-- 更新弹窗 -->
+  <div id="update-overlay">
+    <div id="update-dialog">
+      <div id="update-content">
+        <!-- 动态填充 -->
+      </div>
+    </div>
+  </div>
+
+  <div id="app">
+    <iframe id="content-frame" src="model_list.html"></iframe>
+    <div id="hardware-bar">
+      <div id="home-btn" onclick="goHome()">
+        <span class="btn-icon">&#8962;</span>
+        <span class="btn-text">首页</span>
+      </div>
+      <div id="settings-btn" onclick="goSettings()">
+        <span class="btn-icon">&#9881;</span>
+        <span class="btn-text">设置</span>
+      </div>
+      <div id="hw-items">
+        <div class="hw-item">
+          <span class="hw-label">内存</span>
+          <span class="hw-value" id="ram-info">--</span>
+        </div>
+        <div class="hw-item">
+          <span class="hw-label" id="gpu-label">显存</span>
+          <span class="hw-value" id="vram-info">--</span>
+        </div>
+        <div class="hw-item">
+          <span class="hw-label">CPU</span>
+          <span class="hw-value" id="cpu-info">--</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const invoke = window.__TAURI_INTERNALS__?.invoke || window.__TAURI__?.core?.invoke;
+    const listen = window.__TAURI_INTERNALS__?.listen || window.__TAURI__?.event?.listen;
+
+    let systemInfo = null;
+    let hwinfo = {
+      cpu: null,
+      ram: null,
+      gpu: null,
+      os: null
+    };
+
+    function formatBytes(bytes) {
+      if (bytes === 0) return "0 B";
+      const k = 1024;
+      const sizes = ["B", "KB", "MB", "GB", "TB"];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + sizes[i];
+    }
+
+    function goHome() {
+      document.getElementById("content-frame").src = "model_list.html";
+    }
+
+    function goSettings() {
+      document.getElementById("content-frame").src = "settings.html";
+    }
+
+    function updateHardwareBar() {
+      if (!systemInfo) return;
+
+      try {
+        const ramTotal = formatBytes(systemInfo.total_ram);
+        document.getElementById("ram-info").textContent = ramTotal;
+
+        if (systemInfo.has_gpu && systemInfo.total_vram > 0) {
+          const vramTotal = formatBytes(systemInfo.total_vram);
+          document.getElementById("vram-info").textContent = vramTotal;
+          if (hwinfo.gpu && hwinfo.gpu.model) {
+            document.getElementById("gpu-label").textContent = hwinfo.gpu.model;
+          }
+        } else {
+          document.getElementById("vram-info").textContent = "无显卡";
+        }
+
+        const cpuCores = systemInfo.cpu_physical_cores;
+        const cpuThreads = systemInfo.cpu_logical_cores;
+        if (hwinfo.cpu && hwinfo.cpu.model) {
+          document.getElementById("cpu-info").textContent = hwinfo.cpu.model + " " + cpuCores + "C/" + cpuThreads + "T";
+        } else {
+          document.getElementById("cpu-info").textContent = cpuCores + "C/" + cpuThreads + "T";
+        }
+      } catch (e) {
+        console.error("更新硬件栏失败:", e);
+        document.getElementById("ram-info").textContent = "错误";
+        document.getElementById("vram-info").textContent = "错误";
+        document.getElementById("cpu-info").textContent = "错误";
+      }
+    }
+
+    window.addEventListener("message", function (event) {
+      if (event.data && event.data.type === "navigate") {
+        document.getElementById("content-frame").src = event.data.page;
+      }
+      if (event.data && event.data.type === "show-update-dialog") {
+        const result = event.data.result;
+        const html = `
+          <div class="update-icon">📥</div>
+          <div class="update-title">发现新版本</div>
+          <div class="update-desc">有新版本可用，是否前往下载？</div>
+          <div class="update-info-row">
+            <div class="info-item">
+              <div class="info-label">当前版本</div>
+              <div class="info-value">v${result.current_version}</div>
+            </div>
+            <div class="info-item">
+              <div class="info-label">最新版本</div>
+              <div class="info-value">v${result.remote_version}</div>
+            </div>
+          </div>
+          <div class="update-buttons">
+            <button class="update-btn-primary" onclick="openUrl('${result.download_url}')">下载更新</button>
+            <button class="update-btn-secondary" onclick="hideUpdateDialog()">稍后再说</button>
+          </div>
+        `;
+        showUpdateDialog(html);
+      }
+    });
+
+    // 监听 Tauri 事件并转发给 iframe（下载进度等）
+    function setupEventForwarding() {
+      if (typeof listen !== "function") return;
+      try {
+        listen("download-progress", (event) => {
+          const frame = document.getElementById("content-frame");
+          if (frame && frame.contentWindow) {
+            frame.contentWindow.postMessage({ type: "download-progress", payload: event.payload }, "*");
+          }
+        });
+      } catch (_) {}
+      try {
+        listen("download-complete", (event) => {
+          const frame = document.getElementById("content-frame");
+          if (frame && frame.contentWindow) {
+            frame.contentWindow.postMessage({ type: "download-complete", payload: event.payload }, "*");
+          }
+        });
+      } catch (_) {}
+      try {
+        listen("model-started", (event) => {
+          const frame = document.getElementById("content-frame");
+          if (frame && frame.contentWindow) {
+            frame.contentWindow.postMessage({ type: "model-started", payload: event.payload }, "*");
+          }
+        });
+      } catch (_) {}
+      try {
+        listen("model-stopped", (event) => {
+          const frame = document.getElementById("content-frame");
+          if (frame && frame.contentWindow) {
+            frame.contentWindow.postMessage({ type: "model-stopped", payload: event.payload }, "*");
+          }
+        });
+      } catch (_) {}
+      try {
+        listen("model-error", (event) => {
+          const frame = document.getElementById("content-frame");
+          if (frame && frame.contentWindow) {
+            frame.contentWindow.postMessage({ type: "model-error", payload: event.payload }, "*");
+          }
+        });
+      } catch (_) {}
+      try {
+        listen("model-log", (event) => {
+          const frame = document.getElementById("content-frame");
+          if (frame && frame.contentWindow) {
+            frame.contentWindow.postMessage({ type: "model-log", payload: event.payload }, "*");
+          }
+        });
+      } catch (_) {}
+      try {
+        listen("download-error", (event) => {
+          const frame = document.getElementById("content-frame");
+          if (frame && frame.contentWindow) {
+            frame.contentWindow.postMessage({ type: "download-error", payload: event.payload }, "*");
+          }
+        });
+      } catch (_) {}
+    }
+
+    // ===== 自动更新相关 =====
+
+    function showUpdateDialog(html) {
+      document.getElementById("update-content").innerHTML = html;
+      document.getElementById("update-overlay").classList.add("show");
+    }
+
+    function hideUpdateDialog() {
+      document.getElementById("update-overlay").classList.remove("show");
+    }
+
+    function openUrl(url) {
+      if (window.__TAURI__?.core) {
+        window.__TAURI__.core.invoke("plugin:opener|open_url", { url: url });
+      } else if (window.__TAURI_INTERNALS__?.invoke) {
+        window.__TAURI_INTERNALS__.invoke("plugin:opener|open_url", { url: url });
+      } else {
+        window.open(url, "_blank");
+      }
+    }
+
+    async function checkForUpdate(silent) {
+      silent = silent || false;
+      try {
+        if (!silent) {
+          showUpdateDialog('<div class="checking-text"><span class="spinner"></span>正在检查更新...</div>');
+        }
+        const result = await invoke("check_update");
+        if (result.has_update) {
+          const html = `
+            <div class="update-icon">📥</div>
+            <div class="update-title">发现新版本</div>
+            <div class="update-desc">有新版本可用，是否前往下载？</div>
+            <div class="update-info-row">
+              <div class="info-item">
+                <div class="info-label">当前版本</div>
+                <div class="info-value">v${result.current_version}</div>
+              </div>
+              <div class="info-item">
+                <div class="info-label">最新版本</div>
+                <div class="info-value">v${result.remote_version}</div>
+              </div>
+            </div>
+            <div class="update-buttons">
+              <button class="update-btn-primary" onclick="openUrl('${result.download_url}')">下载更新</button>
+              <button class="update-btn-secondary" onclick="hideUpdateDialog()">稍后再说</button>
+            </div>
+          `;
+          showUpdateDialog(html);
+        } else if (!silent) {
+          showUpdateDialog(`
+            <div class="update-icon">✅</div>
+            <div class="update-title">已是最新版本</div>
+            <div class="update-desc">当前版本 v${result.current_version} 已是最新</div>
+            <div class="update-buttons" style="margin-top:16px;">
+              <button class="update-btn-secondary" onclick="hideUpdateDialog()">确定</button>
+            </div>
+          `);
+        } else {
+          // silent mode, no update - do nothing
+        }
+      } catch (e) {
+        if (!silent) {
+          showUpdateDialog(`
+            <div class="update-icon">❌</div>
+            <div class="update-title">检查更新失败</div>
+            <div class="update-desc">${e}</div>
+            <div class="update-buttons" style="margin-top:16px;">
+              <button class="update-btn-secondary" onclick="hideUpdateDialog()">确定</button>
+            </div>
+          `);
+        }
+      }
+    }
+
+    async function init() {
+      try {
+        setupEventForwarding();
+        systemInfo = await invoke("get_system_info");
+
+        try {
+          hwinfo.cpu = await invoke("plugin:hwinfo|get_cpu_info");
+          hwinfo.ram = await invoke("plugin:hwinfo|get_ram_info");
+          hwinfo.gpu = await invoke("plugin:hwinfo|get_gpu_info");
+          hwinfo.os = await invoke("plugin:hwinfo|get_os_info");
+
+          if (hwinfo.ram && hwinfo.ram.sizeMb) {
+            systemInfo.total_ram = hwinfo.ram.sizeMb * 1024 * 1024;
+          }
+          if (hwinfo.gpu && hwinfo.gpu.vramMb) {
+            systemInfo.total_vram = hwinfo.gpu.vramMb * 1024 * 1024;
+            systemInfo.has_gpu = true;
+          }
+          if (hwinfo.cpu && hwinfo.cpu.threads) {
+            systemInfo.cpu_logical_cores = hwinfo.cpu.threads;
+          }
+        } catch (hwe) {
+          console.warn("hwinfo 插件获取失败，使用原有数据:", hwe);
+        }
+
+        updateHardwareBar();
+      } catch (e) {
+        console.error("获取系统信息失败:", e);
+        document.getElementById("ram-info").textContent = "加载失败";
+      }
+    }
+
+    // 启动时延迟检查更新（静默模式，有新版本才弹窗）
+    setTimeout(() => {
+      checkForUpdate(true);
+    }, 3000);
+
+    init();
+  </script>
+</body>
+</html>

@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ADM - 设置</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    #app {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    #settings-header {
+      display: flex;
+      align-items: center;
+      padding: 10px 16px;
+      background: #0f3460;
+      border-bottom: 1px solid #1a1a3e;
+      flex-shrink: 0;
+      gap: 12px;
+    }
+
+    .back-btn {
+      background: rgba(255, 255, 255, 0.1);
+      border: none;
+      color: #e0e0e0;
+      padding: 6px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      transition: background 0.2s;
+    }
+
+    .back-btn:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    #settings-header .title {
+      font-size: 16px;
+      font-weight: 600;
+      color: #ffffff;
+    }
+
+    #settings-layout {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    #settings-nav {
+      width: 180px;
+      background: #16213e;
+      border-right: 1px solid #1a1a3e;
+      padding: 12px 0;
+      flex-shrink: 0;
+      overflow-y: auto;
+    }
+
+    .nav-item {
+      padding: 10px 20px;
+      cursor: pointer;
+      font-size: 14px;
+      color: #a0a0c0;
+      transition: all 0.2s;
+      border-left: 3px solid transparent;
+    }
+
+    .nav-item:hover {
+      background: rgba(108, 99, 255, 0.08);
+      color: #e0e0e0;
+    }
+
+    .nav-item.active {
+      background: rgba(108, 99, 255, 0.12);
+      color: #6c63ff;
+      border-left-color: #6c63ff;
+      font-weight: 500;
+    }
+
+    #settings-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px 24px;
+    }
+
+    .panel {
+      display: none;
+    }
+
+    .panel.active {
+      display: block;
+    }
+
+    .panel-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: #ffffff;
+      margin-bottom: 20px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .panel-title::before {
+      content: "";
+      display: inline-block;
+      width: 4px;
+      height: 16px;
+      background: #6c63ff;
+      border-radius: 2px;
+    }
+
+    .param-group {
+      margin-bottom: 24px;
+    }
+
+    .param-group-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #6c63ff;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 12px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid #2a2a4e;
+    }
+
+    .param-row {
+      display: flex;
+      align-items: center;
+      margin-bottom: 10px;
+      gap: 12px;
+    }
+
+    .param-label {
+      width: 160px;
+      font-size: 13px;
+      color: #a0a0c0;
+      flex-shrink: 0;
+    }
+
+    .param-label .param-key {
+      font-size: 11px;
+      color: #606080;
+      margin-top: 2px;
+    }
+
+    .param-input {
+      flex: 1;
+      max-width: 300px;
+    }
+
+    .param-input input,
+    .param-input select {
+      width: 100%;
+      padding: 7px 12px;
+      background: #0f3460;
+      border: 1px solid #2a2a4e;
+      border-radius: 6px;
+      color: #e0e0e0;
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .param-input input:focus,
+    .param-input select:focus {
+      border-color: #6c63ff;
+    }
+
+    .param-input select {
+      cursor: pointer;
+    }
+
+    .param-input select option {
+      background: #0f3460;
+      color: #e0e0e0;
+    }
+
+    .param-input .checkbox-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .param-input input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      cursor: pointer;
+      accent-color: #6c63ff;
+    }
+
+    .param-desc {
+      font-size: 11px;
+      color: #606080;
+      margin-top: 2px;
+    }
+
+    .btn-save {
+      background: #6c63ff;
+      color: #fff;
+      border: none;
+      padding: 10px 28px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s;
+      margin-top: 16px;
+    }
+
+    .btn-save:hover {
+      background: #5a52d5;
+    }
+
+    .btn-reset {
+      background: rgba(255, 255, 255, 0.1);
+      color: #e0e0e0;
+      border: none;
+      padding: 10px 28px;
+      border-radius: 8px;
+      font-size: 14px;
+      cursor: pointer;
+      transition: background 0.2s;
+      margin-top: 16px;
+      margin-left: 12px;
+    }
+
+    .btn-reset:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    .version-table {
+      width: 100%;
+      max-width: 500px;
+    }
+
+    .version-table tr {
+      border-bottom: 1px solid #1a1a3e;
+    }
+
+    .version-table td {
+      padding: 12px 0;
+      font-size: 14px;
+    }
+
+    .version-table td:first-child {
+      color: #a0a0c0;
+      width: 140px;
+    }
+
+    .version-table td:last-child {
+      color: #e0e0e0;
+      font-weight: 500;
+    }
+
+    .about-content {
+      max-width: 500px;
+    }
+
+    .about-content h3 {
+      font-size: 20px;
+      color: #ffffff;
+      margin-bottom: 8px;
+    }
+
+    .about-content .about-subtitle {
+      font-size: 13px;
+      color: #6c63ff;
+      margin-bottom: 20px;
+    }
+
+    .about-content p {
+      font-size: 14px;
+      color: #a0a0c0;
+      line-height: 1.8;
+      margin-bottom: 12px;
+    }
+
+    .about-content a {
+      color: #6c63ff;
+      text-decoration: none;
+    }
+
+    .about-content a:hover {
+      text-decoration: underline;
+    }
+
+    .save-toast {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: #2e7d32;
+      color: #fff;
+      padding: 12px 20px;
+      border-radius: 8px;
+      font-size: 13px;
+      z-index: 1000;
+      animation: slideIn 0.3s ease;
+    }
+
+    .error-toast {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: #c62828;
+      color: #fff;
+      padding: 12px 20px;
+      border-radius: 8px;
+      font-size: 13px;
+      z-index: 1000;
+      animation: slideIn 0.3s ease;
+    }
+
+    @keyframes slideIn {
+      from { transform: translateX(100%); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="settings-header">
+      <span class="title">设置</span>
+    </div>
+    <div id="settings-layout">
+      <nav id="settings-nav">
+        <div class="nav-item active" data-panel="launch-params" onclick="switchPanel('launch-params')">模型启动参数</div>
+        <div class="nav-item" data-panel="version" onclick="switchPanel('version')">系统版本号</div>
+        <div class="nav-item" data-panel="about" onclick="switchPanel('about')">关于</div>
+      </nav>
+      <div id="settings-content">
+
+        <div id="panel-launch-params" class="panel active">
+          <div class="panel-title">模型启动参数</div>
+
+          <div class="param-group">
+            <div class="param-group-title">基础参数</div>
+
+            <div class="param-row">
+              <div class="param-label">
+                上下文大小
+                <div class="param-key">-c, --ctx-size</div>
+              </div>
+              <div class="param-input">
+                <input type="number" id="ctx_size" value="4096" min="0">
+              </div>
+            </div>
+
+            <div class="param-row">
+              <div class="param-label">
+                预测 token 数
+                <div class="param-key">-n, --n-predict</div>
+              </div>
+              <div class="param-input">
+                <input type="number" id="n_predict" value="-1">
+                <div class="param-desc">-1 表示无限</div>
+              </div>
+            </div>
+
+            <div class="param-row">
+              <div class="param-label">
+                批处理大小
+                <div class="param-key">-b, --batch-size</div>
+              </div>
+              <div class="param-input">
+                <input type="number" id="batch_size" value="2048" min="1">
+              </div>
+            </div>
+
+            <div class="param-row">
+              <div class="param-label">
+                微批次大小
+                <div class="param-key">-ub, --ubatch-size</div>
+              </div>
+              <div class="param-input">
+                <input type="number" id="ubatch_size" value="512" min="1">
+              </div>
+            </div>
+          </div>
+
+          <div class="param-group">
+            <div class="param-group-title">GPU 参数</div>
+
+            <div class="param-row">
+              <div class="param-label">
+                GPU 层数
+                <div class="param-key">-ngl, --n-gpu-layers</div>
+              </div>
+              <div class="param-input">
+                <select id="n_gpu_layers">
+                  <option value="auto">auto (自动)</option>
+                  <option value="all">all (全部)</option>
+                  <option value="0">0 (仅 CPU)</option>
+                  <option value="1">1</option>
+                  <option value="10">10</option>
+                  <option value="20">20</option>
+                  <option value="30">30</option>
+                  <option value="40">40</option>
+                  <option value="50">50</option>
+                  <option value="custom">自定义</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="param-row" id="custom_ngl_row" style="display:none;">
+              <div class="param-label">自定义 GPU 层数</div>
+              <div class="param-input">
+                <input type="number" id="n_gpu_layers_custom" value="0" min="0">
+              </div>
+            </div>
+          </div>
+
+          <div class="param-group">
+            <div class="param-group-title">性能参数</div>
+
+            <div class="param-row">
+              <div class="param-label">
+                线程数
+                <div class="param-key">-t, --threads</div>
+              </div>
+              <div class="param-input">
+                <input type="number" id="threads" value="" placeholder="自动">
+                <div class="param-desc">留空为自动</div>
+              </div>
+            </div>
+
+            <div class="param-row">
+              <div class="param-label">
+                批处理线程数
+                <div class="param-key">-tb, --threads-batch</div>
+              </div>
+              <div class="param-input">
+                <input type="number" id="threads_batch" value="" placeholder="同线程数">
+              </div>
+            </div>
+
+            <div class="param-row">
+              <div class="param-label">
+                Flash Attention
+                <div class="param-key">-fa, --flash-attn</div>
+              </div>
+              <div class="param-input">
+                <select id="flash_attn">
+                  <option value="auto">auto</option>
+                  <option value="on">on</option>
+                  <option value="off">off</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="param-row">
+              <div class="param-label">
+                KV 缓存类型 K
+                <div class="param-key">-ctk, --cache-type-k</div>
+              </div>
+              <div class="param-input">
+                <select id="cache_type_k">
+                  <option value="f16">f16</option>
+                  <option value="f32">f32</option>
+                  <option value="q8_0">q8_0</option>
+                  <option value="q4_0">q4_0</option>
+                  <option value="q4_1">q4_1</option>
+                  <option value="q5_0">q5_0</option>
+                  <option value="q5_1">q5_1</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="param-row">
+              <div class="param-label">
+                KV 缓存类型 V
+                <div class="param-key">-ctv, --cache-type-v</div>
+              </div>
+              <div class="param-input">
+                <select id="cache_type_v">
+                  <option value="f16">f16</option>
+                  <option value="f32">f32</option>
+                  <option value="q8_0">q8_0</option>
+                  <option value="q4_0">q4_0</option>
+                  <option value="q4_1">q4_1</option>
+                  <option value="q5_0">q5_0</option>
+                  <option value="q5_1">q5_1</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="param-row">
+              <div class="param-label">
+                内存锁定
+                <div class="param-key">--mlock</div>
+              </div>
+              <div class="param-input">
+                <div class="checkbox-wrap">
+                  <input type="checkbox" id="mlock">
+                  <span>强制模型驻留 RAM</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="param-row">
+              <div class="param-label">
+                内存映射
+                <div class="param-key">--mmap</div>
+              </div>
+              <div class="param-input">
+                <div class="checkbox-wrap">
+                  <input type="checkbox" id="mmap" checked>
+                  <span>启用内存映射</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="param-group">
+            <div class="param-group-title">采样参数</div>
+
+            <div class="param-row">
+              <div class="param-label">
+                温度
+                <div class="param-key">--temp</div>
+              </div>
+              <div class="param-input">
+                <input type="number" id="temperature" value="0.8" step="0.05" min="0">
+              </div>
+            </div>
+
+            <div class="param-row">
+              <div class="param-label">
+                Top-K
+                <div class="param-key">--top-k</div>
+              </div>
+              <div class="param-input">
+                <input type="number" id="top_k" value="40" min="0">
+              </div>
+            </div>
+
+            <div class="param-row">
+              <div class="param-label">
+                Top-P
+                <div class="param-key">--top-p</div>
+              </div>
+              <div class="param-input">
+                <input type="number" id="top_p" value="0.95" step="0.01" min="0" max="1">
+              </div>
+            </div>
+
+            <div class="param-row">
+              <div class="param-label">
+                Min-P
+                <div class="param-key">--min-p</div>
+              </div>
+              <div class="param-input">
+                <input type="number" id="min_p" value="0.05" step="0.01" min="0" max="1">
+              </div>
+            </div>
+
+            <div class="param-row">
+              <div class="param-label">
+                重复惩罚
+                <div class="param-key">--repeat-penalty</div>
+              </div>
+              <div class="param-input">
+                <input type="number" id="repeat_penalty" value="1.0" step="0.05" min="0">
+              </div>
+            </div>
+          </div>
+
+          <div class="param-group">
+            <div class="param-group-title">服务参数</div>
+
+            <div class="param-row">
+              <div class="param-label">
+                监听端口
+                <div class="param-key">--port</div>
+              </div>
+              <div class="param-input">
+                <input type="number" id="port" value="8080" min="1" max="65535">
+              </div>
+            </div>
+
+            <div class="param-row">
+              <div class="param-label">
+                监听地址
+                <div class="param-key">--host</div>
+              </div>
+              <div class="param-input">
+                <select id="host">
+                  <option value="127.0.0.1">127.0.0.1 (本地)</option>
+                  <option value="0.0.0.0">0.0.0.0 (所有接口)</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <button class="btn-save" onclick="saveParams()">保存设置</button>
+          <button class="btn-reset" onclick="resetParams()">恢复默认</button>
+        </div>
+
+        <div id="panel-version" class="panel">
+          <div class="panel-title">系统版本号</div>
+          <table class="version-table">
+            <tr>
+              <td>ADM 版本</td>
+              <td id="v-adm">0.1.0 <span id="update-badge" style="display:none;color:#4caf50;font-size:12px;margin-left:6px;">✓ 最新</span></td>
+            </tr>
+            <tr>
+              <td style="padding-top:20px;" colspan="2">
+                <button class="btn-save" onclick="checkUpdateNow()" style="margin-top:0;font-size:13px;padding:8px 20px;">检查新版本</button>
+                <span id="update-status" style="font-size:12px;color:#8080a0;margin-left:12px;"></span>
+              </td>
+            </tr>
+            <tr>
+              <td>Tauri 版本</td>
+              <td>2.11.2</td>
+            </tr>
+            <tr>
+              <td>llama.cpp 版本</td>
+              <td id="v-llamacpp">检测中...</td>
+            </tr>
+            <tr>
+              <td>操作系统</td>
+              <td id="v-os">检测中...</td>
+            </tr>
+          </table>
+        </div>
+
+        <div id="panel-about" class="panel">
+          <div class="panel-title">关于</div>
+          <div class="about-content">
+            <h3>ADM</h3>
+            <div class="about-subtitle">Automatic Deployment Model</div>
+            <p>ADM 是一个 llama.cpp 图形化管理工具，旨在将 llama.cpp 复杂的 CLI 启动指令通过界面化配置，让用户能够便捷地在本地部署和运行大语言模型。</p>
+            <p>基于 Tauri 2.x 构建，采用原生 HTML/CSS/JS 前端 + Rust 后端架构，轻量高效。</p>
+            <p>项目地址：<a href="https://github.com" target="_blank">GitHub</a></p>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const { invoke } = window.__TAURI_INTERNALS__;
+
+    function switchPanel(panelId) {
+      document.querySelectorAll(".nav-item").forEach((el) => el.classList.remove("active"));
+      document.querySelectorAll(".panel").forEach((el) => el.classList.remove("active"));
+
+      document.querySelector('[data-panel="' + panelId + '"]').classList.add("active");
+      document.getElementById("panel-" + panelId).classList.add("active");
+    }
+
+    function showToast(message, isError) {
+      const existing = document.querySelector(".save-toast, .error-toast");
+      if (existing) existing.remove();
+      const toast = document.createElement("div");
+      toast.className = isError ? "error-toast" : "save-toast";
+      toast.textContent = message;
+      document.body.appendChild(toast);
+      setTimeout(() => toast.remove(), 3000);
+    }
+
+    function getParamsFromForm() {
+      const nglSelect = document.getElementById("n_gpu_layers").value;
+      let nglValue = nglSelect;
+      if (nglSelect === "custom") {
+        nglValue = document.getElementById("n_gpu_layers_custom").value;
+      }
+
+      const threadsVal = document.getElementById("threads").value;
+      const threadsBatchVal = document.getElementById("threads_batch").value;
+
+      return {
+        ctx_size: parseInt(document.getElementById("ctx_size").value) || 4096,
+        n_predict: parseInt(document.getElementById("n_predict").value) || -1,
+        batch_size: parseInt(document.getElementById("batch_size").value) || 2048,
+        ubatch_size: parseInt(document.getElementById("ubatch_size").value) || 512,
+        n_gpu_layers: nglValue,
+        threads: threadsVal ? parseInt(threadsVal) : null,
+        threads_batch: threadsBatchVal ? parseInt(threadsBatchVal) : null,
+        flash_attn: document.getElementById("flash_attn").value,
+        cache_type_k: document.getElementById("cache_type_k").value,
+        cache_type_v: document.getElementById("cache_type_v").value,
+        mlock: document.getElementById("mlock").checked,
+        mmap: document.getElementById("mmap").checked,
+        temperature: parseFloat(document.getElementById("temperature").value) || 0.8,
+        top_k: parseInt(document.getElementById("top_k").value) || 40,
+        top_p: parseFloat(document.getElementById("top_p").value) || 0.95,
+        min_p: parseFloat(document.getElementById("min_p").value) || 0.05,
+        repeat_penalty: parseFloat(document.getElementById("repeat_penalty").value) || 1.0,
+        port: parseInt(document.getElementById("port").value) || 8080,
+        host: document.getElementById("host").value,
+      };
+    }
+
+    function fillFormFromParams(params) {
+      document.getElementById("ctx_size").value = params.ctx_size || 4096;
+      document.getElementById("n_predict").value = params.n_predict || -1;
+      document.getElementById("batch_size").value = params.batch_size || 2048;
+      document.getElementById("ubatch_size").value = params.ubatch_size || 512;
+
+      const nglValue = params.n_gpu_layers || "auto";
+      const nglSelect = document.getElementById("n_gpu_layers");
+      const options = Array.from(nglSelect.options).map((o) => o.value);
+      if (options.includes(nglValue)) {
+        nglSelect.value = nglValue;
+        document.getElementById("custom_ngl_row").style.display = "none";
+      } else {
+        nglSelect.value = "custom";
+        document.getElementById("n_gpu_layers_custom").value = nglValue;
+        document.getElementById("custom_ngl_row").style.display = "flex";
+      }
+
+      document.getElementById("threads").value = params.threads || "";
+      document.getElementById("threads_batch").value = params.threads_batch || "";
+      document.getElementById("flash_attn").value = params.flash_attn || "auto";
+      document.getElementById("cache_type_k").value = params.cache_type_k || "f16";
+      document.getElementById("cache_type_v").value = params.cache_type_v || "f16";
+      document.getElementById("mlock").checked = params.mlock || false;
+      document.getElementById("mmap").checked = params.mmap !== false;
+      document.getElementById("temperature").value = params.temperature || 0.8;
+      document.getElementById("top_k").value = params.top_k || 40;
+      document.getElementById("top_p").value = params.top_p || 0.95;
+      document.getElementById("min_p").value = params.min_p || 0.05;
+      document.getElementById("repeat_penalty").value = params.repeat_penalty || 1.0;
+      document.getElementById("port").value = params.port || 8080;
+      document.getElementById("host").value = params.host || "127.0.0.1";
+    }
+
+    async function saveParams() {
+      const params = getParamsFromForm();
+      const settings = { launch_params: params };
+
+      try {
+        await invoke("save_settings", { settings: settings });
+        showToast("设置已保存");
+      } catch (e) {
+        showToast("保存失败: " + e, true);
+      }
+    }
+
+    function resetParams() {
+      const defaults = {
+        ctx_size: 4096,
+        n_predict: -1,
+        batch_size: 2048,
+        ubatch_size: 512,
+        n_gpu_layers: "auto",
+        threads: null,
+        threads_batch: null,
+        flash_attn: "auto",
+        cache_type_k: "f16",
+        cache_type_v: "f16",
+        mlock: false,
+        mmap: true,
+        temperature: 0.8,
+        top_k: 40,
+        top_p: 0.95,
+        min_p: 0.05,
+        repeat_penalty: 1.0,
+        port: 8080,
+        host: "127.0.0.1",
+      };
+      fillFormFromParams(defaults);
+    }
+
+    document.getElementById("n_gpu_layers").addEventListener("change", function () {
+      const customRow = document.getElementById("custom_ngl_row");
+      if (this.value === "custom") {
+        customRow.style.display = "flex";
+      } else {
+        customRow.style.display = "none";
+      }
+    });
+
+    async function loadVersionInfo() {
+      try {
+        const version = await invoke("get_llamacpp_version");
+        document.getElementById("v-llamacpp").textContent = version || "未知";
+      } catch (e) {
+        document.getElementById("v-llamacpp").textContent = "未安装或无法检测";
+      }
+
+      const platform = navigator.platform || navigator.userAgent;
+      let osName = "未知";
+      if (platform.includes("Win")) osName = "Windows";
+      else if (platform.includes("Mac")) osName = "macOS";
+      else if (platform.includes("Linux")) osName = "Linux";
+      document.getElementById("v-os").textContent = osName;
+    }
+
+    async function checkUpdateNow() {
+      const statusEl = document.getElementById("update-status");
+      const badgeEl = document.getElementById("update-badge");
+      statusEl.textContent = "检查中...";
+      badgeEl.style.display = "none";
+
+      try {
+        const result = await invoke("check_update");
+        if (result.has_update) {
+          statusEl.textContent = `发现新版本 v${result.remote_version}`;
+          statusEl.style.color = "#ff9800";
+          // 通知父窗口显示更新弹窗
+          window.parent.postMessage({
+            type: "show-update-dialog",
+            result: result
+          }, "*");
+        } else {
+          statusEl.textContent = "已是最新版本";
+          statusEl.style.color = "#4caf50";
+          badgeEl.style.display = "inline";
+        }
+      } catch (e) {
+        statusEl.textContent = "检查失败: " + e;
+        statusEl.style.color = "#f44336";
+      }
+
+      setTimeout(() => {
+        statusEl.textContent = "";
+        statusEl.style.color = "#8080a0";
+      }, 5000);
+    }
+
+    async function init() {
+      try {
+        const settings = await invoke("load_settings");
+        if (settings && settings.launch_params) {
+          fillFormFromParams(settings.launch_params);
+        }
+      } catch (e) {
+        console.error("加载设置失败:", e);
+      }
+
+      loadVersionInfo();
+    }
+
+    init();
+  </script>
+</body>
+</html>
