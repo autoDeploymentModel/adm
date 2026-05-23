@@ -1,0 +1,1534 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ADM - Automatic Deployment Model | llama.cpp 图形化管理工具</title>
+    <meta name="description" content="ADM (Automatic Deployment Model) 是一款基于 Tauri 2.x 构建的 llama.cpp 图形化管理工具，让本地大模型部署更简单">
+    <meta name="keywords" content="ADM, llama.cpp, AI, 大语言模型, 本地部署, Tauri, 图形化工具">
+    <link rel="icon" type="image/png" href="favicon.png">
+    <style>
+        /* ===== CSS Variables ===== */
+        :root {
+            --primary-color: #FFC131;
+            --primary-dark: #e6ac29;
+            --secondary-color: #1a1a2e;
+            --accent-color: #4a90d9;
+            --text-light: #ffffff;
+            --text-dark: #333333;
+            --text-muted: #666666;
+            --bg-light: #f8f9fa;
+            --bg-dark: #0f0f1a;
+            --card-bg: rgba(255, 255, 255, 0.95);
+            --border-color: rgba(0, 0, 0, 0.1);
+            --gradient-start: #FFC131;
+            --gradient-end: #ff9500;
+            --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.08);
+            --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.12);
+            --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.15);
+            --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        /* ===== Reset & Base ===== */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+            scroll-padding-top: 80px;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+            line-height: 1.6;
+            color: var(--text-dark);
+            background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
+            overflow-x: hidden;
+        }
+
+        a {
+            text-decoration: none;
+            color: inherit;
+            transition: var(--transition);
+        }
+
+        ul {
+            list-style: none;
+        }
+
+        img {
+            max-width: 100%;
+            height: auto;
+        }
+
+        /* ===== Navigation ===== */
+        .navbar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 1000;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--border-color);
+            transition: var(--transition);
+        }
+
+        .navbar.scrolled {
+            box-shadow: var(--shadow-md);
+        }
+
+        .nav-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            height: 70px;
+        }
+
+        .nav-logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--secondary-color);
+        }
+
+        .nav-logo-icon {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-light);
+            font-size: 20px;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 32px;
+        }
+
+        .nav-link {
+            font-size: 15px;
+            font-weight: 500;
+            color: var(--text-dark);
+            position: relative;
+            padding: 8px 0;
+        }
+
+        .nav-link::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 0;
+            height: 2px;
+            background: var(--primary-color);
+            transition: var(--transition);
+        }
+
+        .nav-link:hover::after {
+            width: 100%;
+        }
+
+        .nav-link:hover {
+            color: var(--primary-color);
+        }
+
+        .nav-cta {
+            background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+            color: var(--text-light);
+            padding: 10px 24px;
+            border-radius: 25px;
+            font-weight: 600;
+            font-size: 14px;
+            transition: var(--transition);
+        }
+
+        .nav-cta:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .mobile-menu-btn {
+            display: none;
+            flex-direction: column;
+            gap: 5px;
+            cursor: pointer;
+            padding: 8px;
+        }
+
+        .mobile-menu-btn span {
+            width: 24px;
+            height: 3px;
+            background: var(--text-dark);
+            border-radius: 2px;
+            transition: var(--transition);
+        }
+
+        /* ===== Hero Section ===== */
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+            padding: 100px 24px 60px;
+        }
+
+        .hero-bg {
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f0f1a 100%);
+            z-index: -1;
+        }
+
+        .hero-bg::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: 
+                radial-gradient(circle at 20% 80%, rgba(255, 193, 49, 0.1) 0%, transparent 50%),
+                radial-gradient(circle at 80% 20%, rgba(74, 144, 217, 0.1) 0%, transparent 50%);
+        }
+
+        .hero-grid {
+            position: absolute;
+            inset: 0;
+            background-image: 
+                linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+            background-size: 50px 50px;
+            opacity: 0.5;
+        }
+
+        .hero-content {
+            max-width: 1200px;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .hero-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(255, 193, 49, 0.15);
+            border: 1px solid rgba(255, 193, 49, 0.3);
+            padding: 8px 20px;
+            border-radius: 25px;
+            color: var(--primary-color);
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 24px;
+            animation: fadeInUp 0.6s ease-out;
+        }
+
+        .hero-badge-icon {
+            font-size: 18px;
+        }
+
+        .hero-title {
+            font-weight: 800;
+            color: var(--text-light);
+            margin-bottom: 20px;
+            line-height: 1.2;
+            animation: fadeInUp 0.6s ease-out 0.1s both;
+        }
+
+        .hero-title .title-line-1 {
+            font-size: clamp(1.1rem, 2.5vw, 1.6rem);
+            font-weight: 500;
+            letter-spacing: 2px;
+            display: block;
+            margin-bottom: 16px;
+            background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero-title .title-line-2 {
+            font-size: clamp(1.6rem, 4vw, 2.6rem);
+            font-weight: 800;
+            display: block;
+            margin-bottom: 8px;
+            letter-spacing: 1px;
+        }
+
+        .hero-title .title-line-3 {
+            font-size: clamp(1.4rem, 3.5vw, 2.2rem);
+            font-weight: 600;
+            display: block;
+            color: rgba(255, 255, 255, 0.85);
+            margin-bottom: 4px;
+            letter-spacing: 3px;
+        }
+
+        .hero-title .title-line-4 {
+            font-size: clamp(1.4rem, 3.5vw, 2.2rem);
+            font-weight: 600;
+            display: block;
+            color: rgba(255, 255, 255, 0.65);
+            letter-spacing: 3px;
+        }
+
+        .hero-title-highlight {
+            background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero-subtitle {
+            font-size: clamp(1rem, 2.5vw, 1.3rem);
+            color: rgba(255, 255, 255, 0.7);
+            max-width: 600px;
+            margin: 0 auto 40px;
+            animation: fadeInUp 0.6s ease-out 0.2s both;
+        }
+
+        .hero-buttons {
+            display: flex;
+            gap: 16px;
+            justify-content: center;
+            flex-wrap: wrap;
+            animation: fadeInUp 0.6s ease-out 0.3s both;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 14px 32px;
+            border-radius: 30px;
+            font-weight: 600;
+            font-size: 15px;
+            transition: var(--transition);
+            cursor: pointer;
+            border: none;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+            color: var(--text-light);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 10px 30px rgba(255, 193, 49, 0.3);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-light);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateY(-3px);
+        }
+
+        .hero-stats {
+            display: flex;
+            justify-content: center;
+            gap: 48px;
+            margin-top: 60px;
+            flex-wrap: wrap;
+            animation: fadeInUp 0.6s ease-out 0.4s both;
+        }
+
+        .stat-item {
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 2.5rem;
+            font-weight: 800;
+            color: var(--primary-color);
+            margin-bottom: 4px;
+        }
+
+        .stat-label {
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        /* ===== Features Section ===== */
+        .section {
+            padding: 100px 24px;
+        }
+
+        .section-header {
+            text-align: center;
+            max-width: 700px;
+            margin: 0 auto 60px;
+        }
+
+        .section-tag {
+            display: inline-block;
+            background: rgba(255, 193, 49, 0.15);
+            color: #d4a017;
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .section-title {
+            font-size: clamp(1.8rem, 4vw, 2.5rem);
+            font-weight: 800;
+            color: var(--secondary-color);
+            margin-bottom: 16px;
+        }
+
+        .section-desc {
+            font-size: 16px;
+            color: var(--text-muted);
+            line-height: 1.8;
+        }
+
+        .features-grid {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 24px;
+        }
+
+        .feature-card {
+            background: var(--card-bg);
+            border-radius: 20px;
+            padding: 32px;
+            box-shadow: var(--shadow-sm);
+            border: 1px solid var(--border-color);
+            transition: var(--transition);
+        }
+
+        .feature-card:hover {
+            transform: translateY(-8px);
+            box-shadow: var(--shadow-lg);
+        }
+
+        .feature-icon {
+            width: 56px;
+            height: 56px;
+            background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 28px;
+            margin-bottom: 20px;
+        }
+
+        .feature-title {
+            font-size: 1.3rem;
+            font-weight: 700;
+            color: var(--secondary-color);
+            margin-bottom: 12px;
+        }
+
+        .feature-desc {
+            font-size: 15px;
+            color: var(--text-muted);
+            line-height: 1.7;
+        }
+
+        /* ===== Tech Stack Section ===== */
+        .tech-section {
+            background: var(--secondary-color);
+            color: var(--text-light);
+        }
+
+        .tech-section .section-tag {
+            background: rgba(255, 193, 49, 0.2);
+            color: var(--primary-color);
+        }
+
+        .tech-section .section-title {
+            color: var(--text-light);
+        }
+
+        .tech-section .section-desc {
+            color: rgba(255, 255, 255, 0.7);
+        }
+
+        .tech-grid {
+            max-width: 1000px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+        }
+
+        .tech-item {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 24px;
+            text-align: center;
+            transition: var(--transition);
+        }
+
+        .tech-item:hover {
+            background: rgba(255, 255, 255, 0.1);
+            transform: translateY(-4px);
+        }
+
+        .tech-icon {
+            font-size: 32px;
+            margin-bottom: 12px;
+        }
+
+        .tech-name {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+
+        .tech-version {
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.5);
+        }
+
+        /* ===== Screenshots Section ===== */
+        .screenshot-section {
+            background: linear-gradient(180deg, var(--bg-light) 0%, #e8ecf0 100%);
+        }
+
+        .carousel-container {
+            max-width: 1100px;
+            margin: 0 auto;
+            position: relative;
+        }
+
+        .carousel {
+            position: relative;
+            overflow: hidden;
+            border-radius: 24px;
+            box-shadow: var(--shadow-lg);
+            background: var(--secondary-color);
+            aspect-ratio: 16 / 10;
+        }
+
+        .carousel-track {
+            display: flex;
+            transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+            height: 100%;
+        }
+
+        .carousel-slide {
+            min-width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        .carousel-slide img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background: var(--secondary-color);
+        }
+
+        .carousel-arrow {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 50px;
+            height: 50px;
+            background: rgba(255, 193, 49, 0.9);
+            border: none;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            color: var(--text-light);
+            transition: var(--transition);
+            z-index: 10;
+            box-shadow: var(--shadow-md);
+        }
+
+        .carousel-arrow:hover {
+            background: var(--primary-color);
+            transform: translateY(-50%) scale(1.1);
+        }
+
+        .carousel-arrow.prev {
+            left: 20px;
+        }
+
+        .carousel-arrow.next {
+            right: 20px;
+        }
+
+        .carousel-dots {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        .carousel-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: rgba(0, 0, 0, 0.2);
+            cursor: pointer;
+            transition: var(--transition);
+        }
+
+        .carousel-dot.active {
+            background: var(--primary-color);
+            transform: scale(1.2);
+        }
+
+        .carousel-dot:hover {
+            background: rgba(255, 193, 49, 0.6);
+        }
+
+        .carousel-caption {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
+            padding: 40px 30px 30px;
+            color: var(--text-light);
+            z-index: 5;
+        }
+
+        .carousel-caption-title {
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+
+        .carousel-caption-desc {
+            font-size: 14px;
+            opacity: 0.8;
+        }
+
+        /* ===== Download Section ===== */
+        .download-section {
+            background: linear-gradient(135deg, var(--secondary-color) 0%, #16213e 100%);
+            color: var(--text-light);
+        }
+
+        .download-section .section-tag {
+            background: rgba(255, 193, 49, 0.2);
+            color: var(--primary-color);
+        }
+
+        .download-section .section-title {
+            color: var(--text-light);
+        }
+
+        .download-section .section-desc {
+            color: rgba(255, 255, 255, 0.7);
+        }
+
+        .download-cards {
+            max-width: 1000px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+        }
+
+        .download-card {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            padding: 32px;
+            text-align: center;
+            transition: var(--transition);
+        }
+
+        .download-card:hover {
+            background: rgba(255, 255, 255, 0.1);
+            transform: translateY(-4px);
+        }
+
+        .download-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+
+        .download-os {
+            font-size: 18px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+
+        .download-version {
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.5);
+            margin-bottom: 20px;
+        }
+
+        .btn-download {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+            color: var(--text-light);
+            padding: 12px 28px;
+            border-radius: 25px;
+            font-weight: 600;
+            font-size: 14px;
+            transition: var(--transition);
+        }
+
+        .btn-download:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(255, 193, 49, 0.3);
+        }
+
+        /* ===== Footer ===== */
+        .footer {
+            background: var(--bg-dark);
+            color: rgba(255, 255, 255, 0.85);
+            padding: 60px 24px 30px;
+        }
+
+        .footer-bottom p {
+            color: rgba(255, 255, 255, 0.85);
+        }
+
+        .footer-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 40px;
+        }
+
+        .footer-brand {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .footer-logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--text-light);
+        }
+
+        .footer-logo-icon {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-light);
+        }
+
+        .footer-desc {
+            font-size: 14px;
+            line-height: 1.8;
+        }
+
+        .footer-links h4 {
+            color: var(--text-light);
+            font-size: 16px;
+            margin-bottom: 20px;
+            font-weight: 600;
+        }
+
+        .footer-links ul {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .footer-links a {
+            font-size: 14px;
+            transition: var(--transition);
+        }
+
+        .footer-links a:hover {
+            color: var(--primary-color);
+            padding-left: 8px;
+        }
+
+        .footer-social {
+            display: flex;
+            gap: 12px;
+            margin-top: 20px;
+        }
+
+        .social-link {
+            width: 40px;
+            height: 40px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            transition: var(--transition);
+        }
+
+        .social-link:hover {
+            background: var(--primary-color);
+            transform: translateY(-3px);
+        }
+
+        .footer-bottom {
+            width: 100%;
+            max-width: 1200px;
+            margin: 40px auto 0;
+            padding-top: 30px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 16px;
+            font-size: 14px;
+        }
+
+        .footer-bottom p {
+            color: rgba(255, 255, 255, 0.85);
+            white-space: nowrap;
+            margin: 0;
+        }
+
+        .footer-bottom a {
+            color: var(--primary-color);
+        }
+
+        /* ===== Animations ===== */
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                transform: scale(1);
+            }
+            50% {
+                transform: scale(1.05);
+            }
+        }
+
+        .animate-pulse {
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        /* ===== Responsive ===== */
+        @media (max-width: 768px) {
+            .nav-links,
+            .nav-cta {
+                display: none;
+            }
+
+            .mobile-menu-btn {
+                display: flex;
+            }
+
+            .hero-stats {
+                gap: 32px;
+            }
+
+            .stat-number {
+                font-size: 2rem;
+            }
+
+            .features-grid,
+            .tech-grid,
+            .download-cards {
+                grid-template-columns: 1fr;
+            }
+
+            .footer-bottom {
+                flex-direction: column;
+                text-align: center;
+            }
+        }
+
+        /* ===== Scroll to Top Button ===== */
+        .scroll-top {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            width: 50px;
+            height: 50px;
+            background: linear-gradient(135deg, var(--gradient-start), var(--gradient-end));
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-light);
+            font-size: 24px;
+            box-shadow: var(--shadow-lg);
+            cursor: pointer;
+            transition: var(--transition);
+            opacity: 0;
+            visibility: hidden;
+            z-index: 999;
+        }
+
+        .scroll-top.visible {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .scroll-top:hover {
+            transform: translateY(-5px);
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar" id="navbar">
+        <div class="nav-container">
+            <a href="#" class="nav-logo">
+                <div class="nav-logo-icon">⚡</div>
+                <span>ADM</span>
+            </a>
+            <ul class="nav-links">
+                <li><a href="#features" class="nav-link">特性</a></li>
+                <li><a href="#tech" class="nav-link">技术栈</a></li>
+                <li><a href="#screenshots" class="nav-link">界面</a></li>
+                <li><a href="#download" class="nav-link">下载</a></li>
+            </ul>
+            <a href="#download" class="nav-cta">立即开始</a>
+            <div class="mobile-menu-btn" id="mobileMenuBtn">
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="hero-bg"></div>
+        <div class="hero-grid"></div>
+        <div class="hero-content">
+            <div class="hero-badge">
+                <span class="hero-badge-icon">🚀</span>
+                <span>版本 0.1.2 现已发布</span>
+            </div>
+            <h1 class="hero-title">
+                <span class="title-line-1">ADM (Automatic Deployment Model)</span>
+                <span class="title-line-2">让本地大模型部署更简单</span>
+                <span class="title-line-3">让人人都用得起大模型</span>
+                <span class="title-line-4">让您不再为找模型烦恼</span>
+            </h1>
+            <p class="hero-subtitle">
+                基于 Tauri 2.x 构建的 llama.cpp 图形化管理工具，告别命令行，一键下载启动模型
+            </p>
+            <div class="hero-buttons">
+                <a href="#download" class="btn btn-primary">
+                    <span>⬇️</span>
+                    <span>免费下载</span>
+                </a>
+                <a href="https://github.com/autoDeploymentModel/adm" class="btn btn-secondary" target="_blank">
+                    <span>⭐</span>
+                    <span>GitHub 项目</span>
+                </a>
+            </div>
+            <div class="hero-stats">
+                <div class="stat-item">
+                    <div class="stat-number">3</div>
+                    <div class="stat-label">支持平台</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-number" data-skip-animate>MIT</div>
+                    <div class="stat-label">开源许可</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features Section -->
+    <section class="section" id="features">
+        <div class="section-header">
+            <span class="section-tag">核心特性</span>
+            <h2 class="section-title">为什么选择 ADM？</h2>
+            <p class="section-desc">
+                精心设计的图形化界面，让复杂的模型部署变得简单直观，无需任何技术背景即可上手
+            </p>
+        </div>
+        <div class="features-grid">
+            <div class="feature-card">
+                <div class="feature-icon">🖥️</div>
+                <h3 class="feature-title">图形化界面</h3>
+                <p class="feature-desc">告别繁琐的命令行，点选即可配置和启动模型，操作直观简单</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">📥</div>
+                <h3 class="feature-title">一键下载</h3>
+                <p class="feature-desc">支持断点续传、下载进度实时显示，下载中断后可自动恢复</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🚀</div>
+                <h3 class="feature-title">一键启动</h3>
+                <p class="feature-desc">可视化配置启动参数，系统自动检测硬件并推荐最优设置</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">📊</div>
+                <h3 class="feature-title">硬件监控</h3>
+                <p class="feature-desc">实时显示内存、显存、CPU 信息，自动判断模型可用性</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">💬</div>
+                <h3 class="feature-title">模型交互</h3>
+                <p class="feature-desc">内嵌 Web 界面，启动后直接与模型对话，支持接入本地各种 agent 工具</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🌐</div>
+                <h3 class="feature-title">国内镜像</h3>
+                <p class="feature-desc">自动替换 HuggingFace 为国内镜像，大幅加速模型下载速度</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🔄</div>
+                <h3 class="feature-title">自动更新</h3>
+                <p class="feature-desc">静默检查更新，有新版本时提示下载，保持软件始终最新</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🔒</div>
+                <h3 class="feature-title">信息安全</h3>
+                <p class="feature-desc">所有数据本地存储，模型运行在本地，无需担心隐私泄露</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Tech Stack Section -->
+    <section class="section tech-section" id="tech">
+        <div class="section-header">
+            <span class="section-tag">技术栈</span>
+            <h2 class="section-title">轻量高效，原生至上</h2>
+            <p class="section-desc">
+                AI 时代，原生才是最高效的。采用 Tauri + 原生 HTML/CSS/JS 构建，无重型框架依赖，启动速度快，资源占用低
+            </p>
+        </div>
+        <div class="tech-grid">
+            <div class="tech-item">
+                <div class="tech-icon">⚡</div>
+                <div class="tech-name">Tauri</div>
+                <div class="tech-version">v2.11.2</div>
+            </div>
+            <div class="tech-item">
+                <div class="tech-icon">🦀</div>
+                <div class="tech-name">Rust</div>
+                <div class="tech-version">2021 Edition</div>
+            </div>
+            <div class="tech-item">
+                <div class="tech-icon">🌐</div>
+                <div class="tech-name">原生 HTML/CSS/JS</div>
+                <div class="tech-version">无框架依赖</div>
+            </div>
+            <div class="tech-item">
+                <div class="tech-icon">⚙️</div>
+                <div class="tech-name">llama.cpp</div>
+                <div class="tech-version">高性能推理</div>
+            </div>
+            <div class="tech-item">
+                <div class="tech-icon">📦</div>
+                <div class="tech-name">pnpm</div>
+                <div class="tech-version">包管理器</div>
+            </div>
+            <div class="tech-item">
+                <div class="tech-icon">🔧</div>
+                <div class="tech-name">tauri-plugin-hwinfo</div>
+                <div class="tech-version">硬件检测</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Screenshots Section -->
+    <section class="section screenshot-section" id="screenshots">
+        <div class="section-header">
+            <span class="section-tag">界面预览</span>
+            <h2 class="section-title">简洁直观的设计</h2>
+            <p class="section-desc">
+                精心设计的界面，功能分区清晰，操作流程流畅，让模型管理变得轻松愉快
+            </p>
+        </div>
+        <div class="carousel-container">
+            <div class="carousel">
+                <button class="carousel-arrow prev" id="prevBtn">‹</button>
+                <button class="carousel-arrow next" id="nextBtn">›</button>
+                <div class="carousel-track" id="carouselTrack">
+                    <div class="carousel-slide">
+                        <img src="images/screenshot1.png" alt="ADM - 模型列表界面">
+                        <div class="carousel-caption">
+                            <div class="carousel-caption-title">📊 模型列表</div>
+                            <div class="carousel-caption-desc">直观展示模型信息，一键下载启动</div>
+                        </div>
+                    </div>
+                    <div class="carousel-slide">
+                        <img src="images/screenshot2.png" alt="ADM - 设置界面">
+                        <div class="carousel-caption">
+                            <div class="carousel-caption-title">⚙️ 参数配置</div>
+                            <div class="carousel-caption-desc">可视化配置启动参数，灵活定制</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="carousel-dots" id="carouselDots">
+                <div class="carousel-dot active" data-index="0"></div>
+                <div class="carousel-dot" data-index="1"></div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Download Section -->
+    <section class="section download-section" id="download">
+        <div class="section-header">
+            <span class="section-tag">立即下载</span>
+            <h2 class="section-title">开始你的本地 AI 之旅</h2>
+            <p class="section-desc">
+                支持 Windows、Linux、macOS 三大平台，`llama-server` 可执行文件已打包在安装包内，无需额外下载
+            </p>
+        </div>
+        <div class="download-cards">
+            <div class="download-card">
+                <div class="download-icon">🪟</div>
+                <div class="download-os">Windows</div>
+                <div class="download-version">Windows 10/11 64位</div>
+                <a href="https://github.com/autoDeploymentModel/adm/releases" class="btn-download" target="_blank">
+                    <span>⬇️</span>
+                    <span>下载 .exe</span>
+                </a>
+            </div>
+            <div class="download-card">
+                <div class="download-icon">🐧</div>
+                <div class="download-os">Linux</div>
+                <div class="download-version">支持 GTK3 桌面环境</div>
+                <a href="https://github.com/autoDeploymentModel/adm/releases" class="btn-download" target="_blank">
+                    <span>⬇️</span>
+                    <span>下载 .deb/AppImage</span>
+                </a>
+            </div>
+            <div class="download-card">
+                <div class="download-icon">🍎</div>
+                <div class="download-os">macOS</div>
+                <div class="download-version">macOS 10.15+</div>
+                <a href="https://github.com/autoDeploymentModel/adm/releases" class="btn-download" target="_blank">
+                    <span>⬇️</span>
+                    <span>下载 .dmg</span>
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="footer-content">
+            <div class="footer-brand">
+                <div class="footer-logo">
+                    <div class="footer-logo-icon">⚡</div>
+                    <span>ADM</span>
+                </div>
+                <div class="footer-social">
+                    <a href="https://github.com/autoDeploymentModel/adm" class="social-link" target="_blank" title="GitHub">
+                        � GitHub
+                    </a>
+                </div>
+            </div>
+            <div class="footer-links">
+                <h4>快速链接</h4>
+                <ul>
+                    <li><a href="#features">核心特性</a></li>
+                    <li><a href="#tech">技术栈</a></li>
+                    <li><a href="#screenshots">界面预览</a></li>
+                    <li><a href="#download">下载</a></li>
+                </ul>
+            </div>
+            <div class="footer-links">
+                <h4>项目资源</h4>
+                <ul>
+                    <li><a href="https://github.com/autoDeploymentModel/adm" target="_blank">GitHub 仓库</a></li>
+                    <li><a href="https://github.com/autoDeploymentModel/adm/issues" target="_blank">问题反馈</a></li>
+                    <li><a href="https://github.com/autoDeploymentModel/adm/releases" target="_blank">发布版本</a></li>
+                    <li><a href="https://www.tauri.net.cn/" target="_blank">Tauri 文档</a></li>
+                </ul>
+            </div>
+            <div class="footer-links">
+                <h4>技术支持</h4>
+                <ul>
+                    <li><a href="https://github.com/ggml-org/llama.cpp" target="_blank">llama.cpp</a></li>
+                    <li><a href="https://github.com/nikolchaa/tauri-plugin-hwinfo" target="_blank">hwinfo 插件</a></li>
+                    <li><a href="https://hf-mirror.com/" target="_blank">模型镜像</a></li>
+                </ul>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <p>© 2024 ADM. All rights reserved. Licensed under <a href="https://github.com/autoDeploymentModel/adm/blob/main/LICENSE" target="_blank">MIT</a>.</p>
+            <p>让本地大模型部署更简单 ⚡</p>
+        </div>
+    </footer>
+
+    <!-- Scroll to Top Button -->
+    <div class="scroll-top" id="scrollTop">
+        ↑
+    </div>
+
+    <script>
+        // ===== Navbar Scroll Effect =====
+        const navbar = document.getElementById('navbar');
+        let lastScroll = 0;
+
+        window.addEventListener('scroll', () => {
+            const currentScroll = window.pageYOffset;
+            
+            if (currentScroll > 50) {
+                navbar.classList.add('scrolled');
+            } else {
+                navbar.classList.remove('scrolled');
+            }
+            
+            lastScroll = currentScroll;
+        });
+
+        // ===== Scroll to Top Button =====
+        const scrollTopBtn = document.getElementById('scrollTop');
+
+        window.addEventListener('scroll', () => {
+            if (window.pageYOffset > 300) {
+                scrollTopBtn.classList.add('visible');
+            } else {
+                scrollTopBtn.classList.remove('visible');
+            }
+        });
+
+        scrollTopBtn.addEventListener('click', () => {
+            window.scrollTo({
+                top: 0,
+                behavior: 'smooth'
+            });
+        });
+
+        // ===== Smooth Scroll for Anchor Links =====
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function(e) {
+                const href = this.getAttribute('href');
+                if (href === '#') return;
+                
+                e.preventDefault();
+                const target = document.querySelector(href);
+                if (target) {
+                    target.scrollIntoView({
+                        behavior: 'smooth',
+                        block: 'start'
+                    });
+                }
+            });
+        });
+
+        // ===== Mobile Menu Toggle =====
+        const mobileMenuBtn = document.getElementById('mobileMenuBtn');
+        let menuOpen = false;
+
+        mobileMenuBtn.addEventListener('click', () => {
+            menuOpen = !menuOpen;
+            const spans = mobileMenuBtn.querySelectorAll('span');
+            
+            if (menuOpen) {
+                spans[0].style.transform = 'rotate(45deg) translate(5px, 5px)';
+                spans[1].style.opacity = '0';
+                spans[2].style.transform = 'rotate(-45deg) translate(7px, -6px)';
+                
+                // Create mobile menu
+                const mobileMenu = document.createElement('div');
+                mobileMenu.id = 'mobileMenu';
+                mobileMenu.style.cssText = `
+                    position: fixed;
+                    top: 70px;
+                    left: 0;
+                    right: 0;
+                    background: rgba(255, 255, 255, 0.98);
+                    backdrop-filter: blur(10px);
+                    padding: 20px;
+                    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+                    z-index: 999;
+                    animation: fadeInDown 0.3s ease-out;
+                `;
+                mobileMenu.innerHTML = `
+                    <style>
+                        @keyframes fadeInDown {
+                            from {
+                                opacity: 0;
+                                transform: translateY(-20px);
+                            }
+                            to {
+                                opacity: 1;
+                                transform: translateY(0);
+                            }
+                        }
+                        #mobileMenu a {
+                            display: block;
+                            padding: 15px 20px;
+                            font-size: 16px;
+                            font-weight: 500;
+                            color: #333;
+                            border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+                            transition: all 0.3s;
+                        }
+                        #mobileMenu a:hover {
+                            background: rgba(255, 193, 49, 0.1);
+                            color: #d4a017;
+                            padding-left: 25px;
+                        }
+                        #mobileMenu .btn {
+                            display: block;
+                            text-align: center;
+                            margin: 20px 0;
+                            padding: 14px;
+                            border-radius: 25px;
+                            font-weight: 600;
+                        }
+                    </style>
+                    <a href="#features" class="mobile-link">特性</a>
+                    <a href="#tech" class="mobile-link">技术栈</a>
+                    <a href="#screenshots" class="mobile-link">界面</a>
+                    <a href="#download" class="mobile-link">下载</a>
+                    <a href="#download" class="btn btn-primary mobile-link">立即开始</a>
+                `;
+                
+                document.body.appendChild(mobileMenu);
+                
+                document.querySelectorAll('#mobileMenu .mobile-link').forEach(link => {
+                    link.addEventListener('click', () => {
+                        menuOpen = false;
+                        mobileMenu.remove();
+                        spans[0].style.transform = '';
+                        spans[1].style.opacity = '';
+                        spans[2].style.transform = '';
+                    });
+                });
+            } else {
+                spans[0].style.transform = '';
+                spans[1].style.opacity = '';
+                spans[2].style.transform = '';
+                const existingMenu = document.getElementById('mobileMenu');
+                if (existingMenu) existingMenu.remove();
+            }
+        });
+
+        // ===== Intersection Observer for Animations =====
+        const observerOptions = {
+            threshold: 0.1,
+            rootMargin: '0px 0px -50px 0px'
+        };
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.style.opacity = '1';
+                    entry.target.style.transform = 'translateY(0)';
+                }
+            });
+        }, observerOptions);
+
+        document.querySelectorAll('.feature-card, .tech-item, .download-card').forEach(card => {
+            card.style.opacity = '0';
+            card.style.transform = 'translateY(30px)';
+            card.style.transition = 'all 0.6s cubic-bezier(0.4, 0, 0.2, 1)';
+            observer.observe(card);
+        });
+
+        // ===== Animate Stats on Hero =====
+        const animateValue = (element, start, end, duration) => {
+            if (isNaN(start) || isNaN(end)) return;
+            let startTimestamp = null;
+            const step = (timestamp) => {
+                if (!startTimestamp) startTimestamp = timestamp;
+                const progress = Math.min((timestamp - startTimestamp) / duration, 1);
+                element.textContent = Math.floor(progress * (end - start) + start);
+                if (progress < 1) {
+                    window.requestAnimationFrame(step);
+                }
+            };
+            window.requestAnimationFrame(step);
+        };
+
+        // Trigger animation when hero is visible
+        const heroObserver = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    document.querySelectorAll('.stat-number').forEach((stat, index) => {
+                        if (stat.dataset.skipAnimate) return;
+                        const value = parseInt(stat.textContent);
+                        if (isNaN(value)) return;
+                        setTimeout(() => {
+                            animateValue(stat, 0, value, 1000);
+                        }, index * 200);
+                    });
+                    heroObserver.unobserve(entry.target);
+                }
+            });
+        }, { threshold: 0.5 });
+
+        heroObserver.observe(document.querySelector('.hero'));
+
+        // ===== Add ripple effect to buttons =====
+        document.querySelectorAll('.btn, .btn-download').forEach(button => {
+            button.addEventListener('click', function(e) {
+                const rect = this.getBoundingClientRect();
+                const ripple = document.createElement('span');
+                ripple.style.cssText = `
+                    position: absolute;
+                    background: rgba(255, 255, 255, 0.3);
+                    border-radius: 50%;
+                    transform: scale(0);
+                    animation: ripple 0.6s linear;
+                    pointer-events: none;
+                `;
+                const size = Math.max(rect.width, rect.height);
+                ripple.style.width = ripple.style.height = size + 'px';
+                ripple.style.left = (e.clientX - rect.left - size / 2) + 'px';
+                ripple.style.top = (e.clientY - rect.top - size / 2) + 'px';
+                this.style.position = 'relative';
+                this.style.overflow = 'hidden';
+                this.appendChild(ripple);
+                
+                setTimeout(() => ripple.remove(), 600);
+            });
+        });
+
+        // Add ripple animation
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes ripple {
+                to {
+                    transform: scale(4);
+                    opacity: 0;
+                }
+            }
+        `;
+        document.head.appendChild(style);
+
+        // ===== Carousel Slider =====
+        const carouselTrack = document.getElementById('carouselTrack');
+        const prevBtn = document.getElementById('prevBtn');
+        const nextBtn = document.getElementById('nextBtn');
+        const dots = document.querySelectorAll('.carousel-dot');
+        let currentSlide = 0;
+        const totalSlides = dots.length;
+        let autoPlayInterval;
+
+        const updateCarousel = () => {
+            carouselTrack.style.transform = `translateX(-${currentSlide * 100}%)`;
+            dots.forEach((dot, index) => {
+                dot.classList.toggle('active', index === currentSlide);
+            });
+        };
+
+        const nextSlide = () => {
+            currentSlide = (currentSlide + 1) % totalSlides;
+            updateCarousel();
+        };
+
+        const prevSlide = () => {
+            currentSlide = (currentSlide - 1 + totalSlides) % totalSlides;
+            updateCarousel();
+        };
+
+        const goToSlide = (index) => {
+            currentSlide = index;
+            updateCarousel();
+            resetAutoPlay();
+        };
+
+        const startAutoPlay = () => {
+            autoPlayInterval = setInterval(nextSlide, 4000);
+        };
+
+        const stopAutoPlay = () => {
+            clearInterval(autoPlayInterval);
+        };
+
+        const resetAutoPlay = () => {
+            stopAutoPlay();
+            startAutoPlay();
+        };
+
+        prevBtn.addEventListener('click', () => {
+            prevSlide();
+            resetAutoPlay();
+        });
+
+        nextBtn.addEventListener('click', () => {
+            nextSlide();
+            resetAutoPlay();
+        });
+
+        dots.forEach(dot => {
+            dot.addEventListener('click', () => {
+                goToSlide(parseInt(dot.dataset.index));
+            });
+        });
+
+        // Touch support for mobile
+        let touchStartX = 0;
+        let touchEndX = 0;
+        const carousel = document.querySelector('.carousel');
+
+        carousel.addEventListener('touchstart', (e) => {
+            touchStartX = e.changedTouches[0].screenX;
+            stopAutoPlay();
+        }, { passive: true });
+
+        carousel.addEventListener('touchend', (e) => {
+            touchEndX = e.changedTouches[0].screenX;
+            handleSwipe();
+            startAutoPlay();
+        }, { passive: true });
+
+        const handleSwipe = () => {
+            const swipeThreshold = 50;
+            if (touchEndX < touchStartX - swipeThreshold) {
+                nextSlide();
+            }
+            if (touchEndX > touchStartX + swipeThreshold) {
+                prevSlide();
+            }
+        };
+
+        // Start auto-play
+        startAutoPlay();
+
+        // ===== Console welcome message =====
+        console.log('%c⚡ ADM - Automatic Deployment Model', 'font-size: 24px; font-weight: bold; color: #FFC131;');
+        console.log('%c让本地大模型部署更简单', 'font-size: 14px; color: #666;');
+        console.log('%cGitHub: https://github.com/autoDeploymentModel/adm', 'font-size: 12px; color: #999;');
+    </script>
+</body>
+</html>

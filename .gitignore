@@ -24,4 +24,5 @@ dist-ssr
 *.sw?
 
 src-tauri/llamacpp/*
+src-tauri/llamacpp_all_version/*
 src-tauri/tauri/*
