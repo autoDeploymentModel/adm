@@ -99,6 +99,8 @@ struct PlatformUpdate {
 #[derive(Serialize, Deserialize, Clone)]
 struct UpdateInfo {
     version: String,
+    #[serde(rename = "llamacppVersion")]
+    llamacpp_version: Option<String>,
     windows: Option<PlatformUpdate>,
     #[serde(rename = "mac")]
     mac_os: Option<PlatformUpdate>,
@@ -111,6 +113,10 @@ struct UpdateCheckResult {
     current_version: String,
     download_url: Option<String>,
     changelog_url: Option<String>,
+    llamacpp_needs_update: bool,
+    llamacpp_remote_version: Option<String>,
+    llamacpp_local_version: Option<String>,
+    llamacpp_download_url: Option<String>,
 }
 
 // ==========================
@@ -196,23 +202,49 @@ fn get_base_dir(app: Option<&tauri::AppHandle>) -> Result<std::path::PathBuf, St
     get_exe_dir()
 }
 
-fn get_llama_server_path(app: Option<&tauri::AppHandle>) -> Result<std::path::PathBuf, String> {
-    let base_dir = get_base_dir(app)?;
-
-    #[cfg(target_os = "windows")]
-    let path = base_dir.join("llamacpp").join("windows").join("llama-server.exe");
-
-    #[cfg(target_os = "linux")]
-    let path = base_dir.join("llamacpp").join("linux").join("llama-server");
-
-    #[cfg(target_os = "macos")]
-    let path = base_dir.join("llamacpp").join("mac").join("llama-server");
-
-    if path.exists() {
-        Ok(path)
-    } else {
-        Err(format!("未找到 llama-server: {:?}", path))
+fn find_llama_server_in_dir(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    if !dir.exists() {
+        return None;
     }
+
+    let target_name = if cfg!(target_os = "windows") {
+        "llama-server.exe"
+    } else {
+        "llama-server"
+    };
+
+    fn search(dir: &std::path::Path, target: &str) -> Option<std::path::PathBuf> {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    if let Some(found) = search(&path, target) {
+                        return Some(found);
+                    }
+                } else if path.file_name().and_then(|n| n.to_str()) == Some(target) {
+                    return Some(path);
+                }
+            }
+        }
+        None
+    }
+
+    search(dir, target_name)
+}
+
+fn get_llamacpp_dir(app: Option<&tauri::AppHandle>) -> Result<std::path::PathBuf, String> {
+    let base_dir = get_base_dir(app)?;
+    Ok(base_dir.join("llamacpp"))
+}
+
+fn get_llama_server_path(app: Option<&tauri::AppHandle>) -> Result<std::path::PathBuf, String> {
+    let llamacpp_dir = get_llamacpp_dir(app)?;
+
+    if let Some(found) = find_llama_server_in_dir(&llamacpp_dir) {
+        return Ok(found);
+    }
+
+    Err(format!("未找到 llama-server 在目录: {:?}", llamacpp_dir))
 }
 
 fn get_gpu_info() -> (u64, u64, bool) {
@@ -885,7 +917,28 @@ async fn get_llamacpp_version(app: tauri::AppHandle) -> Result<String, String> {
         stdout.to_string()
     };
 
-    Ok(version_info.trim().to_string())
+    for line in version_info.lines() {
+        let line_trimmed = line.trim();
+        let lower = line_trimmed.to_lowercase();
+        if lower.contains("version") {
+            if let Some(pos) = lower.find("version") {
+                let start = pos + 7;
+                if start < line_trimmed.len() {
+                    let after_version = line_trimmed[start..].trim();
+                    let clean_part = if let Some(pos) = after_version.find(':') {
+                        after_version[pos + 1..].trim()
+                    } else {
+                        after_version
+                    };
+                    if !clean_part.is_empty() {
+                        return Ok(clean_part.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    Err("无法解析版本号".to_string())
 }
 
 // ===== 版本比较辅助函数 =====
@@ -913,6 +966,187 @@ fn compare_versions(current: &str, remote: &str) -> std::cmp::Ordering {
         }
     }
     std::cmp::Ordering::Equal
+}
+
+#[derive(Serialize, Clone)]
+struct HardwareDetectResult {
+    os: String,
+    gpu_vendor: Option<String>,
+    gpu_name: Option<String>,
+    nvidia_series: Option<u32>,
+    cpu_vendor: Option<String>,
+}
+
+fn extract_nvidia_series(gpu_name: &str) -> Option<u32> {
+    let upper = gpu_name.to_uppercase();
+    let search_from = if let Some(pos) = upper.find("RTX ") {
+        pos + 4
+    } else if let Some(pos) = upper.find("GTX ") {
+        pos + 4
+    } else {
+        return None;
+    };
+
+    if search_from >= gpu_name.len() {
+        return None;
+    }
+    let remaining = &gpu_name[search_from..];
+    let num_str: String = remaining.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if num_str.is_empty() {
+        return None;
+    }
+    let model_num: u32 = num_str.parse().ok()?;
+    if model_num >= 1000 {
+        Some(model_num / 100)
+    } else {
+        Some(model_num / 10)
+    }
+}
+
+fn detect_hardware_for_llamacpp() -> HardwareDetectResult {
+    let os = if cfg!(target_os = "windows") {
+        "windows".to_string()
+    } else if cfg!(target_os = "macos") {
+        "macos".to_string()
+    } else {
+        "linux".to_string()
+    };
+
+    let mut gpu_vendor = None;
+    let mut gpu_name = None;
+    let mut nvidia_series = None;
+    let mut cpu_vendor = None;
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(output) = create_hidden_command("wmic")
+            .args(["path", "win32_VideoController", "get", "Name"])
+            .output()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() || trimmed == "Name" {
+                    continue;
+                }
+                gpu_name = Some(trimmed.to_string());
+                let lower = trimmed.to_lowercase();
+                if lower.contains("nvidia")
+                    || lower.contains("geforce")
+                    || lower.contains("rtx")
+                    || lower.contains("gtx")
+                {
+                    gpu_vendor = Some("nvidia".to_string());
+                    nvidia_series = extract_nvidia_series(trimmed);
+                } else if lower.contains("amd") || lower.contains("radeon") {
+                    gpu_vendor = Some("amd".to_string());
+                } else if lower.contains("intel") {
+                    gpu_vendor = Some("intel".to_string());
+                }
+                break;
+            }
+        }
+
+        if let Ok(output) = create_hidden_command("wmic")
+            .args(["cpu", "get", "Name"])
+            .output()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stdout.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() || trimmed == "Name" {
+                    continue;
+                }
+                let lower = trimmed.to_lowercase();
+                if lower.contains("intel") {
+                    cpu_vendor = Some("intel".to_string());
+                } else if lower.contains("amd") {
+                    cpu_vendor = Some("amd".to_string());
+                }
+                break;
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = create_hidden_command("system_profiler")
+            .args(["SPDisplaysDataType"])
+            .output()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if stdout.contains("Chipset Model") || stdout.contains("Metal") {
+                gpu_name = Some("Apple GPU".to_string());
+                gpu_vendor = Some("apple".to_string());
+            }
+        }
+    }
+
+    HardwareDetectResult {
+        os,
+        gpu_vendor,
+        gpu_name,
+        nvidia_series,
+        cpu_vendor,
+    }
+}
+
+fn get_llamacpp_download_url(hardware: &HardwareDetectResult) -> Option<String> {
+    if hardware.os == "macos" {
+        return Some("https://adm.tuduoduo.top/llamacpp/macos.tar.gz".to_string());
+    }
+
+    if hardware.os == "windows" {
+        if let Some(ref vendor) = hardware.gpu_vendor {
+            match vendor.as_str() {
+                "nvidia" => {
+                    if let Some(series) = hardware.nvidia_series {
+                        if series <= 20 {
+                            return Some(
+                                "https://adm.tuduoduo.top/llamacpp/windows-CUDA12.zip".to_string(),
+                            );
+                        } else {
+                            return Some(
+                                "https://adm.tuduoduo.top/llamacpp/windows-CUDA13.zip".to_string(),
+                            );
+                        }
+                    }
+                    return Some(
+                        "https://adm.tuduoduo.top/llamacpp/windows-CUDA13.zip".to_string(),
+                    );
+                }
+                "amd" => {
+                    return Some(
+                        "https://adm.tuduoduo.top/llamacpp/llama-amd.zip".to_string(),
+                    );
+                }
+                "intel" => {
+                    return Some(
+                        "https://adm.tuduoduo.top/llamacpp/llama-intel.zip".to_string(),
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(ref vendor) = hardware.cpu_vendor {
+            match vendor.as_str() {
+                "intel" => {
+                    return Some(
+                        "https://adm.tuduoduo.top/llamacpp/llama-intel.zip".to_string(),
+                    );
+                }
+                "amd" => {
+                    return Some(
+                        "https://adm.tuduoduo.top/llamacpp/llama-amd.zip".to_string(),
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
+    None
 }
 
 // ===== 自动更新命令 =====
@@ -946,7 +1180,6 @@ async fn check_update(app: tauri::AppHandle) -> Result<UpdateCheckResult, String
 
     let has_update = compare_versions(&current_version, &update_info.version) == std::cmp::Ordering::Less;
 
-    // 根据当前平台获取下载链接
     let download_url;
     let changelog_url;
 
@@ -968,13 +1201,316 @@ async fn check_update(app: tauri::AppHandle) -> Result<UpdateCheckResult, String
         changelog_url = None;
     }
 
+    // 远程版本号直接使用
+    let llamacpp_remote_version = update_info.llamacpp_version.clone();
+    let mut llamacpp_local_version: Option<String> = None;
+    let mut llamacpp_needs_update = false;
+    let mut llamacpp_download_url: Option<String> = None;
+
+    if let Some(ref remote_ver) = llamacpp_remote_version {
+        // 直接调用 get_llamacpp_version 获取本地版本号
+        if let Ok(local_ver) = get_llamacpp_version(app.clone()).await {
+            llamacpp_local_version = Some(local_ver);
+        }
+
+        let local = llamacpp_local_version.as_deref().unwrap_or("");
+        if local.is_empty() || local != remote_ver {
+            llamacpp_needs_update = true;
+            let hardware = detect_hardware_for_llamacpp();
+            llamacpp_download_url = get_llamacpp_download_url(&hardware);
+        }
+    }
+
     Ok(UpdateCheckResult {
         has_update,
         remote_version: update_info.version,
         current_version,
         download_url,
         changelog_url,
+        llamacpp_needs_update,
+        llamacpp_remote_version,
+        llamacpp_local_version,
+        llamacpp_download_url,
     })
+}
+
+
+
+fn extract_zip(archive_path: &std::path::Path, dest_dir: &std::path::Path) -> Result<u32, String> {
+    let file = std::fs::File::open(archive_path)
+        .map_err(|e| format!("打开zip文件失败: {}", e))?;
+    
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| format!("解析zip文件失败: {}", e))?;
+    
+    let mut count = 0;
+    
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i)
+            .map_err(|e| format!("读取zip条目失败: {}", e))?;
+        
+        let outpath = match file.enclosed_name() {
+            Some(path) => path.to_owned(),
+            None => continue,
+        };
+        
+        // 扁平化，只保留文件名
+        let file_name = match outpath.file_name() {
+            Some(name) => name.to_owned(),
+            None => continue,
+        };
+        let dest_path = dest_dir.join(file_name);
+        
+        if file.is_dir() {
+            continue;
+        }
+        
+        if let Some(p) = dest_path.parent() {
+            std::fs::create_dir_all(p)
+                .map_err(|e| format!("创建目录失败: {}", e))?;
+        }
+        
+        let mut outfile = std::fs::File::create(&dest_path)
+            .map_err(|e| format!("创建文件失败: {}", e))?;
+        
+        std::io::copy(&mut file, &mut outfile)
+            .map_err(|e| format!("写入文件失败: {}", e))?;
+        
+        count += 1;
+    }
+    
+    Ok(count)
+}
+
+fn extract_tar_gz(archive_path: &std::path::Path, dest_dir: &std::path::Path) -> Result<u32, String> {
+    let file = std::fs::File::open(archive_path)
+        .map_err(|e| format!("打开tar.gz文件失败: {}", e))?;
+    
+    let gz_decoder = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(gz_decoder);
+    
+    let mut count = 0;
+    
+    for entry in archive.entries().map_err(|e| format!("读取tar条目失败: {}", e))? {
+        let mut entry = entry.map_err(|e| format!("解析tar条目失败: {}", e))?;
+        
+        let path = entry.path().map_err(|e| format!("获取tar条目路径失败: {}", e))?;
+        
+        // 扁平化，只保留文件名
+        let file_name = match path.file_name() {
+            Some(name) => name.to_owned(),
+            None => continue,
+        };
+        let dest_path = dest_dir.join(file_name);
+        
+        let entry_type = entry.header().entry_type();
+        if entry_type.is_dir() {
+            continue;
+        }
+        
+        if let Some(p) = dest_path.parent() {
+            std::fs::create_dir_all(p)
+                .map_err(|e| format!("创建目录失败: {}", e))?;
+        }
+        
+        let mut outfile = std::fs::File::create(&dest_path)
+            .map_err(|e| format!("创建文件失败: {}", e))?;
+        
+        std::io::copy(&mut entry, &mut outfile)
+            .map_err(|e| format!("写入文件失败: {}", e))?;
+        
+        count += 1;
+    }
+    
+    Ok(count)
+}
+
+#[tauri::command]
+async fn download_and_extract_llamacpp(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    let llamacpp_dir = get_llamacpp_dir(Some(&app))?;
+
+    std::fs::create_dir_all(&llamacpp_dir).map_err(|e| format!("创建 llamacpp 目录失败: {}", e))?;
+
+    let file_name = url.split('/').last().unwrap_or("download");
+    let temp_dir = llamacpp_dir.join(".tmp_download");
+    let archive_path = temp_dir.join(file_name);
+
+    std::fs::create_dir_all(&temp_dir).map_err(|e| format!("创建临时目录失败: {}", e))?;
+
+    app.emit(
+        "llamacpp-download-progress",
+        serde_json::json!({ "status": "downloading", "progress": 0 }),
+    )
+    .ok();
+
+    // ===== 断点续传下载 =====
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+
+    let mut existing_size: u64 = 0;
+    if archive_path.exists() {
+        existing_size = std::fs::metadata(&archive_path)
+            .map(|m| m.len())
+            .unwrap_or(0);
+    }
+
+    let mut req = client.get(&url);
+    if existing_size > 0 {
+        req = req.header("Range", format!("bytes={}-", existing_size));
+    }
+
+    let response = req.send().await.map_err(|e| format!("下载请求失败: {}", e))?;
+
+    let is_partial = response.status() == reqwest::StatusCode::PARTIAL_CONTENT;
+    let mut total_size: u64 = 0;
+
+    if is_partial && existing_size > 0 {
+        // 解析 Content-Range 头获取总大小
+        if let Some(content_range) = response.headers().get("Content-Range") {
+            if let Ok(range_str) = content_range.to_str() {
+                if let Some(total_part) = range_str.split('/').nth(1) {
+                    if let Ok(t) = total_part.parse::<u64>() {
+                        total_size = t;
+                    }
+                }
+            }
+        }
+        app.emit(
+            "llamacpp-download-progress",
+            serde_json::json!({ "status": "resuming", "progress": if total_size > 0 { (existing_size as f64 / total_size as f64) * 100.0 } else { 0.0 } as u8 }),
+        )
+        .ok();
+    } else if existing_size > 0 {
+        // 服务器不支持续传，删除旧文件从头下载
+        let _ = std::fs::remove_file(&archive_path);
+        existing_size = 0;
+    }
+
+    if !response.status().is_success() && !is_partial {
+        return Err(format!("下载失败，HTTP 状态码: {}", response.status()));
+    }
+
+    if total_size == 0 {
+        total_size = response.content_length().unwrap_or(0);
+    }
+
+    use tokio::io::AsyncWriteExt;
+    let mut file = if existing_size > 0 {
+        tokio::fs::OpenOptions::new()
+            .append(true)
+            .open(&archive_path)
+            .await
+            .map_err(|e| format!("打开续传文件失败: {}", e))?
+    } else {
+        tokio::fs::File::create(&archive_path)
+            .await
+            .map_err(|e| format!("创建临时文件失败: {}", e))?
+    };
+
+    let mut downloaded: u64 = existing_size;
+    let mut stream = response.bytes_stream();
+    use futures_util::StreamExt;
+
+    while let Some(chunk_result) = stream.next().await {
+        let chunk = chunk_result.map_err(|e| format!("下载数据读取失败: {}", e))?;
+        file.write_all(&chunk)
+            .await
+            .map_err(|e| format!("写入文件失败: {}", e))?;
+        downloaded += chunk.len() as u64;
+
+        let progress = if total_size > 0 {
+            ((downloaded as f64 / total_size as f64) * 100.0).min(99.0) as u8
+        } else {
+            0
+        };
+
+        app.emit(
+            "llamacpp-download-progress",
+            serde_json::json!({ "status": "downloading", "progress": progress }),
+        )
+        .ok();
+    }
+
+    file.flush().await.map_err(|e| format!("刷新文件失败: {}", e))?;
+    drop(file);
+
+    app.emit(
+        "llamacpp-download-progress",
+        serde_json::json!({ "status": "extracting", "progress": 0 }),
+    )
+    .ok();
+
+    // 清空llamacpp目录，删除旧版本的所有文件（保留.tmp_download临时目录）
+    if llamacpp_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&llamacpp_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() && !path.ends_with(".tmp_download") {
+                    let _ = std::fs::remove_dir_all(&path);
+                } else if path.is_file() {
+                    let _ = std::fs::remove_file(&path);
+                }
+            }
+        }
+    }
+
+    // 验证压缩包是否存在
+    if !archive_path.exists() {
+        return Err(format!("压缩包不存在: {:?}", archive_path));
+    }
+
+    let archive_size = std::fs::metadata(&archive_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+    if archive_size == 0 {
+        return Err(format!("压缩包为空: {:?}", archive_path));
+    }
+
+
+
+    let ext = archive_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+
+    // 用纯Rust库解压
+    let copied = if ext == "zip" {
+        extract_zip(&archive_path, &llamacpp_dir)?
+    } else {
+        extract_tar_gz(&archive_path, &llamacpp_dir)?
+    };
+
+    if copied == 0 {
+        return Err(format!(
+            "解压后未找到任何文件\n压缩包: {:?}\n压缩包大小: {} bytes\n请检查压缩包是否完整",
+            archive_path, archive_size
+        ));
+    }
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Some(server_path) = find_llama_server_in_dir(&llamacpp_dir) {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&server_path)
+                .map_err(|e| format!("读取权限失败: {}", e))?
+                .permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&server_path, perms)
+                .map_err(|e| format!("设置执行权限失败: {}", e))?;
+        }
+    }
+
+    app.emit(
+        "llamacpp-download-progress",
+        serde_json::json!({ "status": "done", "progress": 100 }),
+    )
+    .ok();
+
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1024,6 +1560,7 @@ pub fn run() {
             get_app_version,
             get_llamacpp_version,
             check_update,
+            download_and_extract_llamacpp,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

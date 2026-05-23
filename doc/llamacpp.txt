@@ -1,6 +1,4 @@
-llama-server.exe -h
-ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11263 MiB):
-  Device 0: NVIDIA GeForce RTX 2080 Ti, compute capability 7.5, VMM: yes, VRAM: 11263 MiB
+.\llama-server.exe --help
 ----- common params -----
 
 -h,    --help, --usage                  print usage and exit
@@ -77,17 +75,17 @@ ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11263 MiB):
 --no-host                               bypass host buffer allowing extra buffers to be used
                                         (env: LLAMA_ARG_NO_HOST)
 -ctk,  --cache-type-k TYPE              KV cache data type for K
-                                        allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1,
-                                        turbo2, turbo3, turbo4
+                                        allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1
                                         (default: f16)
                                         (env: LLAMA_ARG_CACHE_TYPE_K)
 -ctv,  --cache-type-v TYPE              KV cache data type for V
-                                        allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1,
-                                        turbo2, turbo3, turbo4
+                                        allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1
                                         (default: f16)
                                         (env: LLAMA_ARG_CACHE_TYPE_V)
 -dt,   --defrag-thold N                 KV cache defragmentation threshold (DEPRECATED)
                                         (env: LLAMA_ARG_DEFRAG_THOLD)
+--rpc SERVERS                           comma-separated list of RPC servers (host:port)
+                                        (env: LLAMA_ARG_RPC)
 --mlock                                 force system to keep model in RAM rather than swapping or compressing
                                         (env: LLAMA_ARG_MLOCK)
 --mmap, --no-mmap                       whether to memory-map model. (if mmap disabled, slower load but may
@@ -208,24 +206,23 @@ ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11263 MiB):
                                          - 1: error
                                          - 2: warning
                                          - 3: info
-                                         - 4: debug
+                                         - 4: trace (more info)
+                                         - 5: debug
                                         (default: 3)
 
                                         (env: LLAMA_LOG_VERBOSITY)
---log-prefix                            Enable prefix in log messages
-                                        (env: LLAMA_LOG_PREFIX)
---log-timestamps                        Enable timestamps in log messages
-                                        (env: LLAMA_LOG_TIMESTAMPS)
+--log-prefix, --no-log-prefix           Enable prefix in log messages
+                                        (env: LLAMA_ARG_LOG_PREFIX)
+--log-timestamps, --no-log-timestamps   Enable timestamps in log messages
+                                        (env: LLAMA_ARG_LOG_TIMESTAMPS)
 --spec-draft-type-k, -ctkd, --cache-type-k-draft TYPE
                                         KV cache data type for K for the draft model
-                                        allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1,
-                                        turbo2, turbo3, turbo4
+                                        allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1
                                         (default: f16)
                                         (env: LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_K)
 --spec-draft-type-v, -ctvd, --cache-type-v-draft TYPE
                                         KV cache data type for V for the draft model
-                                        allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1,
-                                        turbo2, turbo3, turbo4
+                                        allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1
                                         (default: f16)
                                         (env: LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_V)
 
@@ -337,7 +334,7 @@ ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11263 MiB):
                                         keep the Mixture of Experts (MoE) weights of the first N layers in the
                                         CPU for the draft model
                                         (env: LLAMA_ARG_SPEC_DRAFT_N_CPU_MOE)
---spec-draft-n-max N                    number of tokens to draft for speculative decoding (default: 16)
+--spec-draft-n-max N                    number of tokens to draft for speculative decoding (default: 3)
                                         (env: LLAMA_ARG_SPEC_DRAFT_N_MAX)
 --spec-draft-n-min N                    minimum number of draft tokens to use for speculative decoding
                                         (default: 0)
@@ -345,12 +342,11 @@ ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11263 MiB):
 --spec-draft-p-split, --draft-p-split P
                                         speculative decoding split probability (default: 0.10)
                                         (env: LLAMA_ARG_SPEC_DRAFT_P_SPLIT)
---spec-draft-p-min, --draft-p-min P     minimum speculative decoding probability (greedy) (default: 0.75)
+--spec-draft-p-min, --draft-p-min P     minimum speculative decoding probability (greedy) (default: 0.00)
                                         (env: LLAMA_ARG_SPEC_DRAFT_P_MIN)
---spec-draft-ctx-size, -cd, --ctx-size-draft N
-                                        size of the prompt context for the draft model (default: 0, 0 = loaded
-                                        from model)
-                                        (env: LLAMA_ARG_SPEC_DRAFT_CTX_SIZE)
+--spec-draft-backend-sampling, --no-spec-draft-backend-sampling
+                                        offload draft sampling to the backend (default: enabled)
+                                        (env: LLAMA_ARG_SPEC_DRAFT_BACKEND_SAMPLING)
 --spec-draft-device, -devd, --device-draft <dev1,dev2,..>
                                         comma-separated list of devices to use for offloading the draft model
                                         (none = don't offload)
@@ -362,12 +358,9 @@ ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11263 MiB):
 --spec-draft-model, -md, --model-draft FNAME
                                         draft model for speculative decoding (default: unused)
                                         (env: LLAMA_ARG_SPEC_DRAFT_MODEL)
---spec-draft-replace, --spec-replace TARGET DRAFT
-                                        translate the string in TARGET into DRAFT if the draft model and main
-                                        model are not compatible
---spec-type [none|mtp|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]
-                                        type of speculative decoding to use when no draft model is provided
-                                        (default: none)
+--spec-type none,draft-simple,draft-eagle3,draft-mtp,ngram-simple,ngram-map-k,ngram-map-k4v,ngram-mod,ngram-cache
+                                        comma-separated list of types of speculative decoding to use (default:
+                                        none)
 
                                         (env: LLAMA_ARG_SPEC_TYPE)
 --spec-ngram-mod-n-min N                minimum number of ngram tokens to use for ngram-based speculative
@@ -467,6 +460,8 @@ ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11263 MiB):
                                         (env: LLAMA_ARG_ALIAS)
 --tags STRING                           set model tags, comma-separated (informational, not used for routing)
                                         (env: LLAMA_ARG_TAGS)
+--embd-normalize N                      normalisation for embeddings (default: 2) (-1=none, 0=max absolute
+                                        int16, 1=taxicab, 2=euclidean, >2=p-norm)
 --host HOST                             ip address to listen, or bind to an UNIX socket if the address ends
                                         with .sock (default: 127.0.0.1)
                                         (env: LLAMA_ARG_HOST)
@@ -479,23 +474,33 @@ ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11263 MiB):
 --api-prefix PREFIX                     prefix path the server serves from, without the trailing slash
                                         (default: )
                                         (env: LLAMA_ARG_API_PREFIX)
---webui-config JSON                     JSON that provides default WebUI settings (overrides WebUI defaults)
+--webui-config JSON                     [DEPRECATED: use --ui-config] JSON that provides default WebUI
+                                        settings (overrides WebUI defaults)
                                         (env: LLAMA_ARG_WEBUI_CONFIG)
---webui-config-file PATH                JSON file that provides default WebUI settings (overrides WebUI
-                                        defaults)
+--ui-config JSON                        JSON that provides default UI settings (overrides UI defaults)
+                                        (env: LLAMA_ARG_UI_CONFIG)
+--webui-config-file PATH                [DEPRECATED: use --ui-config-file] JSON file that provides default
+                                        WebUI settings (overrides WebUI defaults)
                                         (env: LLAMA_ARG_WEBUI_CONFIG_FILE)
+--ui-config-file PATH                   JSON file that provides default UI settings (overrides UI defaults)
+                                        (env: LLAMA_ARG_UI_CONFIG_FILE)
 --webui-mcp-proxy, --no-webui-mcp-proxy
-                                        experimental: whether to enable MCP CORS proxy - do not enable in
-                                        untrusted environments (default: disabled)
+                                        [DEPRECATED: use --ui-mcp-proxy/--no-ui-mcp-proxy] experimental:
+                                        whether to enable MCP CORS proxy
                                         (env: LLAMA_ARG_WEBUI_MCP_PROXY)
+--ui-mcp-proxy, --no-ui-mcp-proxy       experimental: whether to enable MCP CORS proxy - do not enable in
+                                        untrusted environments (default: disabled)
+                                        (env: LLAMA_ARG_UI_MCP_PROXY)
 --tools TOOL1,TOOL2,...                 experimental: whether to enable built-in tools for AI agents - do not
                                         enable in untrusted environments (default: no tools)
                                         specify "all" to enable all tools
                                         available tools: read_file, file_glob_search, grep_search,
                                         exec_shell_command, write_file, edit_file, apply_diff, get_datetime
                                         (env: LLAMA_ARG_TOOLS)
---webui, --no-webui                     whether to enable the Web UI (default: enabled)
+--webui, --no-webui                     [DEPRECATED: use --ui/--no-ui] whether to enable the Web UI
                                         (env: LLAMA_ARG_WEBUI)
+--ui,  --no-ui                          whether to enable the Web UI (default: enabled)
+                                        (env: LLAMA_ARG_UI)
 --embedding, --embeddings               restrict to only support embedding use case; use only with dedicated
                                         embedding models (default: disabled)
                                         (env: LLAMA_ARG_EMBEDDINGS)
@@ -571,7 +576,7 @@ ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11263 MiB):
                                         bailing, bailing-think, bailing2, chatglm3, chatglm4, chatml,
                                         command-r, deepseek, deepseek-ocr, deepseek2, deepseek3, exaone-moe,
                                         exaone3, exaone4, falcon3, gemma, gigachat, glmedge, gpt-oss, granite,
-                                        granite-4.0, grok-2, hunyuan-dense, hunyuan-moe, hunyuan-ocr, kimi-k2,
+                                        granite-4.0, grok-2, hunyuan-dense, hunyuan-moe, hunyuan-vl, kimi-k2,
                                         llama2, llama2-sys, llama2-sys-bos, llama2-sys-strip, llama3, llama4,
                                         megrez, minicpm, mistral-v1, mistral-v3, mistral-v3-tekken,
                                         mistral-v7, mistral-v7-tekken, monarch, openchat, orion,
@@ -588,7 +593,7 @@ ggml_cuda_init: found 1 CUDA devices (Total VRAM: 11263 MiB):
                                         bailing, bailing-think, bailing2, chatglm3, chatglm4, chatml,
                                         command-r, deepseek, deepseek-ocr, deepseek2, deepseek3, exaone-moe,
                                         exaone3, exaone4, falcon3, gemma, gigachat, glmedge, gpt-oss, granite,
-                                        granite-4.0, grok-2, hunyuan-dense, hunyuan-moe, hunyuan-ocr, kimi-k2,
+                                        granite-4.0, grok-2, hunyuan-dense, hunyuan-moe, hunyuan-vl, kimi-k2,
                                         llama2, llama2-sys, llama2-sys-bos, llama2-sys-strip, llama3, llama4,
                                         megrez, minicpm, mistral-v1, mistral-v3, mistral-v3-tekken,
                                         mistral-v7, mistral-v7-tekken, monarch, openchat, orion,

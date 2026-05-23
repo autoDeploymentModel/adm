@@ -223,6 +223,26 @@
     @keyframes spin {
       to { transform: rotate(360deg); }
     }
+    .llamacpp-progress-bar {
+      width: 100%;
+      height: 6px;
+      background: #2a2a4e;
+      border-radius: 3px;
+      margin-top: 12px;
+      overflow: hidden;
+    }
+    .llamacpp-progress-fill {
+      height: 100%;
+      background: #6c63ff;
+      border-radius: 3px;
+      transition: width 0.3s ease;
+    }
+    .llamacpp-status-text {
+      font-size: 12px;
+      color: #8080a0;
+      margin-top: 6px;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
@@ -274,6 +294,7 @@
       gpu: null,
       os: null
     };
+    let llamacppIsMandatory = false;
 
     function formatBytes(bytes) {
       if (bytes === 0) return "0 B";
@@ -421,6 +442,10 @@
     }
 
     function hideUpdateDialog() {
+      if (llamacppIsMandatory) {
+        // 强制安装时不能关闭对话框
+        return;
+      }
       document.getElementById("update-overlay").classList.remove("show");
     }
 
@@ -441,6 +466,12 @@
           showUpdateDialog('<div class="checking-text"><span class="spinner"></span>正在检查更新...</div>');
         }
         const result = await invoke("check_update");
+
+        if (result.llamacpp_needs_update) {
+          startLlamacppUpdate(result);
+          return;
+        }
+
         if (result.has_update) {
           const html = `
             <div class="update-icon">📥</div>
@@ -488,9 +519,107 @@
       }
     }
 
+    async function startLlamacppUpdate(result) {
+      const isNotInstalled = !result.llamacpp_local_version || result.llamacpp_local_version === "未安装";
+      llamacppIsMandatory = isNotInstalled;
+      
+      const localVer = result.llamacpp_local_version || "未安装";
+      const remoteVer = result.llamacpp_remote_version || "";
+      
+      let buttonsHtml;
+      if (isNotInstalled) {
+        buttonsHtml = `
+          <div class="update-buttons" style="margin-top:16px;">
+            <button class="update-btn-primary" id="llamacpp-start-btn" onclick="doLlamacppDownload('${result.llamacpp_download_url}')">开始下载</button>
+          </div>
+        `;
+      } else {
+        buttonsHtml = `
+          <div class="update-buttons" style="margin-top:16px;">
+            <button class="update-btn-primary" id="llamacpp-start-btn" onclick="doLlamacppDownload('${result.llamacpp_download_url}')">开始下载</button>
+            <button class="update-btn-secondary" onclick="hideUpdateDialog()">稍后再说</button>
+          </div>
+        `;
+      }
+      
+      const html = `
+        <div class="update-icon">🔧</div>
+        <div class="update-title">${isNotInstalled ? "需要安装 LLamaCPP" : "LLamaCPP 需要更新"}</div>
+        <div class="update-desc">${isNotInstalled ? "首次使用需要安装 LLamaCPP 运行库" : "检测到 LLamaCPP 运行库需要更新"}</div>
+        <div class="update-info-row">
+          <div class="info-item">
+            <div class="info-label">当前版本</div>
+            <div class="info-value">${localVer}</div>
+          </div>
+          <div class="info-item">
+            <div class="info-label">最新版本</div>
+            <div class="info-value">${remoteVer}</div>
+          </div>
+        </div>
+        <div class="llamacpp-progress-bar">
+          <div class="llamacpp-progress-fill" id="llamacpp-progress-fill" style="width: 0%"></div>
+        </div>
+        <div class="llamacpp-status-text" id="llamacpp-status-text">准备下载...</div>
+        ${buttonsHtml}
+      `;
+      showUpdateDialog(html);
+      
+      // 如果是未安装状态，自动开始下载
+      if (isNotInstalled) {
+        setTimeout(function() {
+          doLlamacppDownload(result.llamacpp_download_url);
+        }, 500);
+      }
+    }
+
+    async function doLlamacppDownload(url) {
+      var startBtn = document.getElementById("llamacpp-start-btn");
+      if (startBtn) startBtn.style.display = "none";
+
+      var statusText = document.getElementById("llamacpp-status-text");
+      var progressFill = document.getElementById("llamacpp-progress-fill");
+
+      try {
+        await invoke("download_and_extract_llamacpp", { url: url });
+      } catch (e) {
+        if (statusText) statusText.textContent = "下载失败: " + e;
+        if (progressFill) progressFill.style.width = "0%";
+        if (startBtn) {
+          startBtn.style.display = "";
+          startBtn.textContent = "重试";
+        }
+      }
+    }
+
+    function setupLlamacppProgressListener() {
+      if (typeof listen !== "function") return;
+      try {
+        listen("llamacpp-download-progress", function (event) {
+          var payload = event.payload;
+          var statusText = document.getElementById("llamacpp-status-text");
+          var progressFill = document.getElementById("llamacpp-progress-fill");
+
+          if (payload.status === "downloading") {
+            if (statusText) statusText.textContent = "正在下载... " + payload.progress + "%";
+            if (progressFill) progressFill.style.width = payload.progress + "%";
+          } else if (payload.status === "extracting") {
+            if (statusText) statusText.textContent = "正在解压安装...";
+            if (progressFill) progressFill.style.width = "95%";
+          } else if (payload.status === "done") {
+            if (statusText) statusText.textContent = "安装完成！";
+            if (progressFill) progressFill.style.width = "100%";
+            // 安装完成后，清除强制标志，允许关闭对话框
+            llamacppIsMandatory = false;
+            setTimeout(function () { hideUpdateDialog(); }, 1500);
+          }
+        });
+      } catch (_) {}
+    }
+
     async function init() {
       try {
         setupEventForwarding();
+        setupLlamacppProgressListener();
         systemInfo = await invoke("get_system_info");
 
         try {
