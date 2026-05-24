@@ -39,13 +39,7 @@
       "frameworks": [],
       "minimumSystemVersion": "10.15",
       "exceptionDomain": "",
-      "signing": {
-        "hardenedRuntimeWithAccessibility": false,
-        "hardenedRuntime": true,
-        "identity": "-"
-      },
-      "entitlements": "entitlements.plist",
-      "providerShortName": null
+      "entitlements": "entitlements.plist"
     }
   }
 }
