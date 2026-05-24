@@ -83,7 +83,7 @@ struct RemoteModel {
     support_images: bool,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Default, Debug)]
 struct Settings {
     launch_params: LaunchParams,
 }
@@ -149,13 +149,7 @@ impl Default for LaunchParams {
     }
 }
 
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            launch_params: LaunchParams::default(),
-        }
-    }
-}
+
 
 fn get_resource_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
     let resource_dir = app
@@ -350,15 +344,13 @@ async fn scan_local_models(_app: tauri::AppHandle) -> Result<Vec<String>, String
     let mut model_ids = Vec::new();
     let entries = std::fs::read_dir(&models_dir).map_err(|e| format!("读取 models 目录失败: {}", e))?;
 
-    for entry in entries {
-        if let Ok(entry) = entry {
-            let path = entry.path();
-            if path.is_file() {
-                if let Some(ext) = path.extension() {
-                    if ext == "gguf" {
-                        if let Some(stem) = path.file_stem() {
-                            model_ids.push(stem.to_string_lossy().to_string());
-                        }
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            if let Some(ext) = path.extension() {
+                if ext == "gguf" {
+                    if let Some(stem) = path.file_stem() {
+                        model_ids.push(stem.to_string_lossy().to_string());
                     }
                 }
             }
@@ -386,19 +378,17 @@ async fn scan_part_files(_app: tauri::AppHandle) -> Result<Vec<PartFileProgress>
     let mut result = Vec::new();
     let entries = std::fs::read_dir(&models_dir).map_err(|e| format!("读取 models 目录失败: {}", e))?;
 
-    for entry in entries {
-        if let Ok(entry) = entry {
-            let path = entry.path();
-            if path.is_file() {
-                if let Some(ext) = path.extension() {
-                    if ext == "part" {
-                        if let Some(stem) = path.file_stem() {
-                            // stem 可能是 model_id.gguf → 取 .gguf 前面的部分
-                            let stem_str = stem.to_string_lossy().to_string();
-                            let model_id = stem_str.trim_end_matches(".gguf").to_string();
-                            let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                            result.push(PartFileProgress { model_id, existing_size: size });
-                        }
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            if let Some(ext) = path.extension() {
+                if ext == "part" {
+                    if let Some(stem) = path.file_stem() {
+                        // stem 可能是 model_id.gguf → 取 .gguf 前面的部分
+                        let stem_str = stem.to_string_lossy().to_string();
+                        let model_id = stem_str.trim_end_matches(".gguf").to_string();
+                        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                        result.push(PartFileProgress { model_id, existing_size: size });
                     }
                 }
             }
@@ -760,33 +750,31 @@ async fn start_model(
         // 处理 stdout
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
-            for line in reader.lines() {
-                if let Ok(line) = line {
+            for line in reader.lines().map_while(Result::ok) {
+                app_clone
+                    .emit(
+                        "model-log",
+                        serde_json::json!({
+                            "model_id": &model_id_clone,
+                            "line": line,
+                            "source": "stdout",
+                        }),
+                    )
+                    .ok();
+
+                if line.contains("llama server listening")
+                    || line.contains("HTTP server listening")
+                    || line.contains("listening on")
+                {
                     app_clone
                         .emit(
-                            "model-log",
+                            "model-started",
                             serde_json::json!({
                                 "model_id": &model_id_clone,
-                                "line": line,
-                                "source": "stdout",
+                                "port": port,
                             }),
                         )
                         .ok();
-
-                    if line.contains("llama server listening")
-                        || line.contains("HTTP server listening")
-                        || line.contains("listening on")
-                    {
-                        app_clone
-                            .emit(
-                                "model-started",
-                                serde_json::json!({
-                                    "model_id": &model_id_clone,
-                                    "port": port,
-                                }),
-                            )
-                            .ok();
-                    }
                 }
             }
         }
@@ -794,19 +782,17 @@ async fn start_model(
         // 处理 stderr
         if let Some(stderr) = child.stderr.take() {
             let reader = BufReader::new(stderr);
-            for line in reader.lines() {
-                if let Ok(line) = line {
-                    app_clone
-                        .emit(
-                            "model-log",
-                            serde_json::json!({
-                                "model_id": &model_id_clone,
-                                "line": line,
-                                "source": "stderr",
-                            }),
-                        )
-                        .ok();
-                }
+            for line in reader.lines().map_while(Result::ok) {
+                app_clone
+                    .emit(
+                        "model-log",
+                        serde_json::json!({
+                            "model_id": &model_id_clone,
+                            "line": line,
+                            "source": "stderr",
+                        }),
+                    )
+                    .ok();
             }
         }
 
@@ -862,17 +848,16 @@ async fn stop_model(state: tauri::State<'_, AppState>) -> Result<(), String> {
 
 #[tauri::command]
 async fn get_model_status(state: tauri::State<'_, AppState>) -> Result<ModelStatus, String> {
-    let pid = state
+    let pid = *state
         .running_process
         .lock()
-        .map_err(|e| e.to_string())?
-        .clone();
+        .map_err(|e| e.to_string())?;
     let model_id = state
         .running_model_id
         .lock()
         .map_err(|e| e.to_string())?
         .clone();
-    let port = state.running_port.lock().map_err(|e| e.to_string())?.clone();
+    let port = *state.running_port.lock().map_err(|e| e.to_string())?;
 
     let running = if let Some(pid) = pid {
         let mut sys = System::new();
@@ -1345,7 +1330,7 @@ async fn download_and_extract_llamacpp(app: tauri::AppHandle, url: String) -> Re
 
     std::fs::create_dir_all(&llamacpp_dir).map_err(|e| format!("创建 llamacpp 目录失败: {}", e))?;
 
-    let file_name = url.split('/').last().unwrap_or("download");
+    let file_name = url.split('/').next_back().unwrap_or("download");
     let temp_dir = llamacpp_dir.join(".tmp_download");
     let archive_path = temp_dir.join(file_name);
 
