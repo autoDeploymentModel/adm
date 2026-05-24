@@ -906,9 +906,22 @@ async fn save_settings(settings: Settings) -> Result<(), String> {
     let config_path = exe_dir.join("config.json");
 
     let json = serde_json::to_string_pretty(&settings).map_err(|e| format!("序列化配置失败: {}", e))?;
+    println!("[DEBUG] Writing config.json to: {:?}", config_path);
     println!("[DEBUG] config.json content: {}", json);
-    std::fs::write(&config_path, json).map_err(|e| format!("写入配置文件失败: {}", e))?;
-
+    
+    // 使用更可靠的方式写入文件：先写入临时文件，然后重命名
+    let temp_path = config_path.with_extension("tmp");
+    std::fs::write(&temp_path, json).map_err(|e| format!("写入临时配置文件失败: {}", e))?;
+    
+    // 确保数据写入磁盘
+    if let Ok(file) = std::fs::File::open(&temp_path) {
+        let _ = file.sync_all();
+    }
+    
+    // 重命名为最终文件（原子操作）
+    std::fs::rename(&temp_path, &config_path).map_err(|e| format!("重命名配置文件失败: {}", e))?;
+    
+    println!("[DEBUG] Config saved successfully to: {:?}", config_path);
     Ok(())
 }
 
@@ -917,6 +930,7 @@ async fn load_settings() -> Result<Settings, String> {
     let exe_dir = get_exe_dir()?;
     let config_path = exe_dir.join("config.json");
 
+    println!("[DEBUG] load_settings: reading from {:?}", config_path);
     if !config_path.exists() {
         println!("[DEBUG] load_settings: config.json not found, returning defaults");
         return Ok(Settings::default());

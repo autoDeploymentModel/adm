@@ -811,8 +811,8 @@
           }
           case "model-log": {
             // 接收模型启动日志
-            const logLine = payload?.line;
-            const source = payload?.source || 'stdout';
+            const logLine = data.payload?.line;
+            const source = data.payload?.source || 'stdout';
             if (logLine) {
               // 根据日志内容判断类型
               let logType = 'info';

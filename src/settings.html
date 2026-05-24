@@ -775,9 +775,12 @@
       const settings = { launch_params: params };
 
       try {
+        console.log("[DEBUG] Saving settings:", JSON.stringify(settings));
         await invoke("save_settings", { settings: settings });
-        showToast("设置已保存");
+        console.log("[DEBUG] Settings saved successfully");
+        showToast("设置已保存，重启模型后生效");
       } catch (e) {
+        console.error("[DEBUG] Failed to save settings:", e);
         showToast("保存失败: " + e, true);
       }
     }
