@@ -1006,7 +1006,6 @@ struct HardwareDetectResult {
     gpu_vendor: Option<String>,
     gpu_name: Option<String>,
     nvidia_series: Option<u32>,
-    cpu_vendor: Option<String>,
 }
 
 fn extract_nvidia_series(gpu_name: &str) -> Option<u32> {
@@ -1047,7 +1046,6 @@ fn detect_hardware_for_llamacpp() -> HardwareDetectResult {
     let mut gpu_vendor = None;
     let mut gpu_name = None;
     let mut nvidia_series = None;
-    let mut cpu_vendor = None;
 
     #[cfg(target_os = "windows")]
     {
@@ -1078,26 +1076,6 @@ fn detect_hardware_for_llamacpp() -> HardwareDetectResult {
                 break;
             }
         }
-
-        if let Ok(output) = create_hidden_command("wmic")
-            .args(["cpu", "get", "Name"])
-            .output()
-        {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines() {
-                let trimmed = line.trim();
-                if trimmed.is_empty() || trimmed == "Name" {
-                    continue;
-                }
-                let lower = trimmed.to_lowercase();
-                if lower.contains("intel") {
-                    cpu_vendor = Some("intel".to_string());
-                } else if lower.contains("amd") {
-                    cpu_vendor = Some("amd".to_string());
-                }
-                break;
-            }
-        }
     }
 
     #[cfg(target_os = "macos")]
@@ -1119,7 +1097,6 @@ fn detect_hardware_for_llamacpp() -> HardwareDetectResult {
         gpu_vendor,
         gpu_name,
         nvidia_series,
-        cpu_vendor,
     }
 }
 
@@ -1161,21 +1138,7 @@ fn get_llamacpp_download_url(hardware: &HardwareDetectResult) -> Option<String> 
             }
         }
 
-        if let Some(ref vendor) = hardware.cpu_vendor {
-            match vendor.as_str() {
-                "intel" => {
-                    return Some(
-                        "https://adm.tuduoduo.top/llamacpp/llama-intel.zip".to_string(),
-                    );
-                }
-                "amd" => {
-                    return Some(
-                        "https://adm.tuduoduo.top/llamacpp/llama-amd.zip".to_string(),
-                    );
-                }
-                _ => {}
-            }
-        }
+        return Some("https://adm.tuduoduo.top/llamacpp/llama-cpu.zip".to_string());
     }
 
     None
