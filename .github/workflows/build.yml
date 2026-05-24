@@ -68,3 +68,27 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: --target ${{ matrix.target }}
+
+      - name: macOS 自签名
+        if: matrix.platform == 'macos-latest'
+        run: |
+          APP_PATH=$(find src-tauri/target/release/bundle/macos -name "*.app" -type d | head -n 1)
+          if [ -n "$APP_PATH" ]; then
+            echo "对应用进行自签名: $APP_PATH"
+            xattr -cr "$APP_PATH"
+            codesign --force --deep --sign - --entitlements src-tauri/entitlements.plist "$APP_PATH"
+            codesign -vvv "$APP_PATH"
+          fi
+
+      - name: Windows 自签名
+        if: matrix.platform == 'windows-latest'
+        shell: powershell
+        run: |
+          $ExePath = Get-ChildItem -Path "src-tauri\target\release" -Filter "*.exe" | Select-Object -First 1 -ExpandProperty FullName
+          if ($ExePath) {
+            Write-Host "创建自签名证书"
+            $Cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=ADM Self-Signed Cert" -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddYears(10)
+            Write-Host "对可执行文件签名: $ExePath"
+            Set-AuthenticodeSignature -FilePath $ExePath -Certificate $Cert -HashAlgorithm SHA256
+            Get-AuthenticodeSignature -FilePath $ExePath | Format-List
+          }
