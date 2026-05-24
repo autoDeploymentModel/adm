@@ -33,3 +33,4 @@ tauri-plugin-hwinfo 0.2.3
 
 
 提醒，构建用pnpm命令，后面不用加任何参数 ，直接pnpm tauri build即可
+llama-server cli 文档参考本地 doc/llamacpp.txt 文件
