@@ -64,6 +64,7 @@ struct LaunchParams {
     top_p: Option<f64>,
     min_p: Option<f64>,
     repeat_penalty: Option<f64>,
+    reasoning: Option<String>,
     port: Option<u16>,
     host: Option<String>,
 }
@@ -124,7 +125,7 @@ struct UpdateCheckResult {
 impl Default for LaunchParams {
     fn default() -> Self {
         Self {
-            ctx_size: Some(4096),
+            ctx_size: Some(9096),
             n_predict: Some(-1),
             batch_size: Some(2048),
             ubatch_size: Some(512),
@@ -134,13 +135,14 @@ impl Default for LaunchParams {
             flash_attn: Some("auto".to_string()),
             cache_type_k: Some("f16".to_string()),
             cache_type_v: Some("f16".to_string()),
-            mlock: Some(false),
+            mlock: Some(true),
             mmap: Some(true),
             temperature: Some(0.8),
             top_k: Some(40),
             top_p: Some(0.95),
             min_p: Some(0.05),
             repeat_penalty: Some(1.0),
+            reasoning: Some("off".to_string()),
             port: Some(8080),
             host: Some("127.0.0.1".to_string()),
         }
@@ -700,6 +702,9 @@ async fn start_model(
     }
     if let Some(rp) = params.repeat_penalty {
         args.extend(["--repeat-penalty".to_string(), rp.to_string()]);
+    }
+    if let Some(r) = &params.reasoning {
+        args.extend(["--reasoning".to_string(), r.clone()]);
     }
 
     let port = params.port.unwrap_or(8080);

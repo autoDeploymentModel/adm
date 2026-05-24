@@ -582,6 +582,21 @@
                 <input type="number" id="repeat_penalty" value="1.0" step="0.05" min="0">
               </div>
             </div>
+
+            <div class="param-row">
+              <div class="param-label">
+                推理/思考
+                <div class="param-key">--reasoning</div>
+              </div>
+              <div class="param-input">
+                <select id="reasoning">
+                  <option value="auto">auto (自动检测)</option>
+                  <option value="on">on (开启)</option>
+                  <option value="off">off (关闭)</option>
+                </select>
+                <div class="param-desc">控制模型是否启用推理/思考模式</div>
+              </div>
+            </div>
           </div>
 
           <div class="param-group">
@@ -707,6 +722,7 @@
         top_p: parseFloat(document.getElementById("top_p").value) || 0.95,
         min_p: parseFloat(document.getElementById("min_p").value) || 0.05,
         repeat_penalty: parseFloat(document.getElementById("repeat_penalty").value) || 1.0,
+        reasoning: document.getElementById("reasoning").value,
         port: parseInt(document.getElementById("port").value) || 8080,
         host: document.getElementById("host").value,
       };
@@ -749,6 +765,7 @@
       document.getElementById("top_p").value = getParam("top_p") ?? 0.95;
       document.getElementById("min_p").value = getParam("min_p") ?? 0.05;
       document.getElementById("repeat_penalty").value = getParam("repeat_penalty") ?? 1.0;
+      document.getElementById("reasoning").value = getParam("reasoning") ?? "auto";
       document.getElementById("port").value = getParam("port") ?? 8080;
       document.getElementById("host").value = getParam("host") ?? "127.0.0.1";
     }
@@ -767,7 +784,7 @@
 
     function resetParams() {
       const defaults = {
-        ctx_size: 4096,
+        ctx_size: 9096,
         n_predict: -1,
         batch_size: 2048,
         ubatch_size: 512,
@@ -777,13 +794,14 @@
         flash_attn: "auto",
         cache_type_k: "f16",
         cache_type_v: "f16",
-        mlock: false,
+        mlock: true,
         mmap: true,
         temperature: 0.8,
         top_k: 40,
         top_p: 0.95,
         min_p: 0.05,
         repeat_penalty: 1.0,
+        reasoning: "off",
         port: 8080,
         host: "127.0.0.1",
       };
