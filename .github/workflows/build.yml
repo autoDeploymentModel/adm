@@ -53,18 +53,13 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install
 
-      - name: Install macOS dependencies
-        if: matrix.platform == 'macos-latest'
-        run: |
-          brew install create-dmg
-
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'ADM ${{ github.ref_name }}'
+          tagName: app-v__VERSION__
+          releaseName: 'ADM v__VERSION__'
           releaseBody: 'See the assets to download and install this version.'
           releaseDraft: true
           prerelease: false
