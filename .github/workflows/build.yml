@@ -62,6 +62,6 @@ jobs:
         with:
           tagName: app-v__VERSION__
           releaseName: 'ADM v__VERSION__'
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           args: --target ${{ matrix.target }}
