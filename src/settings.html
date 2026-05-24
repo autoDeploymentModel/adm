@@ -713,12 +713,19 @@
     }
 
     function fillFormFromParams(params) {
-      document.getElementById("ctx_size").value = params.ctx_size || 4096;
-      document.getElementById("n_predict").value = params.n_predict || -1;
-      document.getElementById("batch_size").value = params.batch_size || 2048;
-      document.getElementById("ubatch_size").value = params.ubatch_size || 512;
+      function getParam(key) {
+        return params[key] ?? params[camelCase(key)];
+      }
+      function camelCase(snake) {
+        return snake.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+      }
 
-      const nglValue = params.n_gpu_layers || "auto";
+      document.getElementById("ctx_size").value = getParam("ctx_size") ?? 4096;
+      document.getElementById("n_predict").value = getParam("n_predict") ?? -1;
+      document.getElementById("batch_size").value = getParam("batch_size") ?? 2048;
+      document.getElementById("ubatch_size").value = getParam("ubatch_size") ?? 512;
+
+      const nglValue = getParam("n_gpu_layers") ?? "auto";
       const nglSelect = document.getElementById("n_gpu_layers");
       const options = Array.from(nglSelect.options).map((o) => o.value);
       if (options.includes(nglValue)) {
@@ -730,20 +737,20 @@
         document.getElementById("custom_ngl_row").style.display = "flex";
       }
 
-      document.getElementById("threads").value = params.threads || "";
-      document.getElementById("threads_batch").value = params.threads_batch || "";
-      document.getElementById("flash_attn").value = params.flash_attn || "auto";
-      document.getElementById("cache_type_k").value = params.cache_type_k || "f16";
-      document.getElementById("cache_type_v").value = params.cache_type_v || "f16";
-      document.getElementById("mlock").checked = params.mlock || false;
-      document.getElementById("mmap").checked = params.mmap !== false;
-      document.getElementById("temperature").value = params.temperature || 0.8;
-      document.getElementById("top_k").value = params.top_k || 40;
-      document.getElementById("top_p").value = params.top_p || 0.95;
-      document.getElementById("min_p").value = params.min_p || 0.05;
-      document.getElementById("repeat_penalty").value = params.repeat_penalty || 1.0;
-      document.getElementById("port").value = params.port || 8080;
-      document.getElementById("host").value = params.host || "127.0.0.1";
+      document.getElementById("threads").value = getParam("threads") ?? "";
+      document.getElementById("threads_batch").value = getParam("threads_batch") ?? "";
+      document.getElementById("flash_attn").value = getParam("flash_attn") ?? "auto";
+      document.getElementById("cache_type_k").value = getParam("cache_type_k") ?? "f16";
+      document.getElementById("cache_type_v").value = getParam("cache_type_v") ?? "f16";
+      document.getElementById("mlock").checked = getParam("mlock") ?? false;
+      document.getElementById("mmap").checked = getParam("mmap") !== false;
+      document.getElementById("temperature").value = getParam("temperature") ?? 0.8;
+      document.getElementById("top_k").value = getParam("top_k") ?? 40;
+      document.getElementById("top_p").value = getParam("top_p") ?? 0.95;
+      document.getElementById("min_p").value = getParam("min_p") ?? 0.05;
+      document.getElementById("repeat_penalty").value = getParam("repeat_penalty") ?? 1.0;
+      document.getElementById("port").value = getParam("port") ?? 8080;
+      document.getElementById("host").value = getParam("host") ?? "127.0.0.1";
     }
 
     async function saveParams() {
@@ -850,8 +857,9 @@
     async function init() {
       try {
         const settings = await invoke("load_settings");
-        if (settings && settings.launch_params) {
-          fillFormFromParams(settings.launch_params);
+        const params = settings.launch_params || settings.launchParams;
+        if (settings && params) {
+          fillFormFromParams(params);
         }
       } catch (e) {
         console.error("加载设置失败:", e);

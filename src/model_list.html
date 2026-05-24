@@ -200,6 +200,15 @@
       background: #c62828;
     }
 
+    .btn-log {
+      background: #8e24aa;
+      color: #fff;
+    }
+
+    .btn-log:hover:not(:disabled) {
+      background: #6a1b9a;
+    }
+
     .actions-cell {
       white-space: nowrap;
     }
@@ -248,6 +257,110 @@
       from { transform: translateX(100%); opacity: 0; }
       to { transform: translateX(0); opacity: 1; }
     }
+
+    .log-panel {
+      margin-top: 20px;
+      background: #16213e;
+      border-radius: 8px;
+      overflow: hidden;
+      display: none;
+    }
+
+    .log-panel.visible {
+      display: block;
+    }
+
+    .log-panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      background: #0f3460;
+      border-bottom: 1px solid #1a1a3e;
+    }
+
+    .log-panel-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #ffffff;
+    }
+
+    .log-panel-controls {
+      display: flex;
+      gap: 8px;
+    }
+
+    .log-panel-btn {
+      padding: 4px 12px;
+      border: none;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .log-panel-btn-clear {
+      background: #e53935;
+      color: #fff;
+    }
+
+    .log-panel-btn-clear:hover {
+      background: #c62828;
+    }
+
+    .log-panel-btn-export {
+      background: #43a047;
+      color: #fff;
+    }
+
+    .log-panel-btn-export:hover {
+      background: #2e7d32;
+    }
+
+    .log-panel-btn-toggle {
+      background: #1e88e5;
+      color: #fff;
+    }
+
+    .log-panel-btn-toggle:hover {
+      background: #1565c0;
+    }
+
+    .log-panel-content {
+      padding: 12px 16px;
+      max-height: 300px;
+      overflow-y: auto;
+      font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      color: #a0a0c0;
+      background: #0d1117;
+    }
+
+    .log-line {
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .log-line.error {
+      color: #ff6b6b;
+    }
+
+    .log-line.success {
+      color: #69db7c;
+    }
+
+    .log-line.info {
+      color: #74c0fc;
+    }
+
+    .log-line.warning {
+      color: #ffd43b;
+    }
+
+    .log-line.stderr {
+      color: #ff8787;
+    }
   </style>
 </head>
 <body>
@@ -274,6 +387,17 @@
         </tr>
       </tbody>
     </table>
+    <div id="log-panel" class="log-panel">
+      <div class="log-panel-header">
+        <div class="log-panel-title">📋 模型启动日志 - <span id="log-model-id"></span></div>
+        <div class="log-panel-controls">
+          <button class="log-panel-btn log-panel-btn-export" onclick="exportLogs()">导出</button>
+          <button id="log-toggle-btn" class="log-panel-btn log-panel-btn-toggle" onclick="toggleLogPanel()">隐藏</button>
+          <button class="log-panel-btn log-panel-btn-clear" onclick="clearLogs()">清除</button>
+        </div>
+      </div>
+      <div id="log-content" class="log-panel-content"></div>
+    </div>
   </main>
 
   <script>
@@ -286,6 +410,8 @@
     let systemInfo = null;
     let runningModelId = null;
     let runningModelPort = null;
+    let logPanelVisible = false;
+    let currentLogModelId = null;
 
     function formatBytes(bytes) {
       if (bytes === 0) return "0 B";
@@ -317,6 +443,137 @@
 
     function navigateTo(page) {
       window.parent.postMessage({ type: "navigate", page: page }, "*");
+    }
+
+    // 日志面板控制
+    function toggleLogPanel() {
+      const panel = document.getElementById('log-panel');
+      const btn = document.getElementById('log-toggle-btn');
+      logPanelVisible = !logPanelVisible;
+      if (logPanelVisible) {
+        panel.classList.add('visible');
+        btn.textContent = '隐藏';
+      } else {
+        panel.classList.remove('visible');
+        btn.textContent = '显示';
+      }
+      // 保存面板状态
+      localStorage.setItem('logPanelVisible', logPanelVisible);
+    }
+
+    function clearLogs() {
+      document.getElementById('log-content').innerHTML = '';
+      // 清除持久化存储
+      localStorage.removeItem('modelLogs_' + currentLogModelId);
+    }
+
+    function addLogLine(line, type = 'info') {
+      const logContent = document.getElementById('log-content');
+      const logLine = document.createElement('div');
+      logLine.className = 'log-line ' + type;
+      logLine.textContent = line;
+      logContent.appendChild(logLine);
+      // 自动滚动到底部
+      logContent.scrollTop = logContent.scrollHeight;
+      
+      // 持久化保存日志
+      saveLogToStorage(line, type);
+    }
+
+    function saveLogToStorage(line, type) {
+      if (!currentLogModelId) return;
+      const storageKey = 'modelLogs_' + currentLogModelId;
+      const logs = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      logs.push({ line: line, type: type, timestamp: Date.now() });
+      // 限制存储大小，最多保存 5000 条
+      if (logs.length > 5000) {
+        logs.shift();
+      }
+      localStorage.setItem(storageKey, JSON.stringify(logs));
+    }
+
+    function loadLogsFromStorage(modelId) {
+      const storageKey = 'modelLogs_' + modelId;
+      const logs = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      const logContent = document.getElementById('log-content');
+      logContent.innerHTML = '';
+      logs.forEach(function(log) {
+        const logLine = document.createElement('div');
+        logLine.className = 'log-line ' + log.type;
+        logLine.textContent = log.line;
+        logContent.appendChild(logLine);
+      });
+      // 滚动到底部
+      if (logContent.children.length > 0) {
+        logContent.scrollTop = logContent.scrollHeight;
+      }
+      return logs.length;
+    }
+
+    function exportLogs() {
+      if (!currentLogModelId) {
+        showToast('没有可导出的日志');
+        return;
+      }
+      const logContent = document.getElementById('log-content');
+      const logLines = logContent.querySelectorAll('.log-line');
+      if (logLines.length === 0) {
+        showToast('日志为空，无法导出');
+        return;
+      }
+      
+      // 构建导出内容
+      let exportContent = '=== ADM 模型日志 ===\n';
+      exportContent += '模型: ' + currentLogModelId + '\n';
+      exportContent += '导出时间: ' + new Date().toLocaleString('zh-CN') + '\n';
+      exportContent += '================================\n\n';
+      
+      logLines.forEach(function(line) {
+        exportContent += line.textContent + '\n';
+      });
+      
+      // 创建下载文件
+      const blob = new Blob([exportContent], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = currentLogModelId + '_log_' + new Date().toISOString().replace(/[:.]/g, '-') + '.log';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      showToast('日志已导出: ' + a.download);
+    }
+
+    function showLogPanel(modelId) {
+      currentLogModelId = modelId;
+      document.getElementById('log-model-id').textContent = modelId;
+      document.getElementById('log-content').innerHTML = '';
+      const panel = document.getElementById('log-panel');
+      if (!logPanelVisible) {
+        logPanelVisible = true;
+        panel.classList.add('visible');
+        document.getElementById('log-toggle-btn').textContent = '隐藏';
+      }
+      // 先加载持久化的日志
+      const loadedCount = loadLogsFromStorage(modelId);
+      if (loadedCount > 0) {
+        addLogLine(`[${new Date().toLocaleTimeString()}] 📋 已恢复 ${loadedCount} 条历史日志`, 'info');
+      }
+      addLogLine(`[${new Date().toLocaleTimeString()}] 🚀 开始启动模型: ${modelId}`, 'info');
+    }
+
+    function hideLogPanel() {
+      currentLogModelId = null;
+      document.getElementById('log-panel').classList.remove('visible');
+      logPanelVisible = false;
+      document.getElementById('log-toggle-btn').textContent = '显示';
+    }
+
+    function showModelLog(modelId) {
+      showLogPanel(modelId);
+      addLogLine(`[${new Date().toLocaleTimeString()}] 📋 查看模型日志: ${modelId}`, 'info');
     }
 
     function renderModelTable() {
@@ -362,6 +619,7 @@
         let actionsHtml = "";
         if (isRunning) {
           actionsHtml = '<button class="btn btn-view" onclick="goModel(\'' + model.model_id.replace(/'/g, "\\'") + '\')">查看模型</button>';
+          actionsHtml += '<button class="btn btn-log" onclick="showModelLog(\'' + model.model_id.replace(/'/g, "\\'") + '\')">日志</button>';
           actionsHtml += '<button class="btn btn-stop" data-stop-btn="' + safeModelId + '" onclick="handleStop(this)">关闭模型</button>';
         } else if (downloaded && available) {
           actionsHtml = '<button class="btn btn-start" data-start-btn="' + safeModelId + '" onclick="handleStart(this)">启动</button>';
@@ -422,7 +680,13 @@
       const modelId = btn.dataset.startBtn;
       try {
         const settings = await invoke("load_settings");
-        const params = settings.launch_params;
+        console.log("[DEBUG] load_settings returned:", JSON.stringify(settings));
+        const params = settings.launch_params || settings.launchParams;
+        console.log("[DEBUG] params to pass:", JSON.stringify(params));
+
+        if (!params) {
+          console.error("[DEBUG] params is undefined! settings keys:", Object.keys(settings));
+        }
 
         btn.textContent = "启动中...";
         btn.disabled = true;
@@ -494,6 +758,13 @@
         if (status.running) {
           runningModelId = status.model_id;
           runningModelPort = status.port;
+          // 恢复日志面板状态
+          const savedVisible = localStorage.getItem('logPanelVisible');
+          if (savedVisible === 'true') {
+            logPanelVisible = true;
+            document.getElementById('log-panel').classList.add('visible');
+            document.getElementById('log-toggle-btn').textContent = '隐藏';
+          }
         }
       } catch (e) {
         console.error("获取模型状态失败:", e);
@@ -538,20 +809,52 @@
             renderModelTable();
             break;
           }
+          case "model-log": {
+            // 接收模型启动日志
+            const logLine = payload?.line;
+            const source = payload?.source || 'stdout';
+            if (logLine) {
+              // 根据日志内容判断类型
+              let logType = 'info';
+              if (source === 'stderr') {
+                logType = 'stderr';
+              } else if (logLine.includes('error') || logLine.includes('Error') || logLine.includes('ERROR')) {
+                logType = 'error';
+              } else if (logLine.includes('warning') || logLine.includes('Warning') || logLine.includes('WARN')) {
+                logType = 'warning';
+              } else if (logLine.includes('success') || logLine.includes('Success') || logLine.includes('SUCCESS') || 
+                         logLine.includes('listening') || logLine.includes('started')) {
+                logType = 'success';
+              }
+              addLogLine(`[${new Date().toLocaleTimeString()}] ${logLine}`, logType);
+            }
+            break;
+          }
           case "model-started": {
             runningModelId = model_id;
             runningModelPort = port;
             renderModelTable();
+            // 显示日志面板
+            showLogPanel(model_id);
+            addLogLine(`[${new Date().toLocaleTimeString()}] ✅ 模型启动成功! 端口: ${port}`, 'success');
             break;
           }
           case "model-stopped": {
             runningModelId = null;
             runningModelPort = null;
             renderModelTable();
+            addLogLine(`[${new Date().toLocaleTimeString()}] ⏹️ 模型已停止`, 'info');
+            // 3秒后自动隐藏日志面板
+            setTimeout(() => {
+              if (currentLogModelId === model_id) {
+                hideLogPanel();
+              }
+            }, 3000);
             break;
           }
           case "model-error": {
             showToast("模型错误 [" + model_id + "]: " + error);
+            addLogLine(`[${new Date().toLocaleTimeString()}] ❌ 模型错误: ${error}`, 'error');
             break;
           }
         }

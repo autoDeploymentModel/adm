@@ -58,6 +58,21 @@
       color: #4caf50;
     }
 
+    .log-btn {
+      background: #8e24aa;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      padding: 4px 10px;
+      font-size: 12px;
+      cursor: pointer;
+      margin-left: 8px;
+    }
+
+    .log-btn:hover {
+      background: #6a1b9a;
+    }
+
      #model-iframe {
        width: 100%;
        height: 100%;
@@ -97,6 +112,73 @@
     @keyframes spin {
       to { transform: rotate(360deg); }
     }
+
+    .log-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.9);
+      z-index: 100;
+      display: none;
+      flex-direction: column;
+    }
+
+    .log-overlay.visible {
+      display: flex;
+    }
+
+    .log-overlay-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      background: #0f3460;
+      border-bottom: 1px solid #1a1a3e;
+      color: #fff;
+    }
+
+    .log-overlay-title {
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .log-overlay-close {
+      background: #e53935;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      padding: 4px 12px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .log-overlay-close:hover {
+      background: #c62828;
+    }
+
+    .log-overlay-content {
+      flex: 1;
+      padding: 12px 16px;
+      overflow-y: auto;
+      font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      color: #a0a0c0;
+      background: #0d1117;
+    }
+
+    .log-line {
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .log-line.error { color: #ff6b6b; }
+    .log-line.success { color: #69db7c; }
+    .log-line.info { color: #74c0fc; }
+    .log-line.warning { color: #ffd43b; }
+    .log-line.stderr { color: #ff8787; }
   </style>
 </head>
 <body>
@@ -105,6 +187,7 @@
       <button class="back-btn" onclick="goBack()">&#8592; 返回</button>
       <span id="model-name">模型交互界面</span>
       <span class="header-status" id="connection-status">连接中...</span>
+      <button class="log-btn" onclick="toggleLogOverlay()">📋 日志</button>
     </div>
     <div style="position: relative; flex: 1;">
       <div class="loading-overlay" id="loading-overlay">
@@ -112,10 +195,24 @@
         <p>正在连接模型服务...</p>
       </div>
       <iframe id="model-iframe" src="about:blank"></iframe>
+      <!-- 日志覆盖层 -->
+      <div id="log-overlay" class="log-overlay">
+        <div class="log-overlay-header">
+          <div class="log-overlay-title">📋 模型运行日志 - <span id="log-model-id"></span></div>
+          <button class="log-overlay-close" onclick="toggleLogOverlay()">关闭</button>
+        </div>
+        <div id="log-overlay-content" class="log-overlay-content"></div>
+      </div>
     </div>
   </div>
 
   <script>
+    const invoke = window.__TAURI_INTERNALS__?.invoke || window.__TAURI__?.core?.invoke;
+    const listen = window.__TAURI_INTERNALS__?.listen || window.__TAURI__?.event?.listen;
+
+    let currentModelId = '';
+    let logOverlayVisible = false;
+
     function getQueryParams() {
       const params = {};
       const search = window.location.search.substring(1);
@@ -132,12 +229,65 @@
       window.parent.postMessage({ type: "navigate", page: "model_list.html" }, "*");
     }
 
+    // 日志覆盖层控制
+    function toggleLogOverlay() {
+      const overlay = document.getElementById('log-overlay');
+      logOverlayVisible = !logOverlayVisible;
+      if (logOverlayVisible) {
+        overlay.classList.add('visible');
+        loadLogsFromStorage();
+      } else {
+        overlay.classList.remove('visible');
+      }
+    }
+
+    function addLogLine(line, type = 'info') {
+      const logContent = document.getElementById('log-overlay-content');
+      const logLine = document.createElement('div');
+      logLine.className = 'log-line ' + type;
+      logLine.textContent = line;
+      logContent.appendChild(logLine);
+      logContent.scrollTop = logContent.scrollHeight;
+      
+      // 持久化保存
+      saveLogToStorage(line, type);
+    }
+
+    function saveLogToStorage(line, type) {
+      if (!currentModelId) return;
+      const storageKey = 'modelLogs_' + currentModelId;
+      const logs = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      logs.push({ line: line, type: type, timestamp: Date.now() });
+      if (logs.length > 5000) {
+        logs.shift();
+      }
+      localStorage.setItem(storageKey, JSON.stringify(logs));
+    }
+
+    function loadLogsFromStorage() {
+      if (!currentModelId) return;
+      const storageKey = 'modelLogs_' + currentModelId;
+      const logs = JSON.parse(localStorage.getItem(storageKey) || '[]');
+      const logContent = document.getElementById('log-overlay-content');
+      logContent.innerHTML = '';
+      logs.forEach(function(log) {
+        const logLine = document.createElement('div');
+        logLine.className = 'log-line ' + log.type;
+        logLine.textContent = log.line;
+        logContent.appendChild(logLine);
+      });
+      if (logContent.children.length > 0) {
+        logContent.scrollTop = logContent.scrollHeight;
+      }
+    }
+
     function init() {
       const params = getQueryParams();
-      const modelId = params.model_id || "未知模型";
+      currentModelId = params.model_id || "未知模型";
       const port = params.port || 8080;
 
-      document.getElementById("model-name").textContent = modelId + " - 交互界面";
+      document.getElementById("model-name").textContent = currentModelId + " - 交互界面";
+      document.getElementById('log-model-id').textContent = currentModelId;
 
       const iframe = document.getElementById("model-iframe");
       const overlay = document.getElementById("loading-overlay");
@@ -191,6 +341,42 @@
 
       // 延迟 1 秒开始检测
       setTimeout(checkService, 1000);
+
+      // 监听 Tauri 事件（模型日志）
+      if (listen) {
+        listen('model-log', function(event) {
+          const payload = event.payload;
+          const logLine = payload?.line;
+          const source = payload?.source || 'stdout';
+          if (logLine) {
+            let logType = 'info';
+            if (source === 'stderr') {
+              logType = 'stderr';
+            } else if (logLine.includes('error') || logLine.includes('Error') || logLine.includes('ERROR')) {
+              logType = 'error';
+            } else if (logLine.includes('warning') || logLine.includes('Warning') || logLine.includes('WARN')) {
+              logType = 'warning';
+            } else if (logLine.includes('success') || logLine.includes('Success') || logLine.includes('SUCCESS') || 
+                       logLine.includes('listening') || logLine.includes('started')) {
+              logType = 'success';
+            }
+            addLogLine(`[${new Date().toLocaleTimeString()}] ${logLine}`, logType);
+          }
+        });
+
+        listen('model-started', function(event) {
+          const payload = event.payload;
+          addLogLine(`[${new Date().toLocaleTimeString()}] ✅ 模型启动成功! 端口: ${payload.port}`, 'success');
+        });
+
+        listen('model-stopped', function(event) {
+          addLogLine(`[${new Date().toLocaleTimeString()}] ⏹️ 模型已停止`, 'info');
+        });
+
+        listen('model-error', function(event) {
+          addLogLine(`[${new Date().toLocaleTimeString()}] ❌ 模型错误: ${event.payload.error}`, 'error');
+        });
+      }
     }
 
     init();

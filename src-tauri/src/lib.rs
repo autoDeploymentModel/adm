@@ -45,7 +45,7 @@ struct ModelStatus {
     port: Option<u16>,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 struct LaunchParams {
     ctx_size: Option<i32>,
     n_predict: Option<i32>,
@@ -82,7 +82,7 @@ struct RemoteModel {
     support_images: bool,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 struct Settings {
     launch_params: LaunchParams,
 }
@@ -709,6 +709,11 @@ async fn start_model(
         args.extend(["--host".to_string(), host.clone()]);
     }
 
+    // 启用详细日志输出（推理过程中的日志）
+    args.push("--verbose".to_string());
+
+    println!("[DEBUG] llama-server args: {:?}", args);
+
     let mut child = create_hidden_command(&server_path)
         .args(&args)
         .stdout(std::process::Stdio::piped())
@@ -746,6 +751,8 @@ async fn start_model(
 
     std::thread::spawn(move || {
         use std::io::{BufRead, BufReader};
+        
+        // 处理 stdout
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
             for line in reader.lines() {
@@ -756,6 +763,7 @@ async fn start_model(
                             serde_json::json!({
                                 "model_id": &model_id_clone,
                                 "line": line,
+                                "source": "stdout",
                             }),
                         )
                         .ok();
@@ -774,6 +782,25 @@ async fn start_model(
                             )
                             .ok();
                     }
+                }
+            }
+        }
+
+        // 处理 stderr
+        if let Some(stderr) = child.stderr.take() {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines() {
+                if let Ok(line) = line {
+                    app_clone
+                        .emit(
+                            "model-log",
+                            serde_json::json!({
+                                "model_id": &model_id_clone,
+                                "line": line,
+                                "source": "stderr",
+                            }),
+                        )
+                        .ok();
                 }
             }
         }
@@ -869,10 +896,12 @@ async fn get_model_status(state: tauri::State<'_, AppState>) -> Result<ModelStat
 
 #[tauri::command]
 async fn save_settings(settings: Settings) -> Result<(), String> {
+    println!("[DEBUG] save_settings called with: {:?}", settings);
     let exe_dir = get_exe_dir()?;
     let config_path = exe_dir.join("config.json");
 
     let json = serde_json::to_string_pretty(&settings).map_err(|e| format!("序列化配置失败: {}", e))?;
+    println!("[DEBUG] config.json content: {}", json);
     std::fs::write(&config_path, json).map_err(|e| format!("写入配置文件失败: {}", e))?;
 
     Ok(())
@@ -884,11 +913,14 @@ async fn load_settings() -> Result<Settings, String> {
     let config_path = exe_dir.join("config.json");
 
     if !config_path.exists() {
+        println!("[DEBUG] load_settings: config.json not found, returning defaults");
         return Ok(Settings::default());
     }
 
     let json = std::fs::read_to_string(&config_path).map_err(|e| format!("读取配置文件失败: {}", e))?;
+    println!("[DEBUG] load_settings raw json: {}", json);
     let settings: Settings = serde_json::from_str(&json).map_err(|e| format!("解析配置文件失败: {}", e))?;
+    println!("[DEBUG] load_settings parsed: {:?}", settings);
 
     Ok(settings)
 }
