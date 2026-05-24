@@ -75,8 +75,20 @@ jobs:
           APP_PATH=$(find src-tauri/target/release/bundle/macos -name "*.app" -type d | head -n 1)
           if [ -n "$APP_PATH" ]; then
             echo "对应用进行自签名: $APP_PATH"
+            
+            echo "1. 深度清理隔离属性..."
             xattr -cr "$APP_PATH"
-            codesign --force --deep --sign - --entitlements src-tauri/entitlements.plist "$APP_PATH"
+            
+            echo "2. 签名所有可执行文件..."
+            find "$APP_PATH" -type f -perm +111 -exec codesign --force --sign - --entitlements src-tauri/entitlements.plist {} \; 2>/dev/null
+            
+            echo "3. 主程序签名（启用 runtime）..."
+            codesign --force --deep --sign - --entitlements src-tauri/entitlements.plist --options runtime "$APP_PATH"
+            
+            echo "4. 再次清理隔离属性..."
+            xattr -cr "$APP_PATH"
+            
+            echo "5. 验证签名..."
             codesign -vvv "$APP_PATH"
           fi
 

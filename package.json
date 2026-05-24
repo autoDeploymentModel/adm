@@ -13,7 +13,8 @@
     "sign:macos": "bash scripts/sign-macos.sh",
     "sign:windows": "powershell -ExecutionPolicy Bypass -File scripts/sign-windows.ps1",
     "release:macos": "pnpm tauri:build:macos && pnpm sign:macos",
-    "release:windows": "pnpm tauri:build:windows && pnpm sign:windows"
+    "release:windows": "pnpm tauri:build:windows && pnpm sign:windows",
+    "fix:macos": "bash scripts/fix-macos-damaged.sh"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"
