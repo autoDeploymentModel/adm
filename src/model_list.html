@@ -423,7 +423,17 @@
 
     function isModelAvailable(needRam) {
       if (!systemInfo) return false;
-      const ramc = (systemInfo.total_ram + systemInfo.total_vram) / (1024 * 1024 * 1024);
+      // macOS 统一内存架构：GPU 和 CPU 共享同一块内存，total_vram == total_ram，不能重复计算
+      // Windows/Linux 独立显卡：total_vram 是显存，total_ram 是内存，需要相加
+      let totalMemory;
+      if (systemInfo.total_vram === systemInfo.total_ram) {
+        // 统一内存架构（如 macOS）或无独立显卡，只使用 total_ram
+        totalMemory = systemInfo.total_ram;
+      } else {
+        // 独立显卡架构，内存 + 显存
+        totalMemory = systemInfo.total_ram + systemInfo.total_vram;
+      }
+      const ramc = totalMemory / (1024 * 1024 * 1024);
       return ramc >= parseInt(needRam);
     }
 
