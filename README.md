@@ -78,6 +78,8 @@ ADM (Automatic Deployment Model) 是一款基于 **Tauri 2.x** 构建的 llama.c
 | Linux | `adm_0.1.2_amd64.deb` 或 `adm-0.1.2-x86_64.AppImage` |
 | macOS | `ADM_0.1.2_x64.dmg` |
 
+备注 macOS 安装后，会提示文件损坏，需要打开终端命令行窗口执行 xattr -cr /Applications/ADM.app 后启动应用
+
 ### 从源码构建
 
 #### 前置条件
