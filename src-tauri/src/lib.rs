@@ -180,6 +180,21 @@ fn get_data_dir(app: Option<&tauri::AppHandle>) -> Result<std::path::PathBuf, St
 }
 
 fn get_base_dir(app: Option<&tauri::AppHandle>) -> Result<std::path::PathBuf, String> {
+    // macOS 优先使用 app_data_dir，确保数据持久化
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(app_handle) = app {
+            if let Ok(app_data_dir) = app_handle.path().app_data_dir() {
+                std::fs::create_dir_all(&app_data_dir).ok();
+                let test_path = app_data_dir.join("llamacpp");
+                // 只要 app_data_dir 是可用的，即使 llamacpp 目录还不存在，也返回这个目录
+                // 这样下载时就会保存到这里，下次打开也能找到
+                return Ok(app_data_dir);
+            }
+        }
+    }
+
+    // 非 macOS 或者 macOS 没有 app_handle 的情况，走原有逻辑
     if let Some(app_handle) = app {
         if let Ok(resource_dir) = get_resource_dir(app_handle) {
             let test_path = resource_dir.join("llamacpp");
@@ -202,32 +217,10 @@ fn get_base_dir(app: Option<&tauri::AppHandle>) -> Result<std::path::PathBuf, St
         }
     }
 
-    #[cfg(target_os = "macos")]
-    {
-        if let Some(app_handle) = app {
-            if let Ok(app_data_dir) = app_handle.path().app_data_dir() {
-                let test_path = app_data_dir.join("llamacpp");
-                if test_path.exists() {
-                    return Ok(app_data_dir);
-                }
-            }
-        }
-    }
-
     if let Ok(exe_dir) = get_exe_dir() {
         let test_path = exe_dir.join("llamacpp");
         if test_path.exists() {
             return Ok(exe_dir);
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        if let Some(app_handle) = app {
-            if let Ok(app_data_dir) = app_handle.path().app_data_dir() {
-                std::fs::create_dir_all(&app_data_dir).ok();
-                return Ok(app_data_dir);
-            }
         }
     }
 
@@ -1049,6 +1042,7 @@ struct HardwareDetectResult {
     nvidia_series: Option<u32>,
 }
 
+#[cfg(target_os = "windows")]
 fn extract_nvidia_series(gpu_name: &str) -> Option<u32> {
     let upper = gpu_name.to_uppercase();
     let search_from = if let Some(pos) = upper.find("RTX ") {
@@ -1086,6 +1080,7 @@ fn detect_hardware_for_llamacpp() -> HardwareDetectResult {
 
     let mut gpu_vendor = None;
     let mut gpu_name = None;
+    #[allow(unused_mut)]
     let mut nvidia_series = None;
 
     #[cfg(target_os = "windows")]
@@ -1244,13 +1239,23 @@ async fn check_update(app: tauri::AppHandle) -> Result<UpdateCheckResult, String
     let mut llamacpp_download_url: Option<String> = None;
 
     if let Some(ref remote_ver) = llamacpp_remote_version {
-        // 直接调用 get_llamacpp_version 获取本地版本号
-        if let Ok(local_ver) = get_llamacpp_version(app.clone()).await {
-            llamacpp_local_version = Some(local_ver);
+        // 先检查 llamacpp 目录和 llama-server 是否存在
+        let llamacpp_dir = get_llamacpp_dir(Some(&app));
+        let server_found = llamacpp_dir
+            .as_ref()
+            .map(|dir| find_llama_server_in_dir(dir).is_some())
+            .unwrap_or(false);
+
+        if server_found {
+            // llama-server 存在，尝试获取版本号
+            if let Ok(local_ver) = get_llamacpp_version(app.clone()).await {
+                llamacpp_local_version = Some(local_ver);
+            }
         }
 
         let local = llamacpp_local_version.as_deref().unwrap_or("");
-        if local.is_empty() || local != remote_ver {
+        // 只有当 llama-server 不存在，或者版本号不匹配时，才需要更新
+        if !server_found || local != remote_ver {
             llamacpp_needs_update = true;
             let hardware = detect_hardware_for_llamacpp();
             llamacpp_download_url = get_llamacpp_download_url(&hardware);
