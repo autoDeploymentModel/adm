@@ -1238,23 +1238,35 @@ async fn check_update(app: tauri::AppHandle) -> Result<UpdateCheckResult, String
     let mut llamacpp_download_url: Option<String> = None;
 
     if let Some(ref remote_ver) = llamacpp_remote_version {
-        // 先尝试调用 llama-server 获取版本号
-        let version_result = get_llamacpp_version(app.clone()).await;
-        
-        if let Ok(local_ver) = version_result {
-            // 成功获取到版本号，说明 llama-server 已存在且可执行
-            llamacpp_local_version = Some(local_ver.clone());
-            // 版本号不匹配才需要更新
-            if local_ver != *remote_ver {
-                llamacpp_needs_update = true;
-                let hardware = detect_hardware_for_llamacpp();
-                llamacpp_download_url = get_llamacpp_download_url(&hardware);
-            }
-        } else {
-            // 调用失败，说明 llama-server 不存在或不可执行，需要下载
+        // 第一步：直接检查 llama-server 二进制文件是否存在
+        let llamacpp_dir = get_llamacpp_dir(Some(&app));
+        let binary_exists = llamacpp_dir
+            .as_ref()
+            .map(|dir| find_llama_server_in_dir(dir).is_some())
+            .unwrap_or(false);
+
+        if !binary_exists {
+            // 二进制文件不存在，需要下载
             llamacpp_needs_update = true;
             let hardware = detect_hardware_for_llamacpp();
             llamacpp_download_url = get_llamacpp_download_url(&hardware);
+        } else {
+            // 第二步：二进制存在，尝试获取版本号进行对比
+            match get_llamacpp_version(app.clone()).await {
+                Ok(local_ver) => {
+                    llamacpp_local_version = Some(local_ver.clone());
+                    if local_ver != *remote_ver {
+                        llamacpp_needs_update = true;
+                        let hardware = detect_hardware_for_llamacpp();
+                        llamacpp_download_url = get_llamacpp_download_url(&hardware);
+                    }
+                }
+                Err(_) => {
+                    // 二进制存在但版本号获取/解析失败（例如输出格式差异）
+                    // 仍然认为已安装，不触发下载，设版本号为 unknown
+                    llamacpp_local_version = Some("unknown".to_string());
+                }
+            }
         }
     }
 
