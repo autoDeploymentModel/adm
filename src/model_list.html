@@ -401,8 +401,8 @@
   </main>
 
   <script>
-    const invoke = window.__TAURI_INTERNALS__?.invoke || window.__TAURI__?.core?.invoke;
-    const listen = window.__TAURI_INTERNALS__?.listen || window.__TAURI__?.event?.listen;
+    const invoke = window.__TAURI_INTERNALS__?.invoke || window.__TAURI__?.core?.invoke || window.parent?.__TAURI_INTERNALS__?.invoke || window.parent?.__TAURI__?.core?.invoke;
+    const listen = window.__TAURI_INTERNALS__?.listen || window.__TAURI__?.event?.listen || window.parent?.__TAURI_INTERNALS__?.listen || window.parent?.__TAURI__?.event?.listen;
 
     let modelList = [];
     let localModels = [];

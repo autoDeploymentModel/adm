@@ -674,7 +674,7 @@
   </div>
 
   <script>
-    const { invoke } = window.__TAURI_INTERNALS__;
+    const invoke = window.__TAURI_INTERNALS__?.invoke || window.parent?.__TAURI_INTERNALS__?.invoke || window.__TAURI__?.core?.invoke || window.parent?.__TAURI__?.core?.invoke;
 
     function switchPanel(panelId) {
       document.querySelectorAll(".nav-item").forEach((el) => el.classList.remove("active"));

@@ -207,8 +207,8 @@
   </div>
 
   <script>
-    const invoke = window.__TAURI_INTERNALS__?.invoke || window.__TAURI__?.core?.invoke;
-    const listen = window.__TAURI_INTERNALS__?.listen || window.__TAURI__?.event?.listen;
+    const invoke = window.__TAURI_INTERNALS__?.invoke || window.__TAURI__?.core?.invoke || window.parent?.__TAURI_INTERNALS__?.invoke || window.parent?.__TAURI__?.core?.invoke;
+    const listen = window.__TAURI_INTERNALS__?.listen || window.__TAURI__?.event?.listen || window.parent?.__TAURI_INTERNALS__?.listen || window.parent?.__TAURI__?.event?.listen;
 
     let currentModelId = '';
     let logOverlayVisible = false;
@@ -342,40 +342,50 @@
       // 延迟 1 秒开始检测
       setTimeout(checkService, 1000);
 
-      // 监听 Tauri 事件（模型日志）
-      if (listen) {
-        listen('model-log', function(event) {
-          const payload = event.payload;
-          const logLine = payload?.line;
-          const source = payload?.source || 'stdout';
-          if (logLine) {
-            let logType = 'info';
-            if (source === 'stderr') {
-              logType = 'stderr';
-            } else if (logLine.includes('error') || logLine.includes('Error') || logLine.includes('ERROR')) {
-              logType = 'error';
-            } else if (logLine.includes('warning') || logLine.includes('Warning') || logLine.includes('WARN')) {
-              logType = 'warning';
-            } else if (logLine.includes('success') || logLine.includes('Success') || logLine.includes('SUCCESS') || 
-                       logLine.includes('listening') || logLine.includes('started')) {
-              logType = 'success';
+      function handleTauriEvent(type, payload) {
+        switch (type) {
+          case "model-log": {
+            const logLine = payload?.line;
+            const source = payload?.source || 'stdout';
+            if (logLine) {
+              let logType = 'info';
+              if (source === 'stderr') {
+                logType = 'stderr';
+              } else if (logLine.includes('error') || logLine.includes('Error') || logLine.includes('ERROR')) {
+                logType = 'error';
+              } else if (logLine.includes('warning') || logLine.includes('Warning') || logLine.includes('WARN')) {
+                logType = 'warning';
+              } else if (logLine.includes('success') || logLine.includes('Success') || logLine.includes('SUCCESS') || 
+                         logLine.includes('listening') || logLine.includes('started')) {
+                logType = 'success';
+              }
+              addLogLine(`[${new Date().toLocaleTimeString()}] ${logLine}`, logType);
             }
-            addLogLine(`[${new Date().toLocaleTimeString()}] ${logLine}`, logType);
+            break;
           }
-        });
+          case "model-started":
+            addLogLine(`[${new Date().toLocaleTimeString()}] ✅ 模型启动成功! 端口: ${payload.port}`, 'success');
+            break;
+          case "model-stopped":
+            addLogLine(`[${new Date().toLocaleTimeString()}] ⏹️ 模型已停止`, 'info');
+            break;
+          case "model-error":
+            addLogLine(`[${new Date().toLocaleTimeString()}] ❌ 模型错误: ${payload.error}`, 'error');
+            break;
+        }
+      }
 
-        listen('model-started', function(event) {
-          const payload = event.payload;
-          addLogLine(`[${new Date().toLocaleTimeString()}] ✅ 模型启动成功! 端口: ${payload.port}`, 'success');
-        });
+      window.addEventListener("message", function(event) {
+        const data = event.data;
+        if (!data || !data.type || !data.payload) return;
+        handleTauriEvent(data.type, data.payload);
+      });
 
-        listen('model-stopped', function(event) {
-          addLogLine(`[${new Date().toLocaleTimeString()}] ⏹️ 模型已停止`, 'info');
-        });
-
-        listen('model-error', function(event) {
-          addLogLine(`[${new Date().toLocaleTimeString()}] ❌ 模型错误: ${event.payload.error}`, 'error');
-        });
+      if (listen) {
+        listen('model-log', function(event) { handleTauriEvent('model-log', event.payload); });
+        listen('model-started', function(event) { handleTauriEvent('model-started', event.payload); });
+        listen('model-stopped', function(event) { handleTauriEvent('model-stopped', event.payload); });
+        listen('model-error', function(event) { handleTauriEvent('model-error', event.payload); });
       }
     }
 

@@ -167,8 +167,19 @@ fn get_exe_dir() -> Result<std::path::PathBuf, String> {
         .map(|p| p.to_path_buf())
 }
 
+fn get_data_dir(app: Option<&tauri::AppHandle>) -> Result<std::path::PathBuf, String> {
+    #[cfg(target_os = "macos")]
+    if let Some(app_handle) = app {
+        if let Ok(app_data_dir) = app_handle.path().app_data_dir() {
+            std::fs::create_dir_all(&app_data_dir).ok();
+            return Ok(app_data_dir);
+        }
+    }
+    let _ = app;
+    get_exe_dir()
+}
+
 fn get_base_dir(app: Option<&tauri::AppHandle>) -> Result<std::path::PathBuf, String> {
-    // 1. 首先尝试从资源目录查找（发布模式）
     if let Some(app_handle) = app {
         if let Ok(resource_dir) = get_resource_dir(app_handle) {
             let test_path = resource_dir.join("llamacpp");
@@ -177,24 +188,49 @@ fn get_base_dir(app: Option<&tauri::AppHandle>) -> Result<std::path::PathBuf, St
             }
         }
     }
-    
-    // 2. 尝试从当前工作目录查找（开发模式）
+
     if let Ok(current_dir) = std::env::current_dir() {
-        // 检查是否是 src-tauri 目录或其子目录
         let mut test_dir = current_dir.clone();
         loop {
             let test_path = test_dir.join("llamacpp");
             if test_path.exists() {
                 return Ok(test_dir);
             }
-            // 向上查找直到根目录
             if !test_dir.pop() {
                 break;
             }
         }
     }
-    
-    // 3. 回退到可执行文件目录
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(app_handle) = app {
+            if let Ok(app_data_dir) = app_handle.path().app_data_dir() {
+                let test_path = app_data_dir.join("llamacpp");
+                if test_path.exists() {
+                    return Ok(app_data_dir);
+                }
+            }
+        }
+    }
+
+    if let Ok(exe_dir) = get_exe_dir() {
+        let test_path = exe_dir.join("llamacpp");
+        if test_path.exists() {
+            return Ok(exe_dir);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(app_handle) = app {
+            if let Ok(app_data_dir) = app_handle.path().app_data_dir() {
+                std::fs::create_dir_all(&app_data_dir).ok();
+                return Ok(app_data_dir);
+            }
+        }
+    }
+
     get_exe_dir()
 }
 
@@ -299,6 +335,7 @@ fn get_gpu_info() -> (u64, u64, bool) {
             let stdout = String::from_utf8_lossy(&output.stdout);
             if stdout.contains("VRAM") || stdout.contains("Metal") || stdout.contains("Chipset") {
                 has_gpu = true;
+                total_vram = sysinfo::System::new().total_memory();
             }
         }
     }
@@ -332,9 +369,9 @@ async fn get_system_info(state: tauri::State<'_, AppState>) -> Result<SystemInfo
 }
 
 #[tauri::command]
-async fn scan_local_models(_app: tauri::AppHandle) -> Result<Vec<String>, String> {
-    let exe_dir = get_exe_dir()?;
-    let models_dir = exe_dir.join("models");
+async fn scan_local_models(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let data_dir = get_data_dir(Some(&app))?;
+    let models_dir = data_dir.join("models");
 
     if !models_dir.exists() {
         std::fs::create_dir_all(&models_dir).map_err(|e| format!("创建 models 目录失败: {}", e))?;
@@ -367,9 +404,9 @@ struct PartFileProgress {
 }
 
 #[tauri::command]
-async fn scan_part_files(_app: tauri::AppHandle) -> Result<Vec<PartFileProgress>, String> {
-    let exe_dir = get_exe_dir()?;
-    let models_dir = exe_dir.join("models");
+async fn scan_part_files(app: tauri::AppHandle) -> Result<Vec<PartFileProgress>, String> {
+    let data_dir = get_data_dir(Some(&app))?;
+    let models_dir = data_dir.join("models");
 
     if !models_dir.exists() {
         return Ok(Vec::new());
@@ -435,8 +472,8 @@ async fn download_model(
     // 自动将 huggingface.co 替换为国内镜像 hf-mirror.com
     let model_url = model_url.replace("https://huggingface.co/", "https://hf-mirror.com/");
 
-    let exe_dir = get_exe_dir()?;
-    let models_dir = exe_dir.join("models");
+    let data_dir = get_data_dir(Some(&app))?;
+    let models_dir = data_dir.join("models");
     std::fs::create_dir_all(&models_dir).map_err(|e| format!("创建 models 目录失败: {}", e))?;
 
     let final_path = models_dir.join(format!("{}.gguf", model_id));
@@ -630,8 +667,8 @@ async fn start_model(
     }
 
     let server_path = get_llama_server_path(Some(&app))?;
-    let exe_dir = get_exe_dir()?;
-    let model_path = exe_dir.join("models").join(format!("{}.gguf", model_id));
+    let data_dir = get_data_dir(Some(&app))?;
+    let model_path = data_dir.join("models").join(format!("{}.gguf", model_id));
 
     if !model_path.exists() {
         return Err(format!("模型文件不存在: {:?}", model_path));
@@ -885,10 +922,10 @@ async fn get_model_status(state: tauri::State<'_, AppState>) -> Result<ModelStat
 }
 
 #[tauri::command]
-async fn save_settings(settings: Settings) -> Result<(), String> {
+async fn save_settings(app: tauri::AppHandle, settings: Settings) -> Result<(), String> {
     println!("[DEBUG] save_settings called with: {:?}", settings);
-    let exe_dir = get_exe_dir()?;
-    let config_path = exe_dir.join("config.json");
+    let data_dir = get_data_dir(Some(&app))?;
+    let config_path = data_dir.join("config.json");
 
     let json = serde_json::to_string_pretty(&settings).map_err(|e| format!("序列化配置失败: {}", e))?;
     println!("[DEBUG] Writing config.json to: {:?}", config_path);
@@ -911,9 +948,9 @@ async fn save_settings(settings: Settings) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn load_settings() -> Result<Settings, String> {
-    let exe_dir = get_exe_dir()?;
-    let config_path = exe_dir.join("config.json");
+async fn load_settings(app: tauri::AppHandle) -> Result<Settings, String> {
+    let data_dir = get_data_dir(Some(&app))?;
+    let config_path = data_dir.join("config.json");
 
     println!("[DEBUG] load_settings: reading from {:?}", config_path);
     if !config_path.exists() {

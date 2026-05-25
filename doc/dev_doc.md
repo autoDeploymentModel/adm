@@ -109,10 +109,20 @@
 
 前端通过 `window.__TAURI_INTERNALS__.invoke()` 或 `window.__TAURI__.core.invoke()` 调用 Rust Command。采用双兼容模式确保 Tauri 1.x 和 2.x 都能正常工作。
 
+**主窗口（index.html）写法**：
+
 ```javascript
-// 兼容写法
 const invoke = window.__TAURI_INTERNALS__?.invoke || window.__TAURI__?.core?.invoke;
 const listen = window.__TAURI_INTERNALS__?.listen || window.__TAURI__?.event?.listen;
+```
+
+**iframe 子页面写法**（需增加 `window.parent` 回退）：
+
+macOS 的 WKWebView 不会将 Tauri IPC 桥接注入到 iframe 中，因此 iframe 页面需要通过 `window.parent` 回退到主窗口获取 IPC 桥接。
+
+```javascript
+const invoke = window.__TAURI_INTERNALS__?.invoke || window.__TAURI__?.core?.invoke || window.parent?.__TAURI_INTERNALS__?.invoke || window.parent?.__TAURI__?.core?.invoke;
+const listen = window.__TAURI_INTERNALS__?.listen || window.__TAURI__?.event?.listen || window.parent?.__TAURI_INTERNALS__?.listen || window.parent?.__TAURI__?.event?.listen;
 ```
 
 #### Event 监听
@@ -200,7 +210,9 @@ adm/
 ```
 
 **关键约定**：
-- `models/` 目录和 `config.json` 在软件首次运行时由后端自动创建，位置在可执行文件的同级目录
+- `models/` 目录和 `config.json` 在软件首次运行时由后端自动创建
+  - Windows/Linux：位于可执行文件同级目录
+  - macOS：位于 `~/Library/Application Support/com.adm.admapp/`（避免 App Translocation 导致路径不稳定和写入 .app 包破坏签名）
 - `llamacpp/` 目录作为 `bundle.resources` 打包到安装包中，运行时可通过相对路径找到
 - 每个 HTML 页面的 CSS 和 JS 内联写在同一文件中，不单独拆分
 - 项目采用 `pnpm` 作为包管理器
@@ -503,7 +515,9 @@ window.addEventListener("message", function (event) {
 
 #### 4.4.3 配置持久化
 
-- 配置文件路径：`{exe_dir}/config.json`
+- 配置文件路径：
+  - Windows/Linux：`{exe_dir}/config.json`
+  - macOS：`~/Library/Application Support/com.adm.admapp/config.json`
 - 保存：点击"保存设置"写入配置
 - 加载：启动模型时自动读取配置
 - 恢复默认：点击"恢复默认"重置为内置默认值
@@ -587,9 +601,32 @@ struct RemoteModel {
 
 #### 5.3.1 目录路径查找策略
 
+项目使用两个核心路径函数处理跨平台数据存储：
+
+**`get_data_dir`**：获取数据存储目录（models、config.json 等）
+
+```rust
+fn get_data_dir(app: Option<&tauri::AppHandle>) -> Result<std::path::PathBuf, String> {
+    // macOS: ~/Library/Application Support/com.adm.admapp/
+    // 原因：macOS .app 包内路径不稳定（App Translocation 机制），
+    // 且写入 .app 包内会破坏代码签名
+    #[cfg(target_os = "macos")]
+    if let Some(app_handle) = app {
+        if let Ok(app_data_dir) = app_handle.path().app_data_dir() {
+            std::fs::create_dir_all(&app_data_dir).ok();
+            return Ok(app_data_dir);
+        }
+    }
+    // Windows/Linux: 使用可执行文件同级目录
+    get_exe_dir()
+}
+```
+
+**`get_base_dir`**：获取 llamacpp 目录的父路径
+
 ```rust
 fn get_base_dir(app: Option<&tauri::AppHandle>) -> Result<std::path::PathBuf, String> {
-    // 1. 首先尝试从资源目录查找（发布模式）
+    // 1. 资源目录查找（发布模式，llamacpp 打包在 .app/Resources/ 内）
     if let Some(app_handle) = app {
         if let Ok(resource_dir) = get_resource_dir(app_handle) {
             let test_path = resource_dir.join("llamacpp");
@@ -599,7 +636,7 @@ fn get_base_dir(app: Option<&tauri::AppHandle>) -> Result<std::path::PathBuf, St
         }
     }
     
-    // 2. 尝试从当前工作目录查找（开发模式）
+    // 2. 当前工作目录查找（开发模式）
     if let Ok(current_dir) = std::env::current_dir() {
         let mut test_dir = current_dir.clone();
         loop {
@@ -612,11 +649,50 @@ fn get_base_dir(app: Option<&tauri::AppHandle>) -> Result<std::path::PathBuf, St
             }
         }
     }
-    
-    // 3. 回退到可执行文件目录
+
+    // 3. macOS app_data_dir 查找（用户手动安装的 llamacpp）
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(app_handle) = app {
+            if let Ok(app_data_dir) = app_handle.path().app_data_dir() {
+                let test_path = app_data_dir.join("llamacpp");
+                if test_path.exists() {
+                    return Ok(app_data_dir);
+                }
+            }
+        }
+    }
+
+    // 4. 可执行文件目录查找（旧版本兼容）
+    if let Ok(exe_dir) = get_exe_dir() {
+        let test_path = exe_dir.join("llamacpp");
+        if test_path.exists() {
+            return Ok(exe_dir);
+        }
+    }
+
+    // 5. 默认回退：macOS 用 app_data_dir，其他用 exe_dir
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(app_handle) = app {
+            if let Ok(app_data_dir) = app_handle.path().app_data_dir() {
+                std::fs::create_dir_all(&app_data_dir).ok();
+                return Ok(app_data_dir);
+            }
+        }
+    }
+
     get_exe_dir()
 }
 ```
+
+**各平台数据存储路径对照**：
+
+| 数据 | Windows | Linux | macOS |
+|------|---------|-------|-------|
+| models/ | `{exe_dir}/models/` | `{exe_dir}/models/` | `~/Library/Application Support/com.adm.admapp/models/` |
+| config.json | `{exe_dir}/config.json` | `{exe_dir}/config.json` | `~/Library/Application Support/com.adm.admapp/config.json` |
+| llamacpp/ | `{exe_dir}/llamacpp/` | `{exe_dir}/llamacpp/` | `ADM.app/Contents/Resources/llamacpp/` 或 `~/Library/Application Support/com.adm.admapp/llamacpp/` |
 
 #### 5.3.2 断点续传下载实现
 
@@ -936,6 +1012,28 @@ pnpm tauri build --target x86_64-apple-darwin
 2. 检查端口 8080 是否被占用
 3. 手动运行 `llama-server -m model.gguf --port 8080` 测试
 
+#### 问题：macOS 上 iframe 页面 invoke 报错 "invoke is not a function"
+
+**原因**：macOS 的 WKWebView 不会将 Tauri IPC 桥接注入到 iframe 中，导致 `window.__TAURI_INTERNALS__` 和 `window.__TAURI__` 在 iframe 内为 `undefined`
+
+**解决方案**：iframe 子页面需增加 `window.parent` 回退获取主窗口的 IPC 桥接：
+```javascript
+const invoke = window.__TAURI_INTERNALS__?.invoke || window.__TAURI__?.core?.invoke
+  || window.parent?.__TAURI_INTERNALS__?.invoke || window.parent?.__TAURI__?.core?.invoke;
+```
+
+#### 问题：macOS 上 llamacpp 每次启动都重复下载
+
+**原因**：macOS 的 App Translocation 机制会将网络下载的 `.app` 放到随机临时目录运行，导致 `get_exe_dir()` 每次返回不同路径；且写入 `.app` 包内会破坏代码签名
+
+**解决方案**：macOS 使用 `app_data_dir`（`~/Library/Application Support/com.adm.admapp/`）存储数据文件，路径稳定且不受 App Translocation 影响
+
+#### 问题：macOS 上显存显示为 0
+
+**原因**：Apple Silicon 采用统一内存架构，GPU 和 CPU 共享同一块物理内存，不存在独立显存
+
+**说明**：当前实现将系统总内存作为显存近似值返回，这是 Apple Silicon 架构下的合理近似
+
 ### 9.2 日志查看
 
 - Rust 日志：在 `tauri dev` 终端查看
@@ -1038,6 +1136,6 @@ pnpm tauri build --target x86_64-apple-darwin
 
 ---
 
-*文档版本: 1.0*
-*最后更新: 2026-05-22*
+*文档版本: 1.1*
+*最后更新: 2026-05-25*
 *维护者: ADM 开发团队*
