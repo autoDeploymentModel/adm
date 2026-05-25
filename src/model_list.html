@@ -407,6 +407,7 @@
     let modelList = [];
     let localModels = [];
     let partFiles = {};  // { model_id: existing_size }
+    let downloadingModels = {};  // { model_id: progress_percent } - 后端正在下载的模型进度
     let systemInfo = null;
     let runningModelId = null;
     let runningModelPort = null;
@@ -614,10 +615,14 @@
 
         // 检查是否有未完成的 .part 文件
         const partSize = partFiles[model.model_id];
+        // 检查后端是否正在下载该模型
+        const downloadingProgress = downloadingModels[model.model_id];
         const safeModelId = model.model_id.replace(/"/g, '"');
         let downloadBtnHtml = "";
         if (downloaded) {
           downloadBtnHtml = '<button class="btn btn-download downloaded" disabled>已下载</button>';
+        } else if (downloadingProgress !== undefined) {
+          downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" disabled>' + downloadingProgress + '%</button>';
         } else if (partSize && partSize > 0) {
           downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-url="' + model.model_url.replace(/"/g, '"') + '" onclick="handleDownload(this)">继续下载</button>';
         } else if (available) {
@@ -763,6 +768,13 @@
         console.error("扫描未完成下载失败:", e);
       }
 
+      // 查询后端当前正在下载的模型及其进度（页面切换后恢复百分比显示）
+      try {
+        downloadingModels = await invoke("get_downloading_models");
+      } catch (e) {
+        console.error("获取正在下载的模型失败:", e);
+      }
+
       try {
         const status = await invoke("get_model_status");
         if (status.running) {
@@ -799,6 +811,7 @@
 
         switch (data.type) {
           case "download-progress": {
+            downloadingModels[model_id] = progress;
             const btn = document.querySelector('[data-model-id="' + model_id + '"]');
             if (btn) {
               btn.textContent = progress + "%";
@@ -806,6 +819,7 @@
             break;
           }
           case "download-complete": {
+            delete downloadingModels[model_id];
             if (!localModels.includes(model_id)) {
               localModels.push(model_id);
             }
@@ -815,6 +829,7 @@
             break;
           }
           case "download-error": {
+            delete downloadingModels[model_id];
             showToast("下载失败 [" + model_id + "]: " + error);
             renderModelTable();
             break;
