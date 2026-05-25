@@ -186,7 +186,6 @@ fn get_base_dir(app: Option<&tauri::AppHandle>) -> Result<std::path::PathBuf, St
         if let Some(app_handle) = app {
             if let Ok(app_data_dir) = app_handle.path().app_data_dir() {
                 std::fs::create_dir_all(&app_data_dir).ok();
-                let test_path = app_data_dir.join("llamacpp");
                 // 只要 app_data_dir 是可用的，即使 llamacpp 目录还不存在，也返回这个目录
                 // 这样下载时就会保存到这里，下次打开也能找到
                 return Ok(app_data_dir);
@@ -1239,23 +1238,20 @@ async fn check_update(app: tauri::AppHandle) -> Result<UpdateCheckResult, String
     let mut llamacpp_download_url: Option<String> = None;
 
     if let Some(ref remote_ver) = llamacpp_remote_version {
-        // 先检查 llamacpp 目录和 llama-server 是否存在
-        let llamacpp_dir = get_llamacpp_dir(Some(&app));
-        let server_found = llamacpp_dir
-            .as_ref()
-            .map(|dir| find_llama_server_in_dir(dir).is_some())
-            .unwrap_or(false);
-
-        if server_found {
-            // llama-server 存在，尝试获取版本号
-            if let Ok(local_ver) = get_llamacpp_version(app.clone()).await {
-                llamacpp_local_version = Some(local_ver);
+        // 先尝试调用 llama-server 获取版本号
+        let version_result = get_llamacpp_version(app.clone()).await;
+        
+        if let Ok(local_ver) = version_result {
+            // 成功获取到版本号，说明 llama-server 已存在且可执行
+            llamacpp_local_version = Some(local_ver.clone());
+            // 版本号不匹配才需要更新
+            if local_ver != *remote_ver {
+                llamacpp_needs_update = true;
+                let hardware = detect_hardware_for_llamacpp();
+                llamacpp_download_url = get_llamacpp_download_url(&hardware);
             }
-        }
-
-        let local = llamacpp_local_version.as_deref().unwrap_or("");
-        // 只有当 llama-server 不存在，或者版本号不匹配时，才需要更新
-        if !server_found || local != remote_ver {
+        } else {
+            // 调用失败，说明 llama-server 不存在或不可执行，需要下载
             llamacpp_needs_update = true;
             let hardware = detect_hardware_for_llamacpp();
             llamacpp_download_url = get_llamacpp_download_url(&hardware);
