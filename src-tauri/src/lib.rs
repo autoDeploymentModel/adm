@@ -738,7 +738,14 @@ async fn start_model(
 
     println!("[DEBUG] llama-server args: {:?}", args);
 
-    let mut child = create_hidden_command(&server_path)
+    let mut cmd = create_hidden_command(&server_path);
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(llamacpp_dir) = get_llamacpp_dir(Some(&app)) {
+            cmd.env("DYLD_LIBRARY_PATH", llamacpp_dir.to_string_lossy().to_string());
+        }
+    }
+    let mut child = cmd
         .args(&args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -968,7 +975,14 @@ async fn get_app_version(app: tauri::AppHandle) -> Result<String, String> {
 async fn get_llamacpp_version(app: tauri::AppHandle) -> Result<String, String> {
     let server_path = get_llama_server_path(Some(&app))?;
 
-    let output = create_hidden_command(&server_path)
+    let mut cmd = create_hidden_command(&server_path);
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(llamacpp_dir) = get_llamacpp_dir(Some(&app)) {
+            cmd.env("DYLD_LIBRARY_PATH", llamacpp_dir.to_string_lossy().to_string());
+        }
+    }
+    let output = cmd
         .arg("--version")
         .output()
         .map_err(|e| format!("执行 llama-server --version 失败: {}", e))?;
@@ -1345,6 +1359,13 @@ fn extract_tar_gz(archive_path: &std::path::Path, dest_dir: &std::path::Path) ->
         
         let path = entry.path().map_err(|e| format!("获取tar条目路径失败: {}", e))?;
         
+        // 跳过 macOS 元数据
+        if let Some(name) = path.to_str() {
+            if name.contains("__MACOSX") || name.contains(".DS_Store") {
+                continue;
+            }
+        }
+        
         // 扁平化，只保留文件名
         let file_name = match path.file_name() {
             Some(name) => name.to_owned(),
@@ -1362,11 +1383,10 @@ fn extract_tar_gz(archive_path: &std::path::Path, dest_dir: &std::path::Path) ->
                 .map_err(|e| format!("创建目录失败: {}", e))?;
         }
         
-        let mut outfile = std::fs::File::create(&dest_path)
-            .map_err(|e| format!("创建文件失败: {}", e))?;
-        
-        std::io::copy(&mut entry, &mut outfile)
-            .map_err(|e| format!("写入文件失败: {}", e))?;
+        // 使用 unpack 而非手动 File::create + io::copy
+        // 这样可以正确处理符号链接、硬链接和文件权限
+        entry.unpack(&dest_path)
+            .map_err(|e| format!("解压文件失败: {}", e))?;
         
         count += 1;
     }
