@@ -87,9 +87,7 @@ fn detect_hardware_for_llamacpp() -> HardwareDetectResult {
 
     #[cfg(target_os = "macos")]
     {
-        use std::os::windows::process::CommandExt;
         if let Ok(output) = std::process::Command::new("system_profiler")
-            .creation_flags(0x08000000)
             .args(["SPDisplaysDataType"])
             .output()
         {
