@@ -12,6 +12,27 @@ use tauri::Emitter;
 // ===== 辅助函数 =====
 
 #[cfg(target_os = "windows")]
+fn decode_wmic_output(bytes: &[u8]) -> String {
+    if bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE {
+        let u16_data: Vec<u16> = bytes[2..]
+            .chunks(2)
+            .filter(|c| c.len() == 2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        String::from_utf16_lossy(&u16_data)
+    } else if bytes.len() >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF {
+        let u16_data: Vec<u16> = bytes[2..]
+            .chunks(2)
+            .filter(|c| c.len() == 2)
+            .map(|c| u16::from_be_bytes([c[0], c[1]]))
+            .collect();
+        String::from_utf16_lossy(&u16_data)
+    } else {
+        String::from_utf8_lossy(bytes).to_string()
+    }
+}
+
+#[cfg(target_os = "windows")]
 fn extract_nvidia_series(gpu_name: &str) -> Option<u32> {
     let upper = gpu_name.to_uppercase();
     let search_from = if let Some(pos) = upper.find("RTX ") {
@@ -60,7 +81,7 @@ fn detect_hardware_for_llamacpp() -> HardwareDetectResult {
             .args(["path", "win32_VideoController", "get", "Name"])
             .output()
         {
-            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stdout = decode_wmic_output(&output.stdout);
             let mut nvidia_found = None;
             let mut amd_found = None;
             let mut intel_found = None;
