@@ -61,26 +61,52 @@ fn detect_hardware_for_llamacpp() -> HardwareDetectResult {
             .output()
         {
             let stdout = String::from_utf8_lossy(&output.stdout);
+            let mut nvidia_found = None;
+            let mut amd_found = None;
+            let mut intel_found = None;
+            let mut first_gpu = None;
+
             for line in stdout.lines() {
                 let trimmed = line.trim();
                 if trimmed.is_empty() || trimmed == "Name" {
                     continue;
                 }
-                gpu_name = Some(trimmed.to_string());
+                if first_gpu.is_none() {
+                    first_gpu = Some(trimmed.to_string());
+                }
                 let lower = trimmed.to_lowercase();
                 if lower.contains("nvidia")
                     || lower.contains("geforce")
                     || lower.contains("rtx")
                     || lower.contains("gtx")
                 {
-                    gpu_vendor = Some("nvidia".to_string());
-                    nvidia_series = extract_nvidia_series(trimmed);
+                    let series = extract_nvidia_series(trimmed);
+                    if nvidia_found.is_none() {
+                        nvidia_found = Some((trimmed.to_string(), series));
+                    }
                 } else if lower.contains("amd") || lower.contains("radeon") {
-                    gpu_vendor = Some("amd".to_string());
+                    if amd_found.is_none() {
+                        amd_found = Some(trimmed.to_string());
+                    }
                 } else if lower.contains("intel") {
-                    gpu_vendor = Some("intel".to_string());
+                    if intel_found.is_none() {
+                        intel_found = Some(trimmed.to_string());
+                    }
                 }
-                break;
+            }
+
+            if let Some((name, series)) = nvidia_found {
+                gpu_vendor = Some("nvidia".to_string());
+                gpu_name = Some(name);
+                nvidia_series = series;
+            } else if let Some(name) = amd_found {
+                gpu_vendor = Some("amd".to_string());
+                gpu_name = Some(name);
+            } else if let Some(name) = intel_found {
+                gpu_vendor = Some("intel".to_string());
+                gpu_name = Some(name);
+            } else if let Some(name) = first_gpu {
+                gpu_name = Some(name);
             }
         }
     }
