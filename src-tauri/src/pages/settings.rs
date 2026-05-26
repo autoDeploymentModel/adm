@@ -102,3 +102,18 @@ pub async fn get_llamacpp_version(app: tauri::AppHandle) -> Result<String, Strin
 
     Err("无法解析版本号".to_string())
 }
+
+#[tauri::command]
+pub async fn delete_llamacpp(app: tauri::AppHandle) -> Result<(), String> {
+    let llamacpp_dir = config::get_llamacpp_dir(Some(&app))?;
+
+    if !llamacpp_dir.exists() {
+        return Err("llamacpp 目录不存在".to_string());
+    }
+
+    std::fs::remove_dir_all(&llamacpp_dir)
+        .map_err(|e| format!("删除 llamacpp 目录失败: {}", e))?;
+
+    println!("[DEBUG] llamacpp directory deleted: {:?}", llamacpp_dir);
+    Ok(())
+}

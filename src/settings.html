@@ -248,6 +248,22 @@
       background: rgba(255, 255, 255, 0.2);
     }
 
+    .btn-delete-llamacpp {
+      background: #d32f2f;
+      color: #fff;
+      border: none;
+      padding: 3px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background 0.2s;
+      vertical-align: middle;
+    }
+
+    .btn-delete-llamacpp:hover {
+      background: #b71c1c;
+    }
+
     .version-table {
       width: 100%;
       max-width: 500px;
@@ -333,6 +349,76 @@
     @keyframes slideIn {
       from { transform: translateX(100%); opacity: 0; }
       to { transform: translateX(0); opacity: 1; }
+    }
+
+    .confirm-overlay {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.6);
+      z-index: 9999;
+      justify-content: center;
+      align-items: center;
+    }
+    .confirm-overlay.show {
+      display: flex;
+    }
+    .confirm-dialog {
+      background: #16213e;
+      border: 1px solid #2a2a4e;
+      border-radius: 12px;
+      padding: 28px 32px 20px;
+      max-width: 400px;
+      width: 90%;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+      text-align: center;
+    }
+    .confirm-dialog .confirm-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: #ffffff;
+      margin-bottom: 12px;
+    }
+    .confirm-dialog .confirm-message {
+      font-size: 14px;
+      color: #c0c0e0;
+      line-height: 1.6;
+      margin-bottom: 24px;
+      white-space: pre-line;
+    }
+    .confirm-dialog .confirm-buttons {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+    }
+    .confirm-dialog .btn-confirm {
+      background: #d32f2f;
+      color: #fff;
+      border: none;
+      padding: 8px 28px;
+      border-radius: 8px;
+      font-size: 14px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .confirm-dialog .btn-confirm:hover {
+      background: #b71c1c;
+    }
+    .confirm-dialog .btn-cancel {
+      background: rgba(255, 255, 255, 0.1);
+      color: #e0e0e0;
+      border: none;
+      padding: 8px 28px;
+      border-radius: 8px;
+      font-size: 14px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .confirm-dialog .btn-cancel:hover {
+      background: rgba(255, 255, 255, 0.2);
     }
   </style>
 </head>
@@ -649,7 +735,10 @@
             </tr>
             <tr>
               <td>llama.cpp 版本</td>
-              <td id="v-llamacpp">检测中...</td>
+              <td>
+                <span id="v-llamacpp" style="margin-right:8px;">检测中...</span>
+                <button class="btn-delete-llamacpp" onclick="deleteLlamacpp()" title="删除 llamacpp 文件夹">删除</button>
+              </td>
             </tr>
             <tr>
               <td>操作系统</td>
@@ -669,6 +758,17 @@
           </div>
         </div>
 
+      </div>
+    </div>
+  </div>
+
+  <div class="confirm-overlay" id="confirm-overlay">
+    <div class="confirm-dialog">
+      <div class="confirm-title" id="confirm-title">删除提示</div>
+      <div class="confirm-message" id="confirm-message"></div>
+      <div class="confirm-buttons">
+        <button class="btn-cancel" onclick="closeConfirmDialog(false)">取消</button>
+        <button class="btn-confirm" onclick="closeConfirmDialog(true)">确定</button>
       </div>
     </div>
   </div>
@@ -841,6 +941,38 @@
       else if (platform.includes("Mac")) osName = "macOS";
       else if (platform.includes("Linux")) osName = "Linux";
       document.getElementById("v-os").textContent = osName;
+    }
+
+    let _confirmResolve = null;
+
+    function showConfirmDialog(message) {
+      const overlay = document.getElementById("confirm-overlay");
+      document.getElementById("confirm-message").textContent = message;
+      overlay.classList.add("show");
+      return new Promise((resolve) => {
+        _confirmResolve = resolve;
+      });
+    }
+
+    function closeConfirmDialog(result) {
+      document.getElementById("confirm-overlay").classList.remove("show");
+      if (_confirmResolve) {
+        _confirmResolve(result);
+        _confirmResolve = null;
+      }
+    }
+
+    async function deleteLlamacpp() {
+      const confirmed = await showConfirmDialog("确定要删除 llamacpp 文件夹吗？\n删除后需要重新下载才能使用 llama.cpp 相关功能。");
+      if (!confirmed) return;
+
+      try {
+        await invoke("delete_llamacpp");
+        document.getElementById("v-llamacpp").textContent = "未安装";
+        showToast("llamacpp 文件夹已删除", false);
+      } catch (e) {
+        showToast("删除失败: " + e, true);
+      }
     }
 
     async function checkUpdateNow() {

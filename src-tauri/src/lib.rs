@@ -54,6 +54,7 @@ pub fn run() {
             settings::load_settings,
             settings::get_app_version,
             settings::get_llamacpp_version,
+            settings::delete_llamacpp,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
