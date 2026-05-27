@@ -1,0 +1,11 @@
+[{
+    "model_id": "Qwen3.5-9B-Q4_K_M",
+    "model_url": "https://hf-mirror.com/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf",
+    "model_size": "5.6GB",
+    "model_type": "视觉多模态理解",
+    "model_description": "支持对话，支持图片识别",
+    "need_ram": "32",
+    "support_tools": true,
+    "support_reasoning": true,
+    "support_images": false
+}]

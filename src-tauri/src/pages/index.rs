@@ -154,48 +154,34 @@ fn detect_hardware_for_llamacpp() -> HardwareDetectResult {
     }
 }
 
-fn get_llamacpp_download_url(hardware: &HardwareDetectResult) -> Option<String> {
-    if hardware.os == "macos" {
-        return Some("https://adm.tuduoduo.top/llamacpp/macos.tar.gz".to_string());
-    }
-
-    if hardware.os == "windows" {
-        if let Some(ref vendor) = hardware.gpu_vendor {
-            match vendor.as_str() {
-                "nvidia" => {
-                    if let Some(series) = hardware.nvidia_series {
-                        if series <= 20 {
-                            return Some(
-                                "https://adm.tuduoduo.top/llamacpp/windows-CUDA12.zip".to_string(),
-                            );
-                        } else {
-                            return Some(
-                                "https://adm.tuduoduo.top/llamacpp/windows-CUDA13.zip".to_string(),
-                            );
-                        }
-                    }
-                    return Some(
-                        "https://adm.tuduoduo.top/llamacpp/windows-CUDA13.zip".to_string(),
-                    );
+fn get_llamacpp_download_url(hardware: &HardwareDetectResult) -> Result<String, String> {
+    match hardware.os.as_str() {
+        "macos" => {
+            Ok("https://adm.tuduoduo.top/llamacpp/macos.tar.gz".to_string())
+        }
+        "windows" => {
+            match hardware.gpu_vendor.as_deref() {
+                Some("nvidia") => {
+                    Ok("https://adm.tuduoduo.top/llamacpp/windows-CUDA12.zip".to_string())
                 }
-                "amd" => {
-                    return Some(
-                        "https://adm.tuduoduo.top/llamacpp/llama-amd.zip".to_string(),
-                    );
+                Some("amd") => {
+                    Ok("https://adm.tuduoduo.top/llamacpp/llama-amd.zip".to_string())
                 }
-                "intel" => {
-                    return Some(
-                        "https://adm.tuduoduo.top/llamacpp/llama-intel.zip".to_string(),
-                    );
+                Some("intel") => {
+                    Ok("https://adm.tuduoduo.top/llamacpp/llama-intel.zip".to_string())
                 }
-                _ => {}
+                Some(other) => {
+                    Err(format!("不支持的显卡型号: {}，当前仅支持 NVIDIA/AMD/Intel 显卡", other))
+                }
+                None => {
+                    Err("未检测到支持的显卡，当前仅支持 NVIDIA/AMD/Intel 显卡".to_string())
+                }
             }
         }
-
-        return Some("https://adm.tuduoduo.top/llamacpp/llama-cpu.zip".to_string());
+        other => {
+            Err(format!("不支持的操作系统: {}，当前仅支持 Windows 和 macOS", other))
+        }
     }
-
-    None
 }
 
 /// 简单解析 semver 版本号 "x.y.z" 并比较
@@ -318,7 +304,9 @@ pub async fn check_update(app: tauri::AppHandle) -> Result<UpdateCheckResult, St
             // 二进制文件不存在，需要下载
             llamacpp_needs_update = true;
             let hardware = detect_hardware_for_llamacpp();
-            llamacpp_download_url = get_llamacpp_download_url(&hardware);
+            if let Ok(url) = get_llamacpp_download_url(&hardware) {
+                llamacpp_download_url = Some(url);
+            }
         } else {
             // 第二步：二进制存在，尝试获取版本号进行对比
             match get_llamacpp_version(app.clone()).await {
@@ -327,7 +315,9 @@ pub async fn check_update(app: tauri::AppHandle) -> Result<UpdateCheckResult, St
                     if local_ver != *remote_ver {
                         llamacpp_needs_update = true;
                         let hardware = detect_hardware_for_llamacpp();
-                        llamacpp_download_url = get_llamacpp_download_url(&hardware);
+                        if let Ok(url) = get_llamacpp_download_url(&hardware) {
+                            llamacpp_download_url = Some(url);
+                        }
                     }
                 }
                 Err(_) => {

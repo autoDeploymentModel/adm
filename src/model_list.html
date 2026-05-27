@@ -361,11 +361,55 @@
     .log-line.stderr {
       color: #ff8787;
     }
+
+    .filter-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .filter-bar label {
+      font-size: 13px;
+      color: #a0a0c0;
+      white-space: nowrap;
+    }
+
+    .filter-bar select {
+      background: #16213e;
+      color: #e0e0e0;
+      border: 1px solid #2a2a4e;
+      border-radius: 6px;
+      padding: 6px 12px;
+      font-size: 13px;
+      outline: none;
+      cursor: pointer;
+      min-width: 160px;
+    }
+
+    .filter-bar select:focus {
+      border-color: #6c63ff;
+    }
+
+    .filter-bar .model-desc-text {
+      font-size: 13px;
+      color: #8080a0;
+      padding: 6px 0;
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
   </style>
 </head>
 <body>
   <main>
     <div class="page-title">模型列表</div>
+    <div class="filter-bar">
+      <label for="model-type-select">模型类型</label>
+      <select id="model-type-select"></select>
+      <span class="model-desc-text" id="model-desc-text"></span>
+    </div>
     <table id="model-table">
       <thead>
         <tr>
@@ -413,6 +457,49 @@
     let runningModelPort = null;
     let logPanelVisible = false;
     let currentLogModelId = null;
+    let currentTypeFilter = "all";
+
+    let modelTypes = [];
+
+    async function populateTypeFilter() {
+      try {
+        const resp = await fetch("model_types.json");
+        modelTypes = await resp.json();
+      } catch (e) {
+        console.error("加载模型类型列表失败:", e);
+        modelTypes = [];
+      }
+
+      var select = document.getElementById("model-type-select");
+      select.innerHTML = "";
+      modelTypes.forEach(function(item) {
+        var opt = document.createElement("option");
+        opt.value = item.type === "全部模型" ? "all" : item.type;
+        opt.textContent = item.type;
+        select.appendChild(opt);
+      });
+      select.addEventListener("change", function() {
+        currentTypeFilter = this.value;
+        updateModelDesc();
+        renderModelTable();
+      });
+      updateModelDesc();
+    }
+
+    function updateModelDesc() {
+      const descSpan = document.getElementById("model-desc-text");
+      if (currentTypeFilter === "all") {
+        descSpan.textContent = "";
+        return;
+      }
+      const match = modelList.find(function(m) { return m.model_type === currentTypeFilter; });
+      descSpan.textContent = match && match.model_description ? match.model_description : "";
+    }
+
+    function getFilteredModelList() {
+      if (currentTypeFilter === "all") return modelList;
+      return modelList.filter(function(m) { return m.model_type === currentTypeFilter; });
+    }
 
     function formatBytes(bytes) {
       if (bytes === 0) return "0 B";
@@ -589,15 +676,16 @@
 
     function renderModelTable() {
       const tbody = document.getElementById("model-tbody");
+      const filteredList = getFilteredModelList();
 
-      if (modelList.length === 0) {
+      if (filteredList.length === 0) {
         tbody.innerHTML = '<tr><td colspan="8" class="empty-state"><p>暂无可用模型</p></td></tr>';
         return;
       }
 
       tbody.innerHTML = "";
 
-      modelList.forEach((model) => {
+      filteredList.forEach((model) => {
         const available = isModelAvailable(model.need_ram);
         const downloaded = isModelDownloaded(model.model_id);
         const isRunning = runningModelId === model.model_id;
@@ -798,7 +886,9 @@
         showToast("获取模型列表失败: " + e);
       }
 
-      renderModelTable();
+      populateTypeFilter().then(function() {
+        renderModelTable();
+      });
     }
 
     // 通过 postMessage 接收主窗口转发的 Tauri 事件

@@ -76,6 +76,10 @@ pub struct RemoteModel {
     pub model_id: String,
     pub model_url: String,
     pub model_size: String,
+    #[serde(default)]
+    pub model_type: String,
+    #[serde(default)]
+    pub model_description: String,
     pub need_ram: String,
     #[serde(default)]
     pub support_tools: bool,
