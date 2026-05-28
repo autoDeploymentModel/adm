@@ -59,6 +59,13 @@ fn extract_nvidia_series(gpu_name: &str) -> Option<u32> {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn check_vc_redist_installed() -> bool {
+    use std::path::Path;
+    let dll_path = r"C:\Windows\System32\vcruntime140_1.dll";
+    Path::new(dll_path).exists()
+}
+
 fn detect_hardware_for_llamacpp() -> HardwareDetectResult {
     let os = if cfg!(target_os = "windows") {
         "windows".to_string()
@@ -329,6 +336,11 @@ pub async fn check_update(app: tauri::AppHandle) -> Result<UpdateCheckResult, St
         }
     }
 
+    #[cfg(target_os = "windows")]
+    let vc_redist_installed = check_vc_redist_installed();
+    #[cfg(not(target_os = "windows"))]
+    let vc_redist_installed = true;
+
     Ok(UpdateCheckResult {
         has_update,
         remote_version: update_info.version,
@@ -339,6 +351,7 @@ pub async fn check_update(app: tauri::AppHandle) -> Result<UpdateCheckResult, St
         llamacpp_remote_version,
         llamacpp_local_version,
         llamacpp_download_url,
+        vc_redist_installed,
     })
 }
 

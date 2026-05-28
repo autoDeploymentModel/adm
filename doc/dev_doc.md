@@ -47,7 +47,7 @@
 | **硬件监控**        | 实时显示内存/显存/CPU 信息（hwinfo 插件增强检测）                  |
 | **模型交互**        | 内嵌 iframe 加载 llama-server 的 Web UI，自动轮询检测服务就绪    |
 | **参数配置**        | 可视化配置 llama.cpp 启动参数，支持保存/加载/恢复默认                |
-| **自动更新**        | 先检查应用版本更新，再检查 llamacpp 二进制更新（有序双重检查）     |
+| **自动更新**        | 应用版本 → VC++ 运行库(Windows) → llamacpp 二进制（有序三重检查） |
 | **llamacpp 管理** | 自动检测硬件并下载匹配的 llama-server 二进制                    |
 
 ***
@@ -370,7 +370,7 @@ AppState {
 | `Settings`             | 用户配置包装：`{ launch_params: LaunchParams }`                                            |
 | `PartFileProgress`     | 断点续传进度：model\_id、existing\_size                                                     |
 | `UpdateInfo`           | 远程更新信息：版本号、llamacpp 版本、各平台下载配置                                                      |
-| `UpdateCheckResult`    | 更新检查结果：应用/llamacpp 是否有更新、下载地址、更新日志                                                  |
+| `UpdateCheckResult`    | 更新检查结果：应用/llamacpp 是否有更新、下载地址、VC++ 运行库状态、更新日志                                       |
 | `HardwareDetectResult` | 硬件检测结果：os、gpu\_vendor、gpu\_name、nvidia\_series                                      |
 
 ### 4.5 `common/config.rs` — 路径管理
@@ -408,7 +408,7 @@ AppState {
 | Command                         | 签名                                              | 说明                                              |
 | ------------------------------- | ----------------------------------------------- | ----------------------------------------------- |
 | `get_system_info`               | `(state: State<AppState>) → Result<SystemInfo>` | 获取 RAM/VRAM/CPU 信息，调 `platform::get_gpu_info()` |
-| `check_update`                  | `(app: AppHandle) → Result<UpdateCheckResult>`  | 先检查应用版本更新，再检查 llamacpp 更新（前端按序处理）       |
+| `check_update`                  | `(app: AppHandle) → Result<UpdateCheckResult>`  | 检查应用版本、VC++ 运行库(Windows)、llamacpp 更新          |
 | `download_and_extract_llamacpp` | `(app: AppHandle, url: String) → Result<()>`    | 下载并解压 llamacpp（含断点续传）                           |
 
 **辅助函数**：
@@ -419,6 +419,11 @@ AppState {
 | `detect_hardware_for_llamacpp()`      | 检测 OS/GPU 信息，返回 `HardwareDetectResult` |
 | `get_llamacpp_download_url(hardware)` | 根据硬件类型返回对应的 llamacpp 下载 URL            |
 | `compare_versions(current, remote)`   | 语义化版本号比较                               |
+| `check_vc_redist_installed()`         | (Windows) 检测 VC++ 2015-2022 运行库是否安装  |
+
+**VC++ 运行库检测**（仅 Windows）：
+- 通过查询注册表 `HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\X64` 检测
+- 未安装时前端提示下载 `https://aka.ms/vs/17/release/vc_redist.x64.exe`
 
 **llamacpp 下载 URL 策略**：
 
@@ -584,8 +589,10 @@ start_model(model_id, params)
   │
   └── 7. 延迟 3 秒后静默 check_update → 有新版本才弹窗
           ① 先检查系统版本更新 → 有更新则弹窗提示
-          ② 用户关闭系统更新弹窗后 → 再检查 llamacpp 版本/下载
-          ③ 若系统无更新 → 直接检查 llamacpp 版本/下载
+          ② 用户关闭系统更新弹窗后 → 检查 VC++ 运行库（仅 Windows）
+          ③ 若 VC++ 运行库未安装 → 提示下载安装
+          ④ VC++ 安装完成后 → 检查 llamacpp 版本/下载
+          ⑤ 若系统无更新且 VC++ 已安装 → 直接检查 llamacpp 版本/下载
 ```
 
 #### 硬件信息栏
@@ -828,7 +835,7 @@ LaunchParams   — 所有 llama-server CLI 参数的 Option 封装（ctx_size, n
 RemoteModel    — 远程模型信息：model_id, model_url, model_size, need_ram, support_*
 Settings       — 用户配置包装：{ launch_params: LaunchParams }
 UpdateInfo     — 远程更新信息：version, llamacpp_version, windows/mac 平台更新
-UpdateCheckResult — 更新检查结果：has_update, 各平台下载 URL, llamacpp 版本对比
+UpdateCheckResult — 更新检查结果：has_update, 各平台下载 URL, llamacpp 版本对比, vc_redist_installed
 PartFileProgress   — .part 文件进度：model_id, existing_size
 HardwareDetectResult — 硬件检测结果：os, gpu_vendor, gpu_name, nvidia_series
 ```
@@ -868,7 +875,7 @@ pub struct AppState {
 | Command                         | 所属模块                 | 描述                       |
 | ------------------------------- | -------------------- | ------------------------ |
 | `get_system_info`               | pages/index.rs       | 获取系统内存/显存/CPU 信息         |
-| `check_update`                  | pages/index.rs       | 检查应用 + llamacpp 更新（前端按序处理） |
+| `check_update`                  | pages/index.rs       | 检查应用、VC++ 运行库(Windows)、llamacpp 更新 |
 | `download_and_extract_llamacpp` | pages/index.rs       | 下载并解压 llamacpp 到资源目录     |
 | `scan_local_models`             | pages/model\_list.rs | 扫描本地已下载的 `.gguf` 模型      |
 | `scan_part_files`               | pages/model\_list.rs | 扫描未完成的 `.gguf.part` 下载文件 |

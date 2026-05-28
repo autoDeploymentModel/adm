@@ -124,6 +124,7 @@ pub struct UpdateCheckResult {
     pub llamacpp_remote_version: Option<String>,
     pub llamacpp_local_version: Option<String>,
     pub llamacpp_download_url: Option<String>,
+    pub vc_redist_installed: bool,
 }
 
 #[derive(Serialize)]

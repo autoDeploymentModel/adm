@@ -442,7 +442,7 @@
     }
 
     function hideUpdateDialog() {
-      if (llamacppIsMandatory) {
+      if (llamacppIsMandatory || vcRedistMandatory) {
         // 强制安装时不能关闭对话框
         return;
       }
@@ -460,6 +460,7 @@
     }
 
     let pendingLlamacppResult = null;
+    let vcRedistMandatory = false;
 
     async function checkForUpdate(silent) {
       silent = silent || false;
@@ -470,7 +471,7 @@
         const result = await invoke("check_update");
 
         if (result.has_update) {
-          pendingLlamacppResult = result.llamacpp_needs_update ? result : null;
+          pendingLlamacppResult = result;
           const html = `
             <div class="update-icon">📥</div>
             <div class="update-title">发现新版本</div>
@@ -491,6 +492,12 @@
             </div>
           `;
           showUpdateDialog(html);
+          return;
+        }
+
+        if (!result.vc_redist_installed) {
+          pendingLlamacppResult = result.llamacpp_needs_update ? result : null;
+          showVcRedistInstallDialog();
           return;
         }
 
@@ -523,12 +530,53 @@
       }
     }
 
-    function onSystemUpdateDismiss() {
+    function showVcRedistInstallDialog() {
+      vcRedistMandatory = true;
+      const html = `
+        <div class="update-icon">📦</div>
+        <div class="update-title">需要安装 VC++ 运行库</div>
+        <div class="update-desc">检测到系统未安装 Visual C++ 2015-2022 运行库，这是运行 llama-server 的必要组件。</div>
+        <div class="update-buttons" style="margin-top:16px;">
+          <button class="update-btn-primary" onclick="downloadVcRedist()">下载安装</button>
+        </div>
+      `;
+      showUpdateDialog(html);
+    }
+
+    function downloadVcRedist() {
+      openUrl('https://aka.ms/vs/17/release/vc_redist.x64.exe');
+      showUpdateDialog(`
+        <div class="update-icon">📋</div>
+        <div class="update-title">请完成安装</div>
+        <div class="update-desc">下载已开始，请运行安装程序完成 VC++ 运行库的安装，安装完成后点击下方按钮继续。</div>
+        <div class="update-buttons" style="margin-top:16px;">
+          <button class="update-btn-primary" onclick="onVcRedistInstalled()">安装完成</button>
+        </div>
+      `);
+    }
+
+    function onVcRedistInstalled() {
+      vcRedistMandatory = false;
       hideUpdateDialog();
-      if (pendingLlamacppResult) {
+      if (pendingLlamacppResult && pendingLlamacppResult.llamacpp_needs_update) {
         setTimeout(function() {
           startLlamacppUpdate(pendingLlamacppResult);
           pendingLlamacppResult = null;
+        }, 300);
+      }
+    }
+
+    function onSystemUpdateDismiss() {
+      hideUpdateDialog();
+      if (pendingLlamacppResult) {
+        const result = pendingLlamacppResult;
+        pendingLlamacppResult = null;
+        setTimeout(function() {
+          if (!result.vc_redist_installed) {
+            showVcRedistInstallDialog();
+          } else if (result.llamacpp_needs_update) {
+            startLlamacppUpdate(result);
+          }
         }, 300);
       }
     }
