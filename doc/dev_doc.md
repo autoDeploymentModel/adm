@@ -425,11 +425,10 @@ AppState {
 | 硬件条件                         | 下载 URL             |
 | ---------------------------- | ------------------ |
 | macOS                        | macOS 通用包 (tar.gz) |
-| Windows + NVIDIA GTX 20 系列以下 | CUDA 12 包 (zip)    |
-| Windows + NVIDIA RTX 20 系列以上 | CUDA 13 包 (zip)    |
-| Windows + AMD                | AMD 包 (zip)        |
-| Windows + Intel              | Intel 包 (zip)      |
-| Windows + 其他/无 GPU           | CPU 包 (zip)        |
+| Windows + NVIDIA             | CUDA 12 包 (zip)    |
+| Windows + AMD                | Vulkan 包 (zip)     |
+| Windows + Intel              | Vulkan 包 (zip)     |
+| Windows + 其他/无 GPU           | 抛出异常提示          |
 
 ### 4.9 `pages/model_list.rs` — 模型列表页面
 
@@ -1086,11 +1085,10 @@ Rust (emit) ──→ 前端 JS (listen) ──postMessage──→ iframe/conte
 | OS                 | GPU 条件  | 下载 URL               |
 | ------------------ | ------- | -------------------- |
 | macOS              | 所有      | `macos.tar.gz`       |
-| Windows + NVIDIA   | 系列 ≤ 20 | `windows-CUDA12.zip` |
-| Windows + NVIDIA   | 系列 > 20 | `windows-CUDA13.zip` |
-| Windows + AMD      | 任意      | `llama-amd.zip`      |
-| Windows + Intel    | 任意      | `llama-intel.zip`    |
-| Windows + 无/其他 GPU | —       | `llama-cpu.zip`      |
+| Windows + NVIDIA   | 任意      | `windows-CUDA12.zip` |
+| Windows + AMD      | 任意      | `vulkan.zip`         |
+| Windows + Intel    | 任意      | `vulkan.zip`         |
+| Windows + 无/其他 GPU | —       | 抛出异常提示           |
 | Linux              | —       | 暂不支持自动下载             |
 
 ### 9.3 版本比对

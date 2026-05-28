@@ -165,10 +165,10 @@ fn get_llamacpp_download_url(hardware: &HardwareDetectResult) -> Result<String, 
                     Ok("https://adm.tuduoduo.top/llamacpp/windows-CUDA12.zip".to_string())
                 }
                 Some("amd") => {
-                    Ok("https://adm.tuduoduo.top/llamacpp/llama-amd.zip".to_string())
+                    Ok("https://adm.tuduoduo.top/llamacpp/vulkan.zip".to_string())
                 }
                 Some("intel") => {
-                    Ok("https://adm.tuduoduo.top/llamacpp/llama-intel.zip".to_string())
+                    Ok("https://adm.tuduoduo.top/llamacpp/vulkan.zip".to_string())
                 }
                 Some(other) => {
                     Err(format!("不支持的显卡型号: {}，当前仅支持 NVIDIA/AMD/Intel 显卡", other))
