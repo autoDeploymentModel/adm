@@ -459,6 +459,8 @@
       }
     }
 
+    let pendingLlamacppResult = null;
+
     async function checkForUpdate(silent) {
       silent = silent || false;
       try {
@@ -467,12 +469,8 @@
         }
         const result = await invoke("check_update");
 
-        if (result.llamacpp_needs_update) {
-          startLlamacppUpdate(result);
-          return;
-        }
-
         if (result.has_update) {
+          pendingLlamacppResult = result.llamacpp_needs_update ? result : null;
           const html = `
             <div class="update-icon">📥</div>
             <div class="update-title">发现新版本</div>
@@ -489,11 +487,19 @@
             </div>
             <div class="update-buttons">
               <button class="update-btn-primary" onclick="openUrl('${result.download_url}')">下载更新</button>
-              <button class="update-btn-secondary" onclick="hideUpdateDialog()">稍后再说</button>
+              <button class="update-btn-secondary" onclick="onSystemUpdateDismiss()">稍后再说</button>
             </div>
           `;
           showUpdateDialog(html);
-        } else if (!silent) {
+          return;
+        }
+
+        if (result.llamacpp_needs_update) {
+          startLlamacppUpdate(result);
+          return;
+        }
+
+        if (!silent) {
           showUpdateDialog(`
             <div class="update-icon">✅</div>
             <div class="update-title">已是最新版本</div>
@@ -502,8 +508,6 @@
               <button class="update-btn-secondary" onclick="hideUpdateDialog()">确定</button>
             </div>
           `);
-        } else {
-          // silent mode, no update - do nothing
         }
       } catch (e) {
         if (!silent) {
@@ -516,6 +520,16 @@
             </div>
           `);
         }
+      }
+    }
+
+    function onSystemUpdateDismiss() {
+      hideUpdateDialog();
+      if (pendingLlamacppResult) {
+        setTimeout(function() {
+          startLlamacppUpdate(pendingLlamacppResult);
+          pendingLlamacppResult = null;
+        }, 300);
       }
     }
 

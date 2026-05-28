@@ -47,7 +47,7 @@
 | **硬件监控**        | 实时显示内存/显存/CPU 信息（hwinfo 插件增强检测）                  |
 | **模型交互**        | 内嵌 iframe 加载 llama-server 的 Web UI，自动轮询检测服务就绪    |
 | **参数配置**        | 可视化配置 llama.cpp 启动参数，支持保存/加载/恢复默认                |
-| **自动更新**        | 应用版本 + llamacpp 二进制双重更新检查                        |
+| **自动更新**        | 先检查应用版本更新，再检查 llamacpp 二进制更新（有序双重检查）     |
 | **llamacpp 管理** | 自动检测硬件并下载匹配的 llama-server 二进制                    |
 
 ***
@@ -408,7 +408,7 @@ AppState {
 | Command                         | 签名                                              | 说明                                              |
 | ------------------------------- | ----------------------------------------------- | ----------------------------------------------- |
 | `get_system_info`               | `(state: State<AppState>) → Result<SystemInfo>` | 获取 RAM/VRAM/CPU 信息，调 `platform::get_gpu_info()` |
-| `check_update`                  | `(app: AppHandle) → Result<UpdateCheckResult>`  | 检查应用 + llamacpp 双重更新                            |
+| `check_update`                  | `(app: AppHandle) → Result<UpdateCheckResult>`  | 先检查应用版本更新，再检查 llamacpp 更新（前端按序处理）       |
 | `download_and_extract_llamacpp` | `(app: AppHandle, url: String) → Result<()>`    | 下载并解压 llamacpp（含断点续传）                           |
 
 **辅助函数**：
@@ -583,6 +583,9 @@ start_model(model_id, params)
   ├── 6. 监听 message 事件，接收 iframe 子页面的 navigate 请求
   │
   └── 7. 延迟 3 秒后静默 check_update → 有新版本才弹窗
+          ① 先检查系统版本更新 → 有更新则弹窗提示
+          ② 用户关闭系统更新弹窗后 → 再检查 llamacpp 版本/下载
+          ③ 若系统无更新 → 直接检查 llamacpp 版本/下载
 ```
 
 #### 硬件信息栏
@@ -865,7 +868,7 @@ pub struct AppState {
 | Command                         | 所属模块                 | 描述                       |
 | ------------------------------- | -------------------- | ------------------------ |
 | `get_system_info`               | pages/index.rs       | 获取系统内存/显存/CPU 信息         |
-| `check_update`                  | pages/index.rs       | 检查应用 + llamacpp 更新       |
+| `check_update`                  | pages/index.rs       | 检查应用 + llamacpp 更新（前端按序处理） |
 | `download_and_extract_llamacpp` | pages/index.rs       | 下载并解压 llamacpp 到资源目录     |
 | `scan_local_models`             | pages/model\_list.rs | 扫描本地已下载的 `.gguf` 模型      |
 | `scan_part_files`               | pages/model\_list.rs | 扫描未完成的 `.gguf.part` 下载文件 |
