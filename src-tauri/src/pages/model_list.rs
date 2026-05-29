@@ -587,6 +587,24 @@ pub async fn start_model(
     if let Some(rp) = params.repeat_penalty {
         args.extend(["--repeat-penalty".to_string(), rp.to_string()]);
     }
+    if let Some(rln) = params.repeat_last_n {
+        args.extend(["--repeat-last-n".to_string(), rln.to_string()]);
+    }
+    if let Some(dm) = params.dry_multiplier {
+        args.extend(["--dry-multiplier".to_string(), dm.to_string()]);
+    }
+    if let Some(dal) = params.dry_allowed_length {
+        args.extend(["--dry-allowed-length".to_string(), dal.to_string()]);
+    }
+    if let Some(dpln) = params.dry_penalty_last_n {
+        args.extend(["--dry-penalty-last-n".to_string(), dpln.to_string()]);
+    }
+    if let Some(pp) = params.presence_penalty {
+        args.extend(["--presence-penalty".to_string(), pp.to_string()]);
+    }
+    if let Some(fp) = params.frequency_penalty {
+        args.extend(["--frequency-penalty".to_string(), fp.to_string()]);
+    }
     if let Some(r) = &params.reasoning {
         args.extend(["--reasoning".to_string(), r.clone()]);
     }

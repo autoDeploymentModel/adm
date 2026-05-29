@@ -10,9 +10,9 @@
 | 项目       | 值          |
 | -------- | ---------- |
 | 应用版本     | 0.1.8      |
-| 文档版本     | 3.0        |
+| 文档版本     | 3.2        |
 | Tauri 版本 | 2.11.2     |
-| 最后更新     | 2026-05-26 |
+| 最后更新     | 2026-05-29 |
 | 维护者      | ADM 开发团队   |
 
 ***
@@ -365,8 +365,8 @@ AppState {
 | ---------------------- | ----------------------------------------------------------------------------------- |
 | `SystemInfo`           | 系统信息返回值：RAM(总/已用)、VRAM(总/已用)、CPU 使用率/核心数                                            |
 | `ModelStatus`          | 模型运行状态：是否运行、model\_id、pid、port                                                      |
-| `LaunchParams`         | 模型启动参数（见 §5.5）                                                                      |
-| `RemoteModel`          | 远程模型数据：model\_id、model\_u  rl、model\_size、need\_ram、support\_tools/reasoning/images |
+| `LaunchParams`         | 模型启动参数（见 §5.5），新增 `dry_multiplier`、`dry_allowed_length`、`dry_penalty_last_n`、`presence_penalty`、`frequency_penalty`、`preset_mode` 字段 |
+| `RemoteModel`          | 远程模型数据：model\_id、model\_url、model\_size、need\_ram、support\_tools/reasoning/images |
 | `Settings`             | 用户配置包装：`{ launch_params: LaunchParams }`                                            |
 | `PartFileProgress`     | 断点续传进度：model\_id、existing\_size                                                     |
 | `UpdateInfo`           | 远程更新信息：版本号、llamacpp 版本、各平台下载配置                                                      |
@@ -757,10 +757,23 @@ function navigateTo(page) {
 └─────────────────────────────────────────────────────────────┘
 ```
 
+#### 推荐模式
+
+设置页面顶部新增推荐模式下拉列表，可快速配置采样参数：
+
+| 模式 | 说明 | 温度 | Top-K | Top-P | Min-P | 重复惩罚 | DRY 乘数 | DRY 允许长度 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 默认（日常聊天） | 平衡参数 | 0.7 | 40 | 0.95 | 0.0 | 1.1 | 0.8 | 2 |
+| 创意写作 | 文学创作修辞友好 | 0.85 | 40 | 0.95 | 0.0 | 1.05 | 0.4 | 3 |
+| 写代码/编程 | 低随机性稳定输出 | 0.2 | 35 | 0.9 | 0.0 | 1.1 | 0.4 | 2 |
+
+切换模式后自动填充采样参数并保存，无需点击保存按钮。
+
 #### 启动参数分组
 
 | 参数组     | 参数              | CLI 标志             | 默认值       |
 | ------- | --------------- | ------------------ | --------- |
+| **推荐模式** | 选择模式 | 快速配置 | 默认（日常聊天） |
 | **基础**  | 上下文大小           | `-c`               | 4096      |
 | <br />  | 预测 token 数      | `-n`               | -1        |
 | <br />  | 批处理大小           | `-b`               | 2048      |
@@ -773,12 +786,18 @@ function navigateTo(page) {
 | <br />  | KV 缓存类型 V       | `-ctv`             | f16       |
 | <br />  | 内存锁定            | `--mlock`          | false     |
 | <br />  | 内存映射            | `--mmap`           | true      |
-| **采样**  | 温度              | `--temp`           | 0.8       |
+| **采样**  | 温度              | `--temp`           | 0.7       |
 | <br />  | Top-K           | `--top-k`          | 40        |
 | <br />  | Top-P           | `--top-p`          | 0.95      |
-| <br />  | Min-P           | `--min-p`          | 0.05      |
-| <br />  | 重复惩罚            | `--repeat-penalty` | 1.0       |
-| **推理**  | 推理模式            | `--reasoning`      | 无         |
+| <br />  | Min-P           | `--min-p`          | 0.0       |
+| <br />  | 重复惩罚            | `--repeat-penalty` | 1.1       |
+| <br />  | 重复窗口            | `--repeat-last-n`  | -1        |
+| <br />  | DRY 乘数          | `--dry-multiplier` | 0.8       |
+| <br />  | DRY 允许长度 | `--dry-allowed-length` | 2 |
+| <br />  | DRY 惩罚窗口 | `--dry-penalty-last-n` | -1 |
+| <br />  | 存在惩罚 | `--presence-penalty` | 0.0 |
+| <br />  | 频率惩罚 | `--frequency-penalty` | 0.0 |
+| **推理**  | 推理模式            | `--reasoning`      | auto      |
 | **服务**  | 端口              | `--port`           | 8080      |
 | <br />  | 监听地址            | `--host`           | 127.0.0.1 |
 
@@ -1154,6 +1173,6 @@ Rust (emit) ──→ 前端 JS (listen) ──postMessage──→ iframe/conte
 
 ***
 
-*文档版本: 3.0*\
-*最后更新: 2026-05-26*\
+*文档版本: 3.2*\
+*最后更新: 2026-05-29*\
 *维护者: ADM 开发团队*

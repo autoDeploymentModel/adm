@@ -438,6 +438,24 @@
         <div id="panel-launch-params" class="panel active">
           <div class="panel-title">模型启动参数</div>
 
+          <div class="param-group" style="margin-bottom: 28px;">
+            <div class="param-group-title">推荐模式</div>
+            <div class="param-row">
+              <div class="param-label">
+                选择模式
+                <div class="param-key">快速配置</div>
+              </div>
+              <div class="param-input">
+                <select id="preset_mode" onchange="onPresetModeChange()">
+                  <option value="default">默认（日常聊天）</option>
+                  <option value="creative">创意写作</option>
+                  <option value="code">写代码 / 编程（推荐）</option>
+                </select>
+                <div class="param-desc">选择后自动填充并保存采样参数，可手动微调后点保存</div>
+              </div>
+            </div>
+          </div>
+
           <div class="param-group">
             <div class="param-group-title">基础参数</div>
 
@@ -665,7 +683,73 @@
                 <div class="param-key">--repeat-penalty</div>
               </div>
               <div class="param-input">
-                <input type="number" id="repeat_penalty" value="1.0" step="0.05" min="0">
+                <input type="number" id="repeat_penalty" value="1.1" step="0.05" min="0">
+              </div>
+            </div>
+
+            <div class="param-row">
+              <div class="param-label">
+                重复窗口
+                <div class="param-key">--repeat-last-n</div>
+              </div>
+              <div class="param-input">
+                <input type="number" id="repeat_last_n" value="-1" step="1">
+                <div class="param-desc">重复惩罚的上下文窗口大小，-1 表示使用 ctx_size</div>
+              </div>
+            </div>
+
+            <div class="param-row">
+              <div class="param-label">
+                DRY 乘数
+                <div class="param-key">--dry-multiplier</div>
+              </div>
+              <div class="param-input">
+                <input type="number" id="dry_multiplier" value="0.8" step="0.05" min="0">
+                <div class="param-desc">DRY 采样乘数，0.0 表示禁用</div>
+              </div>
+            </div>
+
+            <div class="param-row">
+              <div class="param-label">
+                DRY 允许长度
+                <div class="param-key">--dry-allowed-length</div>
+              </div>
+              <div class="param-input">
+                <input type="number" id="dry_allowed_length" value="2" step="1" min="1">
+                <div class="param-desc">DRY 采样允许的重复长度，代码模式建议设为 1</div>
+              </div>
+            </div>
+
+            <div class="param-row">
+              <div class="param-label">
+                DRY 惩罚窗口
+                <div class="param-key">--dry-penalty-last-n</div>
+              </div>
+              <div class="param-input">
+                <input type="number" id="dry_penalty_last_n" value="-1" step="1">
+                <div class="param-desc">DRY 惩罚的最后 n 个 token，-1 表示使用上下文大小</div>
+              </div>
+            </div>
+
+            <div class="param-row">
+              <div class="param-label">
+                存在惩罚
+                <div class="param-key">--presence-penalty</div>
+              </div>
+              <div class="param-input">
+                <input type="number" id="presence_penalty" value="0.0" step="0.05" min="0">
+                <div class="param-desc">重复 alpha 存在惩罚，0.0 表示禁用</div>
+              </div>
+            </div>
+
+            <div class="param-row">
+              <div class="param-label">
+                频率惩罚
+                <div class="param-key">--frequency-penalty</div>
+              </div>
+              <div class="param-input">
+                <input type="number" id="frequency_penalty" value="0.0" step="0.05" min="0">
+                <div class="param-desc">重复 alpha 频率惩罚，0.0 表示禁用</div>
               </div>
             </div>
 
@@ -776,6 +860,51 @@
   <script>
     const invoke = window.__TAURI_INTERNALS__?.invoke || window.parent?.__TAURI_INTERNALS__?.invoke || window.__TAURI__?.core?.invoke || window.parent?.__TAURI__?.core?.invoke;
 
+    const PRESET_MODES = {
+      default: {
+        temperature: 0.7,
+        top_k: 40,
+        top_p: 0.95,
+        min_p: 0.0,
+        repeat_penalty: 1.1,
+        repeat_last_n: -1,
+        dry_multiplier: 0.8,
+        dry_allowed_length: 2,
+        dry_penalty_last_n: -1,
+        presence_penalty: 0.0,
+        frequency_penalty: 0.0,
+        reasoning: "auto",
+      },
+      creative: {
+        temperature: 0.85,
+        top_k: 40,
+        top_p: 0.95,
+        min_p: 0.0,
+        repeat_penalty: 1.05,
+        repeat_last_n: -1,
+        dry_multiplier: 0.4,
+        dry_allowed_length: 3,
+        dry_penalty_last_n: -1,
+        presence_penalty: 0.0,
+        frequency_penalty: 0.0,
+        reasoning: "off",
+      },
+      code: {
+        temperature: 0.2,
+        top_k: 35,
+        top_p: 0.9,
+        min_p: 0.0,
+        repeat_penalty: 1.1,
+        repeat_last_n: -1,
+        dry_multiplier: 0.4,
+        dry_allowed_length: 2,
+        dry_penalty_last_n: -1,
+        presence_penalty: 0.0,
+        frequency_penalty: 0.0,
+        reasoning: "off",
+      },
+    };
+
     function switchPanel(panelId) {
       document.querySelectorAll(".nav-item").forEach((el) => el.classList.remove("active"));
       document.querySelectorAll(".panel").forEach((el) => el.classList.remove("active"));
@@ -792,6 +921,30 @@
       toast.textContent = message;
       document.body.appendChild(toast);
       setTimeout(() => toast.remove(), 3000);
+    }
+
+    function fillSamplingFromPreset(preset) {
+      document.getElementById("temperature").value = preset.temperature;
+      document.getElementById("top_k").value = preset.top_k;
+      document.getElementById("top_p").value = preset.top_p;
+      document.getElementById("min_p").value = preset.min_p;
+      document.getElementById("repeat_penalty").value = preset.repeat_penalty;
+      document.getElementById("repeat_last_n").value = preset.repeat_last_n;
+      document.getElementById("dry_multiplier").value = preset.dry_multiplier;
+      document.getElementById("dry_allowed_length").value = preset.dry_allowed_length;
+      document.getElementById("dry_penalty_last_n").value = preset.dry_penalty_last_n;
+      document.getElementById("presence_penalty").value = preset.presence_penalty;
+      document.getElementById("frequency_penalty").value = preset.frequency_penalty;
+      document.getElementById("reasoning").value = preset.reasoning;
+    }
+
+    async function onPresetModeChange() {
+      const mode = document.getElementById("preset_mode").value;
+      const preset = PRESET_MODES[mode];
+      if (!preset) return;
+
+      fillSamplingFromPreset(preset);
+      await saveParams();
     }
 
     function getParamsFromForm() {
@@ -820,11 +973,18 @@
         temperature: parseFloat(document.getElementById("temperature").value) || 0.8,
         top_k: parseInt(document.getElementById("top_k").value) || 40,
         top_p: parseFloat(document.getElementById("top_p").value) || 0.95,
-        min_p: parseFloat(document.getElementById("min_p").value) || 0.05,
+        min_p: parseFloat(document.getElementById("min_p").value) || 0.0,
         repeat_penalty: parseFloat(document.getElementById("repeat_penalty").value) || 1.0,
+        repeat_last_n: parseInt(document.getElementById("repeat_last_n").value) || -1,
+        dry_multiplier: parseFloat(document.getElementById("dry_multiplier").value) || 0.0,
+        dry_allowed_length: parseInt(document.getElementById("dry_allowed_length").value) || 2,
+        dry_penalty_last_n: parseInt(document.getElementById("dry_penalty_last_n").value) || -1,
+        presence_penalty: parseFloat(document.getElementById("presence_penalty").value) || 0.0,
+        frequency_penalty: parseFloat(document.getElementById("frequency_penalty").value) || 0.0,
         reasoning: document.getElementById("reasoning").value,
         port: parseInt(document.getElementById("port").value) || 8080,
         host: document.getElementById("host").value,
+        preset_mode: document.getElementById("preset_mode").value,
       };
     }
 
@@ -860,14 +1020,23 @@
       document.getElementById("cache_type_v").value = getParam("cache_type_v") ?? "f16";
       document.getElementById("mlock").checked = getParam("mlock") ?? false;
       document.getElementById("mmap").checked = getParam("mmap") !== false;
-      document.getElementById("temperature").value = getParam("temperature") ?? 0.8;
+      document.getElementById("temperature").value = getParam("temperature") ?? 0.2;
       document.getElementById("top_k").value = getParam("top_k") ?? 40;
       document.getElementById("top_p").value = getParam("top_p") ?? 0.95;
-      document.getElementById("min_p").value = getParam("min_p") ?? 0.05;
-      document.getElementById("repeat_penalty").value = getParam("repeat_penalty") ?? 1.0;
+      document.getElementById("min_p").value = getParam("min_p") ?? 0.0;
+      document.getElementById("repeat_penalty").value = getParam("repeat_penalty") ?? 1.1;
+      document.getElementById("repeat_last_n").value = getParam("repeat_last_n") ?? -1;
+      document.getElementById("dry_multiplier").value = getParam("dry_multiplier") ?? 0.8;
+      document.getElementById("dry_allowed_length").value = getParam("dry_allowed_length") ?? 2;
+      document.getElementById("dry_penalty_last_n").value = getParam("dry_penalty_last_n") ?? -1;
+      document.getElementById("presence_penalty").value = getParam("presence_penalty") ?? 0.0;
+      document.getElementById("frequency_penalty").value = getParam("frequency_penalty") ?? 0.0;
       document.getElementById("reasoning").value = getParam("reasoning") ?? "auto";
       document.getElementById("port").value = getParam("port") ?? 8080;
       document.getElementById("host").value = getParam("host") ?? "127.0.0.1";
+
+      const presetMode = getParam("preset_mode") ?? "default";
+      document.getElementById("preset_mode").value = PRESET_MODES[presetMode] ? presetMode : "default";
     }
 
     async function saveParams() {

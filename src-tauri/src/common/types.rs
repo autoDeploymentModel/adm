@@ -39,9 +39,16 @@ pub struct LaunchParams {
     pub top_p: Option<f64>,
     pub min_p: Option<f64>,
     pub repeat_penalty: Option<f64>,
+    pub repeat_last_n: Option<i32>,
+    pub dry_multiplier: Option<f64>,
+    pub dry_allowed_length: Option<i32>,
+    pub dry_penalty_last_n: Option<i32>,
+    pub presence_penalty: Option<f64>,
+    pub frequency_penalty: Option<f64>,
     pub reasoning: Option<String>,
     pub port: Option<u16>,
     pub host: Option<String>,
+    pub preset_mode: Option<String>,
 }
 
 impl Default for LaunchParams {
@@ -64,9 +71,16 @@ impl Default for LaunchParams {
             top_p: None,
             min_p: None,
             repeat_penalty: None,
+            repeat_last_n: None,
+            dry_multiplier: None,
+            dry_allowed_length: None,
+            dry_penalty_last_n: None,
+            presence_penalty: None,
+            frequency_penalty: None,
             reasoning: None,
             port: None,
             host: None,
+            preset_mode: None,
         }
     }
 }
