@@ -11,7 +11,7 @@ use tauri::Manager;
 // ===== Tauri Command =====
 
 #[tauri::command]
-pub async fn scan_local_models(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+pub async fn scan_local_models(app: tauri::AppHandle) -> Result<Vec<LocalModel>, String> {
     let data_dir = config::get_data_dir(Some(&app))?;
     let models_dir = data_dir.join("models");
 
@@ -20,23 +20,46 @@ pub async fn scan_local_models(app: tauri::AppHandle) -> Result<Vec<String>, Str
         return Ok(Vec::new());
     }
 
-    let mut model_ids = Vec::new();
-    let entries = std::fs::read_dir(&models_dir).map_err(|e| format!("读取 models 目录失败: {}", e))?;
+    let mut models = Vec::new();
 
-    for entry in entries.flatten() {
+    for entry in std::fs::read_dir(&models_dir).map_err(|e| format!("读取 models 目录失败: {}", e))?.flatten() {
         let path = entry.path();
-        if path.is_file() {
+        if path.is_dir() {
+            if let Some(dir_name) = path.file_name() {
+                let dir_str = dir_name.to_string_lossy().to_string();
+                let main_file = format!("{}.gguf", dir_str);
+                if path.join(&main_file).exists() {
+                    let mut files = vec![main_file];
+                    if let Ok(dir_entries) = std::fs::read_dir(&path) {
+                        for e in dir_entries.flatten() {
+                            let fp = e.path();
+                            if fp.is_file() {
+                                if let Some(name) = fp.file_name() {
+                                    let name_str = name.to_string_lossy().to_string();
+                                    if name_str.ends_with(".gguf") && name_str != files[0] {
+                                        files.push(name_str);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    models.push(LocalModel { model_id: dir_str, files });
+                }
+            }
+        } else if path.is_file() {
             if let Some(ext) = path.extension() {
                 if ext == "gguf" {
                     if let Some(stem) = path.file_stem() {
-                        model_ids.push(stem.to_string_lossy().to_string());
+                        let model_id = stem.to_string_lossy().to_string();
+                        let filename = path.file_name().unwrap().to_string_lossy().to_string();
+                        models.push(LocalModel { model_id, files: vec![filename] });
                     }
                 }
             }
         }
     }
 
-    Ok(model_ids)
+    Ok(models)
 }
 
 #[tauri::command]
@@ -49,11 +72,19 @@ pub async fn scan_part_files(app: tauri::AppHandle) -> Result<Vec<PartFileProgre
     }
 
     let mut result = Vec::new();
-    let entries = std::fs::read_dir(&models_dir).map_err(|e| format!("读取 models 目录失败: {}", e))?;
 
-    for entry in entries.flatten() {
+    for entry in std::fs::read_dir(&models_dir).map_err(|e| format!("读取 models 目录失败: {}", e))?.flatten() {
         let path = entry.path();
-        if path.is_file() {
+        if path.is_dir() {
+            if let Some(dir_name) = path.file_name() {
+                let dir_str = dir_name.to_string_lossy().to_string();
+                let part_file = path.join(format!("{}.gguf.part", dir_str));
+                if part_file.exists() {
+                    let size = std::fs::metadata(&part_file).map(|m| m.len()).unwrap_or(0);
+                    result.push(PartFileProgress { model_id: dir_str, existing_size: size });
+                }
+            }
+        } else if path.is_file() {
             if let Some(ext) = path.extension() {
                 if ext == "part" {
                     if let Some(stem) = path.file_stem() {
@@ -103,30 +134,28 @@ pub async fn download_model(
     app: tauri::AppHandle,
     model_id: String,
     model_url: String,
+    support_images: bool,
+    model_mmproj: Option<String>,
 ) -> Result<(), String> {
-    // 自动将 huggingface.co 替换为国内镜像 hf-mirror.com
     let model_url = model_url.replace("https://huggingface.co/", "https://hf-mirror.com/");
 
     let data_dir = config::get_data_dir(Some(&app))?;
-    let models_dir = data_dir.join("models");
-    std::fs::create_dir_all(&models_dir).map_err(|e| format!("创建 models 目录失败: {}", e))?;
+    let model_dir = data_dir.join("models").join(&model_id);
+    std::fs::create_dir_all(&model_dir).map_err(|e| format!("创建模型目录失败: {}", e))?;
 
-    let final_path = models_dir.join(format!("{}.gguf", model_id));
-    let part_path = models_dir.join(format!("{}.gguf.part", model_id));
+    let final_path = model_dir.join(format!("{}.gguf", model_id));
+    let part_path = model_dir.join(format!("{}.gguf.part", model_id));
 
-    // 如果最终文件已存在，直接返回完成
     if final_path.exists() {
-        // 清理残留的 .part 文件
         let _ = std::fs::remove_file(&part_path);
         app.emit(
             "download-complete",
-            serde_json::json!({ "model_id": &model_id }),
+            serde_json::json!({ "model_id": &model_id, "type": "model" }),
         )
         .ok();
         return Ok(());
     }
 
-    // 检查是否有未完成的 .part 文件，获取已下载字节数
     let existing_size = if part_path.exists() {
         std::fs::metadata(&part_path)
             .map(|m| m.len())
@@ -135,10 +164,8 @@ pub async fn download_model(
         0
     };
 
-    // 注册下载进度到 AppState，供页面切换后恢复百分比显示
     app.state::<AppState>().downloading_progress.lock().unwrap().insert(model_id.clone(), 0u8);
 
-    // Drop guard: 函数退出时清理进度记录（无论成功还是失败）
     struct CleanupGuard {
         h: tauri::AppHandle,
         id: String,
@@ -152,7 +179,6 @@ pub async fn download_model(
     }
     let _guard = CleanupGuard { h: app.clone(), id: model_id.clone() };
 
-    // 第一步：获取最终下载 URL（处理重定向）
     let resolve_client = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .redirect(reqwest::redirect::Policy::none())
@@ -181,7 +207,6 @@ pub async fn download_model(
         return Err(format!("获取下载链接失败，HTTP 状态码: {}", status.as_u16()));
     };
 
-    // 第二步：用最终 URL 发起下载（支持 Range 续传）
     let download_client = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .build()
@@ -267,11 +292,11 @@ pub async fn download_model(
                 "progress": progress,
                 "downloaded": downloaded,
                 "total": total_size,
+                "type": "model",
             }),
         )
         .ok();
 
-        // 同步更新 AppState 中的进度
         if let Ok(mut map) = app.state::<AppState>().downloading_progress.lock() {
             map.insert(model_id.clone(), progress);
         }
@@ -280,16 +305,178 @@ pub async fn download_model(
     file.flush().await.map_err(|e| format!("刷新文件失败: {}", e))?;
     drop(file);
 
-    // 下载完成，将 .part 重命名为 .gguf
     tokio::fs::rename(&part_path, &final_path)
         .await
         .map_err(|e| format!("重命名文件失败: {}", e))?;
 
     app.emit(
         "download-complete",
-        serde_json::json!({ "model_id": &model_id }),
+        serde_json::json!({ "model_id": &model_id, "type": "model" }),
     )
     .ok();
+
+    if support_images {
+        if let Some(mmproj_url) = model_mmproj {
+            let mmproj_url = mmproj_url.replace("https://huggingface.co/", "https://hf-mirror.com/");
+            let mmproj_filename = mmproj_url
+                .rsplit('/')
+                .next()
+                .unwrap_or("mmproj.gguf")
+                .to_string();
+            let mmproj_final_path = model_dir.join(&mmproj_filename);
+            let mmproj_part_path = model_dir.join(format!("{}.part", mmproj_filename));
+
+            if mmproj_final_path.exists() {
+                let _ = std::fs::remove_file(&mmproj_part_path);
+                app.emit(
+                    "download-complete",
+                    serde_json::json!({ "model_id": &model_id, "type": "mmproj" }),
+                )
+                .ok();
+                return Ok(());
+            }
+
+            let mmproj_existing_size = if mmproj_part_path.exists() {
+                std::fs::metadata(&mmproj_part_path)
+                    .map(|m| m.len())
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+
+            app.emit(
+                "download-progress",
+                serde_json::json!({
+                    "model_id": &model_id,
+                    "progress": 0u8,
+                    "downloaded": 0u64,
+                    "total": 0u64,
+                    "type": "mmproj",
+                }),
+            )
+            .ok();
+
+            let mmproj_resolve_resp = resolve_client
+                .get(&mmproj_url)
+                .header("Accept", "*/*")
+                .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+                .send()
+                .await
+                .map_err(|e| format!("mmproj 连接失败: {}", e))?;
+
+            let mmproj_status = mmproj_resolve_resp.status();
+            let mmproj_final_url = if mmproj_status.is_redirection() {
+                mmproj_resolve_resp
+                    .headers()
+                    .get("location")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| mmproj_url.clone())
+            } else if mmproj_status.is_success() {
+                mmproj_url.clone()
+            } else {
+                return Err(format!("获取 mmproj 下载链接失败，HTTP 状态码: {}", mmproj_status.as_u16()));
+            };
+
+            let mut mmproj_req = download_client
+                .get(&mmproj_final_url)
+                .header("Accept", "*/*")
+                .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
+
+            if mmproj_existing_size > 0 {
+                mmproj_req = mmproj_req.header("Range", format!("bytes={}-", mmproj_existing_size));
+            }
+
+            let mmproj_response = mmproj_req
+                .send()
+                .await
+                .map_err(|e| format!("mmproj 下载请求失败: {}", e))?;
+
+            let mmproj_dl_status = mmproj_response.status();
+
+            if mmproj_existing_size > 0 && mmproj_dl_status != reqwest::StatusCode::PARTIAL_CONTENT {
+                let _ = std::fs::remove_file(&mmproj_part_path);
+                return Err(format!("mmproj 续传失败 (HTTP {}), 请重新下载", mmproj_dl_status.as_u16()));
+            }
+
+            if !mmproj_dl_status.is_success() && mmproj_dl_status != reqwest::StatusCode::PARTIAL_CONTENT {
+                return Err(format!("mmproj 下载失败，HTTP 状态码: {}", mmproj_dl_status.as_u16()));
+            }
+
+            let mmproj_total_size = if mmproj_existing_size > 0 {
+                if let Some(content_range) = mmproj_response.headers().get("content-range") {
+                    if let Ok(range_str) = content_range.to_str() {
+                        if let Some(total_str) = range_str.split('/').nth(1) {
+                            total_str.trim().parse::<u64>().unwrap_or(0)
+                        } else {
+                            0
+                        }
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                }
+            } else {
+                mmproj_response.content_length().unwrap_or(0)
+            };
+
+            let mut mmproj_file = if mmproj_existing_size > 0 {
+                tokio::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&mmproj_part_path)
+                    .await
+                    .map_err(|e| format!("打开 mmproj 续传文件失败: {}", e))?
+            } else {
+                tokio::fs::File::create(&mmproj_part_path)
+                    .await
+                    .map_err(|e| format!("创建 mmproj 文件失败: {}", e))?
+            };
+
+            let mut mmproj_downloaded: u64 = mmproj_existing_size;
+            let mut mmproj_stream = mmproj_response.bytes_stream();
+
+            while let Some(chunk_result) = mmproj_stream.next().await {
+                let chunk = chunk_result.map_err(|e| format!("mmproj 下载数据读取失败: {}", e))?;
+                mmproj_file
+                    .write_all(&chunk)
+                    .await
+                    .map_err(|e| format!("mmproj 写入文件失败: {}", e))?;
+                mmproj_downloaded += chunk.len() as u64;
+
+                let mmproj_progress = if mmproj_total_size > 0 {
+                    ((mmproj_downloaded as f64 / mmproj_total_size as f64) * 100.0).min(99.0) as u8
+                } else {
+                    0
+                };
+
+                app.emit(
+                    "download-progress",
+                    serde_json::json!({
+                        "model_id": &model_id,
+                        "progress": mmproj_progress,
+                        "downloaded": mmproj_downloaded,
+                        "total": mmproj_total_size,
+                        "type": "mmproj",
+                    }),
+                )
+                .ok();
+            }
+
+            mmproj_file.flush().await.map_err(|e| format!("刷新 mmproj 文件失败: {}", e))?;
+            drop(mmproj_file);
+
+            tokio::fs::rename(&mmproj_part_path, &mmproj_final_path)
+                .await
+                .map_err(|e| format!("重命名 mmproj 文件失败: {}", e))?;
+
+            app.emit(
+                "download-complete",
+                serde_json::json!({ "model_id": &model_id, "type": "mmproj" }),
+            )
+            .ok();
+        }
+    }
 
     Ok(())
 }
@@ -300,6 +487,7 @@ pub async fn start_model(
     state: tauri::State<'_, AppState>,
     model_id: String,
     params: LaunchParams,
+    support_images: bool,
 ) -> Result<(), String> {
     {
         let pid_lock = state.running_process.lock().map_err(|e| e.to_string())?;
@@ -310,16 +498,43 @@ pub async fn start_model(
 
     let server_path = config::get_llama_server_path(Some(&app))?;
     let data_dir = config::get_data_dir(Some(&app))?;
-    let model_path = data_dir.join("models").join(format!("{}.gguf", model_id));
-
-    if !model_path.exists() {
-        return Err(format!("模型文件不存在: {:?}", model_path));
-    }
+    let models_dir = data_dir.join("models");
+    let subfolder_path = models_dir.join(&model_id).join(format!("{}.gguf", model_id));
+    let root_path = models_dir.join(format!("{}.gguf", model_id));
+    let model_path = if subfolder_path.exists() {
+        subfolder_path
+    } else if root_path.exists() {
+        root_path
+    } else {
+        return Err(format!("模型文件不存在: {:?}", subfolder_path));
+    };
 
     let mut args: Vec<String> = vec![
         "-m".to_string(),
         model_path.to_string_lossy().to_string(),
     ];
+
+    if support_images {
+        let model_dir = model_path.parent().unwrap();
+        let mut mmproj_path: Option<std::path::PathBuf> = None;
+        if let Ok(entries) = std::fs::read_dir(model_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(name) = path.file_name() {
+                        let name_str = name.to_string_lossy();
+                        if name_str.starts_with("mmproj") && name_str.ends_with(".gguf") {
+                            mmproj_path = Some(path);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(mp) = mmproj_path {
+            args.extend(["--mmproj".to_string(), mp.to_string_lossy().to_string()]);
+        }
+    }
 
     if let Some(ctx) = params.ctx_size {
         args.extend(["-c".to_string(), ctx.to_string()]);

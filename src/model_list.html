@@ -449,9 +449,10 @@
     const listen = window.__TAURI_INTERNALS__?.listen || window.__TAURI__?.event?.listen || window.parent?.__TAURI_INTERNALS__?.listen || window.parent?.__TAURI__?.event?.listen;
 
     let modelList = [];
-    let localModels = [];
-    let partFiles = {};  // { model_id: existing_size }
-    let downloadingModels = {};  // { model_id: progress_percent } - 后端正在下载的模型进度
+    let localModels = [];  // [ { model_id, files } ]
+    let partFiles = {};
+    let downloadingModels = {};
+    let downloadingMmproj = {};
     let systemInfo = null;
     let runningModelId = null;
     let runningModelPort = null;
@@ -526,7 +527,13 @@
     }
 
     function isModelDownloaded(modelId) {
-      return localModels.includes(modelId);
+      const local = localModels.find(m => m.model_id === modelId);
+      if (!local) return false;
+      const model = modelList.find(m => m.model_id === modelId);
+      if (model && model.support_images && model.model_mmproj) {
+        return local.files.some(f => f.startsWith("mmproj"));
+      }
+      return true;
     }
 
     function showToast(message) {
@@ -703,18 +710,20 @@
 
         // 检查是否有未完成的 .part 文件
         const partSize = partFiles[model.model_id];
-        // 检查后端是否正在下载该模型
         const downloadingProgress = downloadingModels[model.model_id];
+        const isDownloadingMmproj = downloadingMmproj[model.model_id];
         const safeModelId = model.model_id.replace(/"/g, '"');
         let downloadBtnHtml = "";
         if (downloaded) {
           downloadBtnHtml = '<button class="btn btn-download downloaded" disabled>已下载</button>';
+        } else if (isDownloadingMmproj) {
+          downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" disabled>下载 mmproj...</button>';
         } else if (downloadingProgress !== undefined) {
           downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" disabled>' + downloadingProgress + '%</button>';
         } else if (partSize && partSize > 0) {
-          downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-url="' + model.model_url.replace(/"/g, '"') + '" onclick="handleDownload(this)">继续下载</button>';
+          downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-url="' + model.model_url.replace(/"/g, '"') + '" data-model-mmproj="' + (model.model_mmproj || '').replace(/"/g, '"') + '" data-support-images="' + model.support_images + '" onclick="handleDownload(this)">继续下载</button>';
         } else if (available) {
-          downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-url="' + model.model_url.replace(/"/g, '"') + '" onclick="handleDownload(this)">下载</button>';
+          downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-url="' + model.model_url.replace(/"/g, '"') + '" data-model-mmproj="' + (model.model_mmproj || '').replace(/"/g, '"') + '" data-support-images="' + model.support_images + '" onclick="handleDownload(this)">下载</button>';
         } else {
           downloadBtnHtml = '<button class="btn btn-download" disabled>下载</button>';
         }
@@ -761,15 +770,16 @@
     async function handleDownload(btn) {
       const modelId = btn.dataset.modelId;
       const modelUrl = btn.dataset.modelUrl;
+      const modelMmproj = btn.dataset.modelMmproj || null;
+      const supportImages = btn.dataset.supportImages === 'true';
       if (btn) {
-        // 如果有 part 文件，显示 "续传中..." 而不是 "0%"
         const hasPart = partFiles[modelId] && partFiles[modelId] > 0;
         btn.textContent = hasPart ? "继续下载中..." : "0%";
         btn.disabled = true;
       }
 
       try {
-        await invoke("download_model", { modelId: modelId, modelUrl: modelUrl });
+        await invoke("download_model", { modelId: modelId, modelUrl: modelUrl, supportImages: supportImages, modelMmproj: modelMmproj });
       } catch (e) {
         showToast("下载失败: " + e);
         if (btn) {
@@ -791,10 +801,13 @@
           console.error("[DEBUG] params is undefined! settings keys:", Object.keys(settings));
         }
 
+        const model = modelList.find(m => m.model_id === modelId);
+        const supportImages = model ? model.support_images : false;
+
         btn.textContent = "启动中...";
         btn.disabled = true;
 
-        await invoke("start_model", { modelId: modelId, params: params });
+        await invoke("start_model", { modelId: modelId, params: params, supportImages: supportImages });
       } catch (e) {
         showToast("启动失败: " + e);
         renderModelTable();
@@ -901,21 +914,67 @@
 
         switch (data.type) {
           case "download-progress": {
-            downloadingModels[model_id] = progress;
-            const btn = document.querySelector('[data-model-id="' + model_id + '"]');
-            if (btn) {
-              btn.textContent = progress + "%";
+            const type = data.payload.type || "model";
+            if (type === "mmproj") {
+              downloadingMmproj[model_id] = true;
+              const btn = document.querySelector('[data-model-id="' + model_id + '"]');
+              if (btn) {
+                btn.textContent = "mmproj " + progress + "%";
+              }
+            } else {
+              downloadingModels[model_id] = progress;
+              const btn = document.querySelector('[data-model-id="' + model_id + '"]');
+              if (btn) {
+                btn.textContent = progress + "%";
+              }
             }
             break;
           }
           case "download-complete": {
-            delete downloadingModels[model_id];
-            if (!localModels.includes(model_id)) {
-              localModels.push(model_id);
+            const type = data.payload.type || "model";
+            if (type === "mmproj") {
+              delete downloadingMmproj[model_id];
+              delete downloadingModels[model_id];
+              const local = localModels.find(m => m.model_id === model_id);
+              if (local) {
+                if (!local.files.some(f => f.startsWith("mmproj"))) {
+                  local.files.push("mmproj-downloaded.gguf");
+                }
+              } else {
+                localModels.push({ model_id: model_id, files: ["mmproj-downloaded.gguf"] });
+              }
+              delete partFiles[model_id];
+              renderModelTable();
+            } else {
+              delete downloadingModels[model_id];
+              const model = modelList.find(m => m.model_id === model_id);
+              const local = localModels.find(m => m.model_id === model_id);
+              if (model && model.support_images && model.model_mmproj) {
+                if (local) {
+                  if (!local.files.includes(model_id + ".gguf")) {
+                    local.files.push(model_id + ".gguf");
+                  }
+                } else {
+                  localModels.push({ model_id: model_id, files: [model_id + ".gguf"] });
+                }
+                downloadingMmproj[model_id] = true;
+                const btn = document.querySelector('[data-model-id="' + model_id + '"]');
+                if (btn) {
+                  btn.textContent = "下载 mmproj...";
+                  btn.disabled = true;
+                }
+              } else {
+                if (local) {
+                  if (!local.files.includes(model_id + ".gguf")) {
+                    local.files.push(model_id + ".gguf");
+                  }
+                } else {
+                  localModels.push({ model_id: model_id, files: [model_id + ".gguf"] });
+                }
+                delete partFiles[model_id];
+                renderModelTable();
+              }
             }
-            // 清理 partFiles 记录
-            delete partFiles[model_id];
-            renderModelTable();
             break;
           }
           case "download-error": {

@@ -87,6 +87,8 @@ pub struct RemoteModel {
     pub support_reasoning: bool,
     #[serde(default)]
     pub support_images: bool,
+    #[serde(default)]
+    pub model_mmproj: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
@@ -127,10 +129,16 @@ pub struct UpdateCheckResult {
     pub vc_redist_installed: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct PartFileProgress {
     pub model_id: String,
     pub existing_size: u64,
+}
+
+#[derive(Serialize, Clone)]
+pub struct LocalModel {
+    pub model_id: String,
+    pub files: Vec<String>,
 }
 
 #[derive(Serialize, Clone)]
