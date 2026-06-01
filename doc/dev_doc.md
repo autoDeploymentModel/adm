@@ -10,9 +10,9 @@
 | 项目       | 值          |
 | -------- | ---------- |
 | 应用版本     | 0.1.8      |
-| 文档版本     | 3.2        |
+| 文档版本     | 3.3        |
 | Tauri 版本 | 2.11.2     |
-| 最后更新     | 2026-05-29 |
+| 最后更新     | 2026-06-01 |
 | 维护者      | ADM 开发团队   |
 
 ***
@@ -159,8 +159,8 @@ const getListen = () =>
 
 | 事件名                          | 触发方                                    | 载荷                                          | 说明               |
 | ---------------------------- | -------------------------------------- | ------------------------------------------- | ---------------- |
-| `download-progress`          | Rust `download_model()`                | `{ model_id, progress, downloaded, total }` | 模型下载进度更新         |
-| `download-complete`          | Rust `download_model()`                | `{ model_id }`                              | 模型下载完成           |
+| `download-progress`          | Rust `download_model()`                | `{ model_id, progress, downloaded, total, type }` | 模型下载进度更新（type: model/mmproj/diffusion/vae）         |
+| `download-complete`          | Rust `download_model()`                | `{ model_id, type }`                              | 模型下载完成（type: model/mmproj/diffusion/vae）           |
 | `model-started`              | Rust `start_model()`                   | `{ model_id, port }`                        | 模型启动成功           |
 | `model-stopped`              | Rust (stdout/stderr 线程)                | `{ model_id }`                              | 模型进程退出           |
 | `model-log`                  | Rust (stdout/stderr 线程)                | `{ model_id, line, source }`                | 模型日志行            |
@@ -366,7 +366,7 @@ AppState {
 | `SystemInfo`           | 系统信息返回值：RAM(总/已用)、VRAM(总/已用)、CPU 使用率/核心数                                            |
 | `ModelStatus`          | 模型运行状态：是否运行、model\_id、pid、port                                                      |
 | `LaunchParams`         | 模型启动参数（见 §5.5），新增 `dry_multiplier`、`dry_allowed_length`、`dry_penalty_last_n`、`presence_penalty`、`frequency_penalty`、`preset_mode` 字段 |
-| `RemoteModel`          | 远程模型数据：model\_id、model\_url、model\_size、need\_ram、support\_tools/reasoning/images |
+| `RemoteModel`          | 远程模型数据：model\_id、model\_url、model\_size、need\_ram、support\_tools/reasoning/images、model\_diffusion、model\_vae |
 | `Settings`             | 用户配置包装：`{ launch_params: LaunchParams }`                                            |
 | `PartFileProgress`     | 断点续传进度：model\_id、existing\_size                                                     |
 | `UpdateInfo`           | 远程更新信息：版本号、llamacpp 版本、各平台下载配置                                                      |
@@ -446,7 +446,7 @@ AppState {
 | `scan_local_models(app)`                    | 扫描 `models/*.gguf`      | 返回已下载的 model\_id 列表                            |
 | `scan_part_files(app)`                      | 扫描 `models/*.gguf.part` | 返回断点续传文件信息                                     |
 | `fetch_model_list()`                        | 远程获取模型列表                | `GET https://adm.tuduoduo.top/model.json`      |
-| `download_model(app, model_id, model_url)`  | 下载模型                    | 断点续传 + HuggingFace 镜像替换 + 进度事件 + AppState 进度同步 |
+| `download_model(app, model_id, model_url, model_diffusion, model_vae)`  | 下载模型                    | 断点续传 + HuggingFace 镜像替换 + 进度事件 + AppState 进度同步。文本生成图片模型自动连续下载主模型、diffusion、vae 三个文件 |
 | `start_model(app, state, model_id, params)` | 启动 llama-server         | 参数拼装 + 进程 spawn + stdout/stderr 线程 + PID 记录    |
 | `stop_model(state)`                         | 停止 llama-server         | taskkill(SIGKILL) / kill -9 + 状态清空             |
 | `get_model_status(state)`                   | 查询运行状态                  | 校验 PID 是否存活，僵尸进程自动清理                           |
@@ -455,7 +455,7 @@ AppState {
 **下载流程**：
 
 ```
-download_model(model_id, model_url)
+download_model(model_id, model_url, model_diffusion, model_vae)
   │
   ├── 1. huggingface.co → hf-mirror.com (自动替换)
   │
@@ -467,9 +467,13 @@ download_model(model_id, model_url)
   │
   ├── 5. 流式写入 .part 文件，每块发送 download-progress 事件
   │
-  ├── 6. 下载完成 → .part 重命名为 .gguf
+  ├── 6. 下载完成 → .part 重命名为 .gguf → 发送 download-complete (type: "model")
   │
-  └── 7. 发送 download-complete 事件
+  ├── 7. 如果 model_diffusion 存在 → 自动下载 diffusion 文件
+  │        (相同流程，事件 type: "diffusion")
+  │
+  └── 8. 如果 model_vae 存在 → 自动下载 vae 文件
+             (相同流程，事件 type: "vae")
 ```
 
 **模型启动流程**：
@@ -851,7 +855,7 @@ src-tauri/src/
 SystemInfo     — total_ram, used_ram, total_vram, used_vram, has_gpu, cpu_usage, cores
 ModelStatus    — running: bool, model_id, pid, port
 LaunchParams   — 所有 llama-server CLI 参数的 Option 封装（ctx_size, n_gpu_layers, temp 等）
-RemoteModel    — 远程模型信息：model_id, model_url, model_size, need_ram, support_*
+RemoteModel    — 远程模型信息：model_id, model_url, model_size, need_ram, support_*, model_diffusion, model_vae
 Settings       — 用户配置包装：{ launch_params: LaunchParams }
 UpdateInfo     — 远程更新信息：version, llamacpp_version, windows/mac 平台更新
 UpdateCheckResult — 更新检查结果：has_update, 各平台下载 URL, llamacpp 版本对比, vc_redist_installed
@@ -899,7 +903,7 @@ pub struct AppState {
 | `scan_local_models`             | pages/model\_list.rs | 扫描本地已下载的 `.gguf` 模型      |
 | `scan_part_files`               | pages/model\_list.rs | 扫描未完成的 `.gguf.part` 下载文件 |
 | `fetch_model_list`              | pages/model\_list.rs | 从远程获取模型列表                |
-| `download_model`                | pages/model\_list.rs | 下载模型（断点续传 + 进度事件）        |
+| `download_model`                | pages/model\_list.rs | 下载模型（断点续传 + 进度事件，文本生成图片模型含3个文件连续下载）        |
 | `start_model`                   | pages/model\_list.rs | 启动 llama-server 进程       |
 | `stop_model`                    | pages/model\_list.rs | 停止 llama-server 进程       |
 | `get_model_status`              | pages/model\_list.rs | 查询当前模型运行状态               |
@@ -913,8 +917,8 @@ pub struct AppState {
 
 | Event                        | 来源             | 触发时机                            | Payload                                   |
 | ---------------------------- | -------------- | ------------------------------- | ----------------------------------------- |
-| `download-progress`          | model\_list.rs | 模型下载中实时上报                       | `{model_id, progress, downloaded, total}` |
-| `download-complete`          | model\_list.rs | 模型下载完成                          | `{model_id}`                              |
+| `download-progress`          | model\_list.rs | 模型下载中实时上报                       | `{model_id, progress, downloaded, total, type}`（type: model/mmproj/diffusion/vae） |
+| `download-complete`          | model\_list.rs | 模型下载完成                          | `{model_id, type}`（type: model/mmproj/diffusion/vae）                              |
 | `model-started`              | model\_list.rs | 模型启动成功 / 检测到 listening 日志       | `{model_id, port}`                        |
 | `model-stopped`              | model\_list.rs | 进程退出（stdout/stderr 线程结束）        | `{model_id}`                              |
 | `model-log`                  | model\_list.rs | llama-server stdout/stderr 每行输出 | `{model_id, line, source}`                |
@@ -937,11 +941,15 @@ pub struct AppState {
   │        ├── 302 → 跟进 Location 获取最终 URL
   │        └── 200 → 直接下载
   │
-  ├── 5. 流式写入 .part 文件，每 chunk 上报 download-progress 事件
+  ├── 5. 流式写入 .part 文件，每 chunk 上报 download-progress 事件（type: "model"）
   │
-  ├── 6. 下载完成 → .part 重命名为 .gguf
+  ├── 6. 下载完成 → .part 重命名为 .gguf → emit download-complete（type: "model"）
   │
-  └── 7. emit download-complete 事件
+  ├── 7. 如果存在 model_diffusion → 自动下载 diffusion 文件
+  │        (相同流程，事件 type: "diffusion")
+  │
+  └── 8. 如果存在 model_vae → 自动下载 vae 文件
+             (相同流程，事件 type: "vae")
 ```
 
 ### 6.8 模型启动流程
@@ -1173,6 +1181,6 @@ Rust (emit) ──→ 前端 JS (listen) ──postMessage──→ iframe/conte
 
 ***
 
-*文档版本: 3.2*\
-*最后更新: 2026-05-29*\
+*文档版本: 3.3*\
+*最后更新: 2026-06-01*\
 *维护者: ADM 开发团队*

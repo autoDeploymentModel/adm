@@ -88,6 +88,10 @@
       color: #ffffff;
     }
 
+    .model-type {
+      color: #a0a0c0;
+    }
+
     .model-size {
       color: #a0a0c0;
     }
@@ -414,6 +418,7 @@
       <thead>
         <tr>
           <th>模型名称</th>
+          <th>模型类型</th>
           <th>模型大小</th>
           <th>内存需求</th>
           <th>工具调用</th>
@@ -425,7 +430,7 @@
       </thead>
       <tbody id="model-tbody">
         <tr>
-          <td colspan="8" style="text-align:center; padding:40px;">
+          <td colspan="9" style="text-align:center; padding:40px;">
             <span class="loading-spinner"></span>正在加载模型列表...
           </td>
         </tr>
@@ -453,6 +458,8 @@
     let partFiles = {};
     let downloadingModels = {};
     let downloadingMmproj = {};
+    let downloadingDiffusion = {};
+    let downloadingVae = {};
     let systemInfo = null;
     let runningModelId = null;
     let runningModelPort = null;
@@ -532,6 +539,18 @@
       const model = modelList.find(m => m.model_id === modelId);
       if (model && model.support_images && model.model_mmproj) {
         return local.files.some(f => f.startsWith("mmproj"));
+      }
+      if (model && (model.model_diffusion || model.model_vae)) {
+        if (!local.files.includes(modelId + ".gguf")) return false;
+        if (model.model_diffusion) {
+          const diffusionFile = model.model_diffusion.split('/').pop();
+          if (diffusionFile && !local.files.includes(diffusionFile)) return false;
+        }
+        if (model.model_vae) {
+          const vaeFile = model.model_vae.split('/').pop();
+          if (vaeFile && !local.files.includes(vaeFile)) return false;
+        }
+        return true;
       }
       return true;
     }
@@ -686,7 +705,7 @@
       const filteredList = getFilteredModelList();
 
       if (filteredList.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="8" class="empty-state"><p>暂无可用模型</p></td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" class="empty-state"><p>暂无可用模型</p></td></tr>';
         return;
       }
 
@@ -721,9 +740,9 @@
         } else if (downloadingProgress !== undefined) {
           downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" disabled>' + downloadingProgress + '%</button>';
         } else if (partSize && partSize > 0) {
-          downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-url="' + model.model_url.replace(/"/g, '"') + '" data-model-mmproj="' + (model.model_mmproj || '').replace(/"/g, '"') + '" data-support-images="' + model.support_images + '" onclick="handleDownload(this)">继续下载</button>';
+          downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-url="' + model.model_url.replace(/"/g, '"') + '" data-model-mmproj="' + (model.model_mmproj || '').replace(/"/g, '"') + '" data-support-images="' + model.support_images + '" data-model-diffusion="' + (model.model_diffusion || '').replace(/"/g, '"') + '" data-model-vae="' + (model.model_vae || '').replace(/"/g, '"') + '" data-model-type="' + (model.model_type || '').replace(/"/g, '"') + '" onclick="handleDownload(this)">继续下载</button>';
         } else if (available) {
-          downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-url="' + model.model_url.replace(/"/g, '"') + '" data-model-mmproj="' + (model.model_mmproj || '').replace(/"/g, '"') + '" data-support-images="' + model.support_images + '" onclick="handleDownload(this)">下载</button>';
+          downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-url="' + model.model_url.replace(/"/g, '"') + '" data-model-mmproj="' + (model.model_mmproj || '').replace(/"/g, '"') + '" data-support-images="' + model.support_images + '" data-model-diffusion="' + (model.model_diffusion || '').replace(/"/g, '"') + '" data-model-vae="' + (model.model_vae || '').replace(/"/g, '"') + '" data-model-type="' + (model.model_type || '').replace(/"/g, '"') + '" onclick="handleDownload(this)">下载</button>';
         } else {
           downloadBtnHtml = '<button class="btn btn-download" disabled>下载</button>';
         }
@@ -755,6 +774,7 @@
 
         tr.innerHTML =
           '<td class="model-name">' + model.model_id + '</td>' +
+          '<td class="model-type">' + (model.model_type || '-') + '</td>' +
           '<td class="model-size">' + model.model_size + '</td>' +
           '<td class="ram-need">' + model.need_ram + ' GB</td>' +
           '<td>' + toolsBadge + '</td>' +
@@ -772,6 +792,8 @@
       const modelUrl = btn.dataset.modelUrl;
       const modelMmproj = btn.dataset.modelMmproj || null;
       const supportImages = btn.dataset.supportImages === 'true';
+      const modelDiffusion = btn.dataset.modelDiffusion || null;
+      const modelVae = btn.dataset.modelVae || null;
       if (btn) {
         const hasPart = partFiles[modelId] && partFiles[modelId] > 0;
         btn.textContent = hasPart ? "继续下载中..." : "0%";
@@ -779,7 +801,7 @@
       }
 
       try {
-        await invoke("download_model", { modelId: modelId, modelUrl: modelUrl, supportImages: supportImages, modelMmproj: modelMmproj });
+        await invoke("download_model", { modelId: modelId, modelUrl: modelUrl, supportImages: supportImages, modelMmproj: modelMmproj, modelDiffusion: modelDiffusion, modelVae: modelVae });
       } catch (e) {
         showToast("下载失败: " + e);
         if (btn) {
@@ -921,6 +943,18 @@
               if (btn) {
                 btn.textContent = "mmproj " + progress + "%";
               }
+            } else if (type === "diffusion") {
+              downloadingDiffusion[model_id] = progress;
+              const btn = document.querySelector('[data-model-id="' + model_id + '"]');
+              if (btn) {
+                btn.textContent = "diffusion " + progress + "%";
+              }
+            } else if (type === "vae") {
+              downloadingVae[model_id] = progress;
+              const btn = document.querySelector('[data-model-id="' + model_id + '"]');
+              if (btn) {
+                btn.textContent = "vae " + progress + "%";
+              }
             } else {
               downloadingModels[model_id] = progress;
               const btn = document.querySelector('[data-model-id="' + model_id + '"]');
@@ -945,6 +979,34 @@
               }
               delete partFiles[model_id];
               renderModelTable();
+            } else if (type === "diffusion") {
+              delete downloadingDiffusion[model_id];
+              const model = modelList.find(m => m.model_id === model_id);
+              const local = localModels.find(m => m.model_id === model_id);
+              const filename = model ? model.model_diffusion?.split('/').pop() : null;
+              if (local && filename) {
+                if (!local.files.includes(filename)) {
+                  local.files.push(filename);
+                }
+              } else if (filename) {
+                localModels.push({ model_id: model_id, files: [filename] });
+              }
+              delete partFiles[model_id];
+              renderModelTable();
+            } else if (type === "vae") {
+              delete downloadingVae[model_id];
+              const model = modelList.find(m => m.model_id === model_id);
+              const local = localModels.find(m => m.model_id === model_id);
+              const filename = model ? model.model_vae?.split('/').pop() : null;
+              if (local && filename) {
+                if (!local.files.includes(filename)) {
+                  local.files.push(filename);
+                }
+              } else if (filename) {
+                localModels.push({ model_id: model_id, files: [filename] });
+              }
+              delete partFiles[model_id];
+              renderModelTable();
             } else {
               delete downloadingModels[model_id];
               const model = modelList.find(m => m.model_id === model_id);
@@ -961,6 +1023,19 @@
                 const btn = document.querySelector('[data-model-id="' + model_id + '"]');
                 if (btn) {
                   btn.textContent = "下载 mmproj...";
+                  btn.disabled = true;
+                }
+              } else if (model && model.model_diffusion) {
+                if (local) {
+                  if (!local.files.includes(model_id + ".gguf")) {
+                    local.files.push(model_id + ".gguf");
+                  }
+                } else {
+                  localModels.push({ model_id: model_id, files: [model_id + ".gguf"] });
+                }
+                const btn = document.querySelector('[data-model-id="' + model_id + '"]');
+                if (btn) {
+                  btn.textContent = "下载 diffusion...";
                   btn.disabled = true;
                 }
               } else {

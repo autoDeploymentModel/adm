@@ -1,12 +1,13 @@
 [{
-    "model_id": "Qwen3.5-9B-Q4_K_M",
-    "model_url": "https://hf-mirror.com/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf",
-    "model_mmproj":"https://hf-mirror.com/unsloth/Qwen3.5-9B-GGUF/resolve/main/mmproj-BF16.gguf",
-    "model_size": "5.6GB",
-    "model_type": "视觉多模态理解",
-    "model_description": "支持对话，支持图片识别",
-    "need_ram": "32",
-    "support_tools": true,
-    "support_reasoning": true,
-    "support_images": false
-}]
+        "model_id": "z-image-turbo",
+        "model_url": "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_0.gguf",
+        "model_diffusion": "https://huggingface.co/leejet/Z-Image-Turbo-GGUF/resolve/main/z_image_turbo-Q4_K.gguf",
+        "model_vae": "https://huggingface.co/black-forest-labs/FLUX.1-schnell/resolve/main/vae/diffusion_pytorch_model.safetensors",
+        "model_size": "6 GB",
+        "model_type": "文本生成图片",
+        "model_description": "支持文字描述生成图片",
+        "need_ram": "32",
+        "support_tools": false,
+        "support_reasoning": false,
+        "support_images": false
+    }]
