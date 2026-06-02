@@ -388,6 +388,15 @@
         `;
         showUpdateDialog(html);
       }
+      // iframe IPC 调用代理：iframe 无法直接访问 Tauri IPC 时通过此通道调用
+      if (event.data && event.data.type === "__invoke__") {
+        const { cmd, args, id } = event.data;
+        Promise.resolve(invoke(cmd, args)).then(function(result) {
+          event.source.postMessage({ type: "__invoke_result__", id: id, result: result, error: null }, "*");
+        }).catch(function(err) {
+          event.source.postMessage({ type: "__invoke_result__", id: id, result: null, error: String(err) }, "*");
+        });
+      }
     });
 
     // 监听 Tauri 事件并转发给 iframe（下载进度等）

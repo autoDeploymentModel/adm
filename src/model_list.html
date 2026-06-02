@@ -451,28 +451,41 @@
 
   <script>
     const invoke = (function() {
-      function resolve() {
+      var invokeId = 0, pending = {};
+
+      window.addEventListener("message", function(e) {
+        if (e.data && e.data.type === "__invoke_result__") {
+          var p = pending[e.data.id];
+          if (p) {
+            if (e.data.error) p.reject(new Error(e.data.error));
+            else p.resolve(e.data.result);
+            delete pending[e.data.id];
+          }
+        }
+      });
+
+      function resolveDirect() {
         return window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke || window.parent?.__TAURI_INTERNALS__?.invoke || window.parent?.__TAURI__?.core?.invoke;
       }
-      var fn = resolve();
-      if (typeof fn === 'function') return fn;
-      return function() {
-        var f = resolve();
-        if (typeof f !== 'function') throw new Error('Tauri IPC 未初始化');
-        return f.apply(null, arguments);
-      };
-    })();
 
-    const listen = (function() {
-      function resolve() {
-        return window.__TAURI__?.event?.listen || window.__TAURI_INTERNALS__?.listen || window.parent?.__TAURI_INTERNALS__?.listen || window.parent?.__TAURI__?.event?.listen;
-      }
-      var fn = resolve();
-      if (typeof fn === 'function') return fn;
-      return function() {
-        var f = resolve();
-        if (typeof f !== 'function') throw new Error('Tauri Event 未初始化');
-        return f.apply(null, arguments);
+      var direct = resolveDirect();
+      if (typeof direct === 'function') return direct;
+
+      return function(cmd, args) {
+        var fn = resolveDirect();
+        if (fn) return fn(cmd, args);
+
+        return new Promise(function(resolve, reject) {
+          var id = ++invokeId;
+          pending[id] = { resolve: resolve, reject: reject };
+          window.parent.postMessage({ type: "__invoke__", cmd: cmd, args: args, id: id }, "*");
+          setTimeout(function() {
+            if (pending[id]) {
+              delete pending[id];
+              reject(new Error("IPC 调用超时"));
+            }
+          }, 30000);
+        });
       };
     })();
 
