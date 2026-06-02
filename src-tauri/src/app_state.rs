@@ -8,6 +8,9 @@ pub struct AppState {
     pub running_port: Mutex<Option<u16>>,
     pub downloading_progress: Mutex<HashMap<String, u8>>,
     pub downloading_phase: Mutex<HashMap<String, String>>,
+    pub sd_downloading: Mutex<bool>,
+    pub sd_download_progress: Mutex<u8>,
+    pub sd_download_status: Mutex<String>,
     pub sys: Mutex<System>,
 }
 
@@ -19,6 +22,9 @@ impl AppState {
             running_port: Mutex::new(None),
             downloading_progress: Mutex::new(HashMap::new()),
             downloading_phase: Mutex::new(HashMap::new()),
+            sd_downloading: Mutex::new(false),
+            sd_download_progress: Mutex::new(0),
+            sd_download_status: Mutex::new("".to_string()),
             sys: Mutex::new(System::new_all()),
         }
     }

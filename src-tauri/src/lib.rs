@@ -3,7 +3,7 @@ mod common;
 mod pages;
 
 use app_state::AppState;
-use pages::{index, model_list, settings};
+use pages::{index, model_list, model_image, settings};
 
 use tauri::Manager;
 
@@ -11,6 +11,7 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_hwinfo::init())
         .manage(AppState::new())
         .on_window_event(|window, event| {
@@ -50,6 +51,12 @@ pub fn run() {
             model_list::get_model_status,
             model_list::get_downloading_models,
             model_list::get_downloading_phases,
+            // model_image.rs
+            model_image::get_sd_status,
+            model_image::download_and_extract_sd,
+            model_image::start_sd_generation,
+            model_image::stop_sd,
+            model_image::save_sd_image_as,
             // settings.rs
             settings::save_settings,
             settings::load_settings,

@@ -10,9 +10,9 @@
 | 项目       | 值          |
 | -------- | ---------- |
 | 应用版本     | 0.1.8      |
-| 文档版本     | 3.3        |
+| 文档版本     | 3.4        |
 | Tauri 版本 | 2.11.2     |
-| 最后更新     | 2026-06-01 |
+| 最后更新     | 2026-06-02 |
 | 维护者      | ADM 开发团队   |
 
 ***
@@ -114,7 +114,7 @@
 | 模型列表渲染与状态列                          | ✅       | ❌         |
 | 系统信息采集                              | ❌       | ✅         |
 | 文件下载（含断点续传）                         | ❌       | ✅         |
-| 进程管理 (llama-server)                 | ❌       | ✅         |
+| 进程管理 (llama-server / sd-cli)       | ❌       | ✅         |
 | 本地模型扫描                              | ❌       | ✅         |
 | .part 文件扫描                          | ❌       | ✅         |
 | GPU/VRAM 检测                         | ❌       | ✅         |
@@ -165,6 +165,10 @@ const getListen = () =>
 | `model-stopped`              | Rust (stdout/stderr 线程)                | `{ model_id }`                              | 模型进程退出           |
 | `model-log`                  | Rust (stdout/stderr 线程)                | `{ model_id, line, source }`                | 模型日志行            |
 | `llamacpp-download-progress` | Rust `download_and_extract_llamacpp()` | `{ status, progress }`                      | llamacpp 下载/解压进度 |
+| `sd-download-progress`       | Rust `download_and_extract_sd()`       | `{ status, progress }`                      | sd-cli 下载/解压进度    |
+| `sd-log`                     | Rust `start_sd_generation()`           | `{ model_id, line, source }`                | sd-cli 运行时日志       |
+| `sd-started`                 | Rust `start_sd_generation()`           | `{ model_id }`                              | sd-cli 进程启动         |
+| `sd-complete`                | Rust (stdout/stderr 线程)               | `{ model_id }`                              | sd-cli 进程结束         |
 
 #### 主窗口 ↔ iframe 通信
 
@@ -201,6 +205,7 @@ adm/
 │   ├── index.html                    # 主框架页（外壳容器 + iframe + 底部硬件信息栏）
 │   ├── model_list.html               # 模型列表页（表格展示/下载/启动/停止）
 │   ├── model_chat.html               # 模型对话交互页（内嵌 WebUI + 启动遮罩 + 日志面板）
+│   ├── model_image.html              # 文生图页（文本输入/宽高设置/图片生成/日志）
 │   └── settings.html                 # 设置页面（导航分栏 + 参数表单 + 版本/关于）
 ├── src-tauri/                        # Tauri 后端 (Rust)
 │   ├── Cargo.toml                    # Rust 依赖配置
@@ -228,6 +233,7 @@ adm/
 │           ├── index.rs              # index.html 逻辑：硬件信息、更新检查、llamacpp 下载
 │           ├── model_list.rs         # model_list.html 逻辑：模型扫描/下载/启停/状态
 │           ├── model_chat.rs         # model_chat.html 逻辑（无独立 command，事件驱动）
+│           ├── model_image.rs        # model_image.html 逻辑：sd-cli 下载/检测/生成/停止
 │           └── settings.rs           # settings.html 逻辑：配置持久化、版本查询
 ├── website/                          # 项目官网资源
 │   ├── index.html
@@ -278,13 +284,13 @@ get_base_dir() 查找优先级：
     │ (全局状态)   │   │  types.rs   │   │   index.rs      │
     └─────────────┘   │  config.rs  │   │   model_list.rs │
                       │  utils/     │   │   model_chat.rs  │
-                      └─────────────┘   │   settings.rs    │
-                             ▲          └─────────────────┘
-                             │
+                      └─────────────┘   │   model_image.rs │
+                             ▲          │   settings.rs    │
+                             │          └─────────────────┘
               ┌──────────────┴──────────────┐
               │ 所有 pages 模块依赖 common   │
-              │ pages/model_list 也依赖      │
-              │ app_state                   │
+              │ pages/model_list/model_image│
+              │ 也依赖 app_state            │
               └─────────────────────────────┘
 ```
 
@@ -327,6 +333,12 @@ pub fn run() {
             model_list::stop_model,
             model_list::get_model_status,
             model_list::get_downloading_models,
+            model_list::get_downloading_phases,
+            // pages/model_image.rs
+            model_image::check_sd_exists,
+            model_image::download_and_extract_sd,
+            model_image::start_sd_generation,
+            model_image::stop_sd,
             // pages/settings.rs
             settings::save_settings,
             settings::load_settings,
@@ -391,6 +403,8 @@ AppState {
 | -------------------------------- | ------------------------------------------------------------------------- |
 | `create_hidden_command(program)` | Windows: 创建 `CREATE_NO_WINDOW` 命令；其他: 普通命令                                |
 | `get_gpu_info()`                 | 跨平台 VRAM 检测：Windows 调用 wmic，Linux 调用 nvidia-smi，macOS 调用 system\_profiler |
+| `detect_gpu_vendor()`            | 返回 GPU 厂商字符串：`"nvidia"` / `"amd"` / `"intel"` / `"apple"` / `None`         |
+| `decode_wmic_output(bytes)` [私有] | Windows 下解码 wmic UTF-16 输出                                                 |
 
 ### 4.7 `common/utils/archive.rs` — 压缩包解压
 
@@ -512,7 +526,32 @@ start_model(model_id, params)
 - 监听 `model-log` / `model-started` / `model-stopped` 事件
 - 日志面板展示
 
-### 4.11 `pages/settings.rs` — 设置页面
+### 4.11 `pages/model_image.rs` — 文生图页面
+
+**对应前端**：`model_image.html`
+
+**Commands**：
+
+| Command                        | 签名                                                                                 | 说明                       |
+| ------------------------------ | ---------------------------------------------------------------------------------- | ------------------------ |
+| `check_sd_exists`              | `(app: AppHandle) → Result<bool>`                                                  | 检测 sd-cli 可执行文件是否存在      |
+| `download_and_extract_sd`      | `(app: AppHandle) → Result<()>`                                                     | 下载并解压 sd-cli（自动检测 GPU 型号） |
+| `start_sd_generation`          | `(app, state, model_id, prompt, width, height, model_url, model_diffusion, model_vae) → Result<()>` | 启动 sd-cli 生成图片          |
+| `stop_sd`                      | `(state: State<AppState>) → Result<()>`                                             | 停止 sd-cli 进程             |
+
+**sd-cli 下载 URL 策略**：
+
+| 硬件条件               | 下载 URL                    |
+| ------------------ | --------------------------- |
+| Windows + NVIDIA   | `sd-cuda.zip`               |
+| Windows + AMD      | `sd-vulkan.zip`              |
+| Windows + Intel    | `sd-vulkan.zip`              |
+| macOS              | `sd-macos.zip`               |
+| 其他/未检测到 GPU     | 抛出异常提示                    |
+
+**生成参数构造**：`start_sd_generation` 从 model_url/model_diffusion/model_vae 提取文件名，在 `{base_dir}/models/{model_id}/` 目录下查找对应的模型文件，构建 sd-cli 完整参数并启动子进程。子进程 stdout/stderr 通过 `sd-log` 事件实时输出，进程退出时发送 `sd-complete` 事件。
+
+### 4.12 `pages/settings.rs` — 设置页面
 
 **对应前端**：`settings.html`
 
@@ -821,6 +860,79 @@ function navigateTo(page) {
 | 获取 llamacpp 版本 | `get_llamacpp_version`（执行 `llama-server --version`） |
 | 检查应用更新         | `check_update`（在 index.rs 中实现）                      |
 | 下载/更新 llamacpp | `download_and_extract_llamacpp`（在 index.rs 中实现）     |
+
+***
+
+### 5.5 文生图页 (`model_image.html`)
+
+#### 页面布局
+
+```
+┌──────────────────────────────────────────────┐
+│ [← 返回]  文生图 - {model_id}  ✓ SD 就绪    │ ← header
+├──────────────────────────────────────────────┤
+│ ┌──────────────────────────────────────────┐ │
+│ │ 提示词                                    │ │
+│ │ ┌──────────────────────────────────────┐ │ │
+│ │ │ textarea 文本输入框                    │ │ │
+│ │ └──────────────────────────────────────┘ │ │
+│ └──────────────────────────────────────────┘ │
+│ 宽度: [1080]  高度: [1920]                  │
+│ [生成图片]                                   │
+│                                              │
+│ 生成结果                                     │
+│ ┌──────────────────────────────────────────┐ │
+│ │  🖼️ 生成的图片将显示在这里                │ │
+│ └──────────────────────────────────────────┘ │
+│                                              │
+│ 运行日志                    [清空]           │
+│ ┌──────────────────────────────────────────┐ │
+│ │ sd-cli 运行日志输出                       │ │
+│ └──────────────────────────────────────────┘ │
+└──────────────────────────────────────────────┘
+```
+
+#### 页面状态流转
+
+```
+页面加载
+  │
+  ├── 获取 URL 参数 model_id
+  │
+  ├── invoke("check_sd_exists")
+  │     ├── false → 显示下载进度区
+  │     │          invoke("download_and_extract_sd")
+  │     │          监听 sd-download-progress 事件更新进度条
+  │     │          下载完成 → 切换到生成界面
+  │     │
+  │     └── true  → 显示生成界面（就绪状态）
+  │
+  └── 生成流程
+        └── 用户输入提示词 + 宽高 → 点击生成
+             ├── invoke("fetch_model_list") 获取远程模型文件信息
+             ├── invoke("start_sd_generation", { modelId, prompt, width, height, modelUrl, modelDiffusion, modelVae })
+             │    └── Rust 后端构建命令并启动 sd-cli 子进程
+             ├── 监听 sd-log 事件 → 实时显示运行日志
+             ├── 监听 sd-started 事件 → 更新状态
+             └── 监听 sd-complete 事件 → 恢复按钮状态
+```
+
+#### 关键逻辑
+
+**sd-cli 检测与下载**：
+- 检测 `{base_dir}/sd/sd-cli.exe`(Windows) 或 `{base_dir}/sd/sd-cli`(macOS) 是否存在
+- 不存在时自动下载：
+  - Windows + NVIDIA → `sd-cuda.zip`
+  - Windows + AMD → `sd-vulkan.zip`
+  - Windows + Intel → `sd-vulkan.zip`
+  - macOS → `sd-macos.zip`
+- 支持断点续传，解压后设置执行权限
+
+**文本生成**：
+- 收集 prompt + width + height
+- 通过 `fetch_model_list` 获取模型 URL，提取文件名构建本地路径
+- 调用 `start_sd_generation` 启动 sd-cli 进程
+- sd-cli 参数包含 `--diffusion-model`, `--vae`, `--llm`, `-p`, `--cfg-scale 1.0`, `--offload-to-cpu`, `--diffusion-fa`, `-H`, `-W`, `--steps 8`
 
 ***
 

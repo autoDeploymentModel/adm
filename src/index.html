@@ -432,6 +432,54 @@
           }
         });
       } catch (_) {}
+      try {
+        listen("sd-download-progress", (event) => {
+          const frame = document.getElementById("content-frame");
+          if (frame && frame.contentWindow) {
+            frame.contentWindow.postMessage({ type: "sd-download-progress", payload: event.payload }, "*");
+          }
+        });
+      } catch (_) {}
+      try {
+        listen("sd-log", (event) => {
+          const frame = document.getElementById("content-frame");
+          if (frame && frame.contentWindow) {
+            frame.contentWindow.postMessage({ type: "sd-log", payload: event.payload }, "*");
+          }
+        });
+      } catch (_) {}
+      try {
+        listen("sd-started", (event) => {
+          const frame = document.getElementById("content-frame");
+          if (frame && frame.contentWindow) {
+            frame.contentWindow.postMessage({ type: "sd-started", payload: event.payload }, "*");
+          }
+        });
+      } catch (_) {}
+      try {
+        listen("sd-complete", (event) => {
+          const frame = document.getElementById("content-frame");
+          if (frame && frame.contentWindow) {
+            frame.contentWindow.postMessage({ type: "sd-complete", payload: event.payload }, "*");
+          }
+        });
+      } catch (_) {}
+      try {
+        listen("sd-error", (event) => {
+          const frame = document.getElementById("content-frame");
+          if (frame && frame.contentWindow) {
+            frame.contentWindow.postMessage({ type: "sd-error", payload: event.payload }, "*");
+          }
+        });
+      } catch (_) {}
+      try {
+        listen("sd-image-result", (event) => {
+          const frame = document.getElementById("content-frame");
+          if (frame && frame.contentWindow) {
+            frame.contentWindow.postMessage({ type: "sd-image-result", payload: event.payload }, "*");
+          }
+        });
+      } catch (_) {}
     }
 
     // ===== 自动更新相关 =====
