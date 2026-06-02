@@ -858,7 +858,18 @@
   </div>
 
   <script>
-    const invoke = window.__TAURI_INTERNALS__?.invoke || window.parent?.__TAURI_INTERNALS__?.invoke || window.__TAURI__?.core?.invoke || window.parent?.__TAURI__?.core?.invoke;
+    const invoke = (function() {
+      function resolve() {
+        return window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke || window.parent?.__TAURI_INTERNALS__?.invoke || window.parent?.__TAURI__?.core?.invoke;
+      }
+      var fn = resolve();
+      if (typeof fn === 'function') return fn;
+      return function() {
+        var f = resolve();
+        if (typeof f !== 'function') throw new Error('Tauri IPC 未初始化');
+        return f.apply(null, arguments);
+      };
+    })();
 
     const PRESET_MODES = {
       default: {

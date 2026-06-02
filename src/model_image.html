@@ -441,7 +441,25 @@
   </div>
 
   <script>
-    const invoke = window.__TAURI_INTERNALS__?.invoke || window.__TAURI__?.core?.invoke;
+    const invoke = (function() {
+      var fn = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
+      if (typeof fn === 'function') return fn;
+      return function() {
+        var f = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
+        if (typeof f !== 'function') throw new Error('Tauri IPC 未初始化');
+        return f.apply(null, arguments);
+      };
+    })();
+
+    const listen = (function() {
+      var fn = window.__TAURI__?.event?.listen || window.__TAURI_INTERNALS__?.listen;
+      if (typeof fn === 'function') return fn;
+      return function() {
+        var f = window.__TAURI__?.event?.listen || window.__TAURI_INTERNALS__?.listen;
+        if (typeof f !== 'function') throw new Error('Tauri Event 未初始化');
+        return f.apply(null, arguments);
+      };
+    })();
 
     let modelId = '';
     let isGenerating = false;
@@ -740,7 +758,6 @@
 
     // 监听 Tauri 事件（通过 index.html 转发）
     function setupSdListeners() {
-      const listen = window.__TAURI_INTERNALS__?.listen || window.__TAURI__?.event?.listen;
       if (typeof listen !== "function") return;
 
       try {

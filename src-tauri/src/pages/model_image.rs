@@ -381,7 +381,7 @@ pub async fn download_and_extract_sd(app: tauri::AppHandle, state: tauri::State<
 pub async fn save_sd_image_as(app: tauri::AppHandle, source_path: String) -> Result<(), String> {
     use tauri_plugin_dialog::DialogExt;
 
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, rx) = tokio::sync::oneshot::channel();
 
     app.dialog()
         .file()
@@ -391,7 +391,7 @@ pub async fn save_sd_image_as(app: tauri::AppHandle, source_path: String) -> Res
             let _ = tx.send(file_path);
         });
 
-    let file_path = rx.recv().map_err(|_| "保存对话框失败".to_string())?;
+    let file_path = rx.await.map_err(|_| "保存对话框失败".to_string())?;
     let file_path = file_path.ok_or("用户取消了保存")?;
 
     let dest_path = file_path
