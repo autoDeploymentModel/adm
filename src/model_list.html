@@ -533,24 +533,29 @@
       return ramc >= parseInt(needRam);
     }
 
+    function getUrlFilename(url) {
+      return url ? url.split('/').pop() : null;
+    }
+
     function isModelDownloaded(modelId) {
       const local = localModels.find(m => m.model_id === modelId);
       if (!local) return false;
       const model = modelList.find(m => m.model_id === modelId);
-      if (model && model.support_images && model.model_mmproj) {
-        return local.files.some(f => f.startsWith("mmproj"));
-      }
-      if (model && (model.model_diffusion || model.model_vae)) {
-        if (!local.files.includes(modelId + ".gguf")) return false;
+      if (model && model.model_type === "文本生成图片") {
+        const mainFile = getUrlFilename(model.model_url);
+        if (mainFile && !local.files.includes(mainFile)) return false;
         if (model.model_diffusion) {
-          const diffusionFile = model.model_diffusion.split('/').pop();
+          const diffusionFile = getUrlFilename(model.model_diffusion);
           if (diffusionFile && !local.files.includes(diffusionFile)) return false;
         }
         if (model.model_vae) {
-          const vaeFile = model.model_vae.split('/').pop();
+          const vaeFile = getUrlFilename(model.model_vae);
           if (vaeFile && !local.files.includes(vaeFile)) return false;
         }
         return true;
+      }
+      if (model && model.model_type === "视觉多模态理解") {
+        return local.files.some(f => f.startsWith("mmproj"));
       }
       return true;
     }
@@ -731,18 +736,24 @@
         const partSize = partFiles[model.model_id];
         const downloadingProgress = downloadingModels[model.model_id];
         const isDownloadingMmproj = downloadingMmproj[model.model_id];
+        const isDownloadingDiffusion = downloadingDiffusion[model.model_id];
+        const isDownloadingVae = downloadingVae[model.model_id];
         const safeModelId = model.model_id.replace(/"/g, '"');
         let downloadBtnHtml = "";
         if (downloaded) {
           downloadBtnHtml = '<button class="btn btn-download downloaded" disabled>已下载</button>';
         } else if (isDownloadingMmproj) {
           downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" disabled>下载 mmproj...</button>';
+        } else if (isDownloadingDiffusion) {
+          downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" disabled>下载 diffusion...</button>';
+        } else if (isDownloadingVae) {
+          downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" disabled>下载 vae...</button>';
         } else if (downloadingProgress !== undefined) {
           downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" disabled>' + downloadingProgress + '%</button>';
         } else if (partSize && partSize > 0) {
-          downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-url="' + model.model_url.replace(/"/g, '"') + '" data-model-mmproj="' + (model.model_mmproj || '').replace(/"/g, '"') + '" data-support-images="' + model.support_images + '" data-model-diffusion="' + (model.model_diffusion || '').replace(/"/g, '"') + '" data-model-vae="' + (model.model_vae || '').replace(/"/g, '"') + '" data-model-type="' + (model.model_type || '').replace(/"/g, '"') + '" onclick="handleDownload(this)">继续下载</button>';
+          downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-url="' + model.model_url.replace(/"/g, '"') + '" data-model-mmproj="' + (model.model_mmproj || '').replace(/"/g, '"') + '" data-model-diffusion="' + (model.model_diffusion || '').replace(/"/g, '"') + '" data-model-vae="' + (model.model_vae || '').replace(/"/g, '"') + '" data-model-type="' + (model.model_type || '').replace(/"/g, '"') + '" onclick="handleDownload(this)">继续下载</button>';
         } else if (available) {
-          downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-url="' + model.model_url.replace(/"/g, '"') + '" data-model-mmproj="' + (model.model_mmproj || '').replace(/"/g, '"') + '" data-support-images="' + model.support_images + '" data-model-diffusion="' + (model.model_diffusion || '').replace(/"/g, '"') + '" data-model-vae="' + (model.model_vae || '').replace(/"/g, '"') + '" data-model-type="' + (model.model_type || '').replace(/"/g, '"') + '" onclick="handleDownload(this)">下载</button>';
+          downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-url="' + model.model_url.replace(/"/g, '"') + '" data-model-mmproj="' + (model.model_mmproj || '').replace(/"/g, '"') + '" data-model-diffusion="' + (model.model_diffusion || '').replace(/"/g, '"') + '" data-model-vae="' + (model.model_vae || '').replace(/"/g, '"') + '" data-model-type="' + (model.model_type || '').replace(/"/g, '"') + '" onclick="handleDownload(this)">下载</button>';
         } else {
           downloadBtnHtml = '<button class="btn btn-download" disabled>下载</button>';
         }
@@ -752,6 +763,8 @@
           actionsHtml = '<button class="btn btn-view" onclick="goModel(\'' + model.model_id.replace(/'/g, "\\'") + '\')">查看模型</button>';
           actionsHtml += '<button class="btn btn-log" onclick="showModelLog(\'' + model.model_id.replace(/'/g, "\\'") + '\')">日志</button>';
           actionsHtml += '<button class="btn btn-stop" data-stop-btn="' + safeModelId + '" onclick="handleStop(this)">关闭模型</button>';
+        } else if (model.model_type === "文本生成图片" && downloaded) {
+          actionsHtml = '<button class="btn btn-start" onclick="openImageGen(\'' + model.model_id.replace(/'/g, "\\'") + '\')">生成图片</button>';
         } else if (downloaded && available) {
           actionsHtml = '<button class="btn btn-start" data-start-btn="' + safeModelId + '" onclick="handleStart(this)">启动</button>';
         } else if (downloaded) {
@@ -791,9 +804,9 @@
       const modelId = btn.dataset.modelId;
       const modelUrl = btn.dataset.modelUrl;
       const modelMmproj = btn.dataset.modelMmproj || null;
-      const supportImages = btn.dataset.supportImages === 'true';
       const modelDiffusion = btn.dataset.modelDiffusion || null;
       const modelVae = btn.dataset.modelVae || null;
+      const modelType = btn.dataset.modelType || '';
       if (btn) {
         const hasPart = partFiles[modelId] && partFiles[modelId] > 0;
         btn.textContent = hasPart ? "继续下载中..." : "0%";
@@ -801,7 +814,7 @@
       }
 
       try {
-        await invoke("download_model", { modelId: modelId, modelUrl: modelUrl, supportImages: supportImages, modelMmproj: modelMmproj, modelDiffusion: modelDiffusion, modelVae: modelVae });
+        await invoke("download_model", { modelId: modelId, modelUrl: modelUrl, modelMmproj: modelMmproj, modelDiffusion: modelDiffusion, modelVae: modelVae, modelType: modelType });
       } catch (e) {
         showToast("下载失败: " + e);
         if (btn) {
@@ -825,11 +838,12 @@
 
         const model = modelList.find(m => m.model_id === modelId);
         const supportImages = model ? model.support_images : false;
+        const modelFilename = model ? getUrlFilename(model.model_url) : null;
 
         btn.textContent = "启动中...";
         btn.disabled = true;
 
-        await invoke("start_model", { modelId: modelId, params: params, supportImages: supportImages });
+        await invoke("start_model", { modelId: modelId, params: params, supportImages: supportImages, modelFilename: modelFilename });
       } catch (e) {
         showToast("启动失败: " + e);
         renderModelTable();
@@ -845,6 +859,10 @@
       } catch (e) {
         showToast("停止失败: " + e);
       }
+    }
+
+    function openImageGen(modelId) {
+      navigateTo("model_image.html?model_id=" + encodeURIComponent(modelId));
     }
 
     function goModel(modelId) {
@@ -896,6 +914,18 @@
         downloadingModels = await invoke("get_downloading_models");
       } catch (e) {
         console.error("获取正在下载的模型失败:", e);
+      }
+
+      // 恢复下载阶段信息（页面切换后正确禁用按钮并显示阶段文字）
+      try {
+        const phases = await invoke("get_downloading_phases");
+        for (const [modelId, phase] of Object.entries(phases)) {
+          if (phase === "mmproj") downloadingMmproj[modelId] = true;
+          else if (phase === "diffusion") downloadingDiffusion[modelId] = true;
+          else if (phase === "vae") downloadingVae[modelId] = true;
+        }
+      } catch (e) {
+        console.error("获取下载阶段信息失败:", e);
       }
 
       try {
@@ -983,7 +1013,7 @@
               delete downloadingDiffusion[model_id];
               const model = modelList.find(m => m.model_id === model_id);
               const local = localModels.find(m => m.model_id === model_id);
-              const filename = model ? model.model_diffusion?.split('/').pop() : null;
+              const filename = model ? getUrlFilename(model.model_diffusion) : null;
               if (local && filename) {
                 if (!local.files.includes(filename)) {
                   local.files.push(filename);
@@ -997,7 +1027,7 @@
               delete downloadingVae[model_id];
               const model = modelList.find(m => m.model_id === model_id);
               const local = localModels.find(m => m.model_id === model_id);
-              const filename = model ? model.model_vae?.split('/').pop() : null;
+              const filename = model ? getUrlFilename(model.model_vae) : null;
               if (local && filename) {
                 if (!local.files.includes(filename)) {
                   local.files.push(filename);
@@ -1011,13 +1041,14 @@
               delete downloadingModels[model_id];
               const model = modelList.find(m => m.model_id === model_id);
               const local = localModels.find(m => m.model_id === model_id);
-              if (model && model.support_images && model.model_mmproj) {
-                if (local) {
-                  if (!local.files.includes(model_id + ".gguf")) {
-                    local.files.push(model_id + ".gguf");
+              const mainFile = model ? getUrlFilename(model.model_url) : null;
+              if (model && model.model_type === "视觉多模态理解" && model.model_mmproj) {
+                if (local && mainFile) {
+                  if (!local.files.includes(mainFile)) {
+                    local.files.push(mainFile);
                   }
-                } else {
-                  localModels.push({ model_id: model_id, files: [model_id + ".gguf"] });
+                } else if (mainFile) {
+                  localModels.push({ model_id: model_id, files: [mainFile] });
                 }
                 downloadingMmproj[model_id] = true;
                 const btn = document.querySelector('[data-model-id="' + model_id + '"]');
@@ -1025,26 +1056,27 @@
                   btn.textContent = "下载 mmproj...";
                   btn.disabled = true;
                 }
-              } else if (model && model.model_diffusion) {
-                if (local) {
-                  if (!local.files.includes(model_id + ".gguf")) {
-                    local.files.push(model_id + ".gguf");
+              } else if (model && model.model_type === "文本生成图片") {
+                if (local && mainFile) {
+                  if (!local.files.includes(mainFile)) {
+                    local.files.push(mainFile);
                   }
-                } else {
-                  localModels.push({ model_id: model_id, files: [model_id + ".gguf"] });
+                } else if (mainFile) {
+                  localModels.push({ model_id: model_id, files: [mainFile] });
                 }
+                delete partFiles[model_id];
                 const btn = document.querySelector('[data-model-id="' + model_id + '"]');
                 if (btn) {
                   btn.textContent = "下载 diffusion...";
                   btn.disabled = true;
                 }
               } else {
-                if (local) {
-                  if (!local.files.includes(model_id + ".gguf")) {
-                    local.files.push(model_id + ".gguf");
+                if (local && mainFile) {
+                  if (!local.files.includes(mainFile)) {
+                    local.files.push(mainFile);
                   }
-                } else {
-                  localModels.push({ model_id: model_id, files: [model_id + ".gguf"] });
+                } else if (mainFile) {
+                  localModels.push({ model_id: model_id, files: [mainFile] });
                 }
                 delete partFiles[model_id];
                 renderModelTable();

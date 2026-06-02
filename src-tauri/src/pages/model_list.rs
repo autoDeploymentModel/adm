@@ -29,22 +29,21 @@ pub async fn scan_local_models(app: tauri::AppHandle) -> Result<Vec<LocalModel>,
         if path.is_dir() {
             if let Some(dir_name) = path.file_name() {
                 let dir_str = dir_name.to_string_lossy().to_string();
-                let main_file = format!("{}.gguf", dir_str);
-                if path.join(&main_file).exists() {
-                    let mut files = vec![main_file];
-                    if let Ok(dir_entries) = std::fs::read_dir(&path) {
-                        for e in dir_entries.flatten() {
-                            let fp = e.path();
-                            if fp.is_file() {
-                                if let Some(name) = fp.file_name() {
-                                    let name_str = name.to_string_lossy().to_string();
-                                    if !name_str.ends_with(".part") && name_str != files[0] {
-                                        files.push(name_str);
-                                    }
+                let mut files: Vec<String> = Vec::new();
+                if let Ok(dir_entries) = std::fs::read_dir(&path) {
+                    for e in dir_entries.flatten() {
+                        let fp = e.path();
+                        if fp.is_file() {
+                            if let Some(name) = fp.file_name() {
+                                let name_str = name.to_string_lossy().to_string();
+                                if !name_str.ends_with(".part") {
+                                    files.push(name_str);
                                 }
                             }
                         }
                     }
+                }
+                if !files.is_empty() {
                     models.push(LocalModel { model_id: dir_str, files });
                 }
             }
@@ -149,19 +148,32 @@ pub async fn download_model(
     app: tauri::AppHandle,
     model_id: String,
     model_url: String,
-    support_images: bool,
     model_mmproj: Option<String>,
     model_diffusion: Option<String>,
     model_vae: Option<String>,
+    model_type: String,
 ) -> Result<(), String> {
+    {
+        let state = app.state::<AppState>();
+        let map = state.downloading_progress.lock().map_err(|e| e.to_string())?;
+        if map.contains_key(&model_id) {
+            return Err("该模型正在下载中，请勿重复点击".to_string());
+        }
+    }
+
     let model_url = model_url.replace("https://huggingface.co/", "https://hf-mirror.com/");
 
     let data_dir = config::get_data_dir(Some(&app))?;
     let model_dir = data_dir.join("models").join(&model_id);
     std::fs::create_dir_all(&model_dir).map_err(|e| format!("创建模型目录失败: {}", e))?;
 
-    let final_path = model_dir.join(format!("{}.gguf", model_id));
-    let part_path = model_dir.join(format!("{}.gguf.part", model_id));
+    let model_filename = model_url
+        .rsplit('/')
+        .next()
+        .unwrap_or(&model_id)
+        .to_string();
+    let final_path = model_dir.join(&model_filename);
+    let part_path = model_dir.join(format!("{}.part", model_filename));
 
     let resolve_client = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -174,6 +186,24 @@ pub async fn download_model(
         .build()
         .map_err(|e| format!("创建下载客户端失败: {}", e))?;
 
+    app.state::<AppState>().downloading_progress.lock().unwrap().insert(model_id.clone(), 0u8);
+
+    struct CleanupGuard {
+        h: tauri::AppHandle,
+        id: String,
+    }
+    impl Drop for CleanupGuard {
+        fn drop(&mut self) {
+            if let Ok(mut map) = self.h.state::<AppState>().downloading_progress.lock() {
+                map.remove(&self.id);
+            }
+            if let Ok(mut map) = self.h.state::<AppState>().downloading_phase.lock() {
+                map.remove(&self.id);
+            }
+        }
+    }
+    let _guard = CleanupGuard { h: app.clone(), id: model_id.clone() };
+
     if !final_path.exists() {
         let existing_size = if part_path.exists() {
             std::fs::metadata(&part_path)
@@ -182,21 +212,6 @@ pub async fn download_model(
         } else {
             0
         };
-
-        app.state::<AppState>().downloading_progress.lock().unwrap().insert(model_id.clone(), 0u8);
-
-        struct CleanupGuard {
-            h: tauri::AppHandle,
-            id: String,
-        }
-        impl Drop for CleanupGuard {
-            fn drop(&mut self) {
-                if let Ok(mut map) = self.h.state::<AppState>().downloading_progress.lock() {
-                    map.remove(&self.id);
-                }
-            }
-        }
-        let _guard = CleanupGuard { h: app.clone(), id: model_id.clone() };
 
         let resolve_resp = resolve_client
             .get(&model_url)
@@ -329,8 +344,9 @@ pub async fn download_model(
         .ok();
     }
 
-    if support_images {
+    if model_type == "视觉多模态理解" {
         if let Some(mmproj_url) = model_mmproj {
+            app.state::<AppState>().downloading_phase.lock().unwrap().insert(model_id.clone(), "mmproj".to_string());
             let mmproj_url = mmproj_url.replace("https://huggingface.co/", "https://hf-mirror.com/");
             let mmproj_filename = mmproj_url
                 .rsplit('/')
@@ -492,20 +508,21 @@ pub async fn download_model(
         }
     }
 
-    // Download diffusion model for text-to-image models
-    if let Some(diffusion_url) = model_diffusion {
-        download_extra_file(
-            &app, &model_id, &model_dir, &diffusion_url,
-            &resolve_client, &download_client, "diffusion"
-        ).await?;
-    }
-
-    // Download VAE model for text-to-image models
-    if let Some(vae_url) = model_vae {
-        download_extra_file(
-            &app, &model_id, &model_dir, &vae_url,
-            &resolve_client, &download_client, "vae"
-        ).await?;
+    if model_type == "文本生成图片" {
+        if let Some(diffusion_url) = model_diffusion {
+            app.state::<AppState>().downloading_phase.lock().unwrap().insert(model_id.clone(), "diffusion".to_string());
+            download_extra_file(
+                &app, &model_id, &model_dir, &diffusion_url,
+                &resolve_client, &download_client, "diffusion"
+            ).await?;
+        }
+        if let Some(vae_url) = model_vae {
+            app.state::<AppState>().downloading_phase.lock().unwrap().insert(model_id.clone(), "vae".to_string());
+            download_extra_file(
+                &app, &model_id, &model_dir, &vae_url,
+                &resolve_client, &download_client, "vae"
+            ).await?;
+        }
     }
 
     Ok(())
@@ -691,6 +708,7 @@ pub async fn start_model(
     model_id: String,
     params: LaunchParams,
     support_images: bool,
+    model_filename: Option<String>,
 ) -> Result<(), String> {
     {
         let pid_lock = state.running_process.lock().map_err(|e| e.to_string())?;
@@ -702,14 +720,23 @@ pub async fn start_model(
     let server_path = config::get_llama_server_path(Some(&app))?;
     let data_dir = config::get_data_dir(Some(&app))?;
     let models_dir = data_dir.join("models");
-    let subfolder_path = models_dir.join(&model_id).join(format!("{}.gguf", model_id));
-    let root_path = models_dir.join(format!("{}.gguf", model_id));
-    let model_path = if subfolder_path.exists() {
-        subfolder_path
-    } else if root_path.exists() {
-        root_path
+    let model_path = if let Some(fname) = &model_filename {
+        let subfolder_path = models_dir.join(&model_id).join(fname);
+        if subfolder_path.exists() {
+            subfolder_path
+        } else {
+            return Err(format!("模型文件不存在: {:?}", subfolder_path));
+        }
     } else {
-        return Err(format!("模型文件不存在: {:?}", subfolder_path));
+        let subfolder_path = models_dir.join(&model_id).join(format!("{}.gguf", model_id));
+        let root_path = models_dir.join(format!("{}.gguf", model_id));
+        if subfolder_path.exists() {
+            subfolder_path
+        } else if root_path.exists() {
+            root_path
+        } else {
+            return Err(format!("模型文件不存在: {:?}", subfolder_path));
+        }
     };
 
     let mut args: Vec<String> = vec![
@@ -1007,5 +1034,11 @@ pub async fn get_model_status(state: tauri::State<'_, AppState>) -> Result<Model
 #[tauri::command]
 pub async fn get_downloading_models(state: tauri::State<'_, AppState>) -> Result<HashMap<String, u8>, String> {
     let map = state.downloading_progress.lock().map_err(|e| e.to_string())?;
+    Ok(map.clone())
+}
+
+#[tauri::command]
+pub async fn get_downloading_phases(state: tauri::State<'_, AppState>) -> Result<HashMap<String, String>, String> {
+    let map = state.downloading_phase.lock().map_err(|e| e.to_string())?;
     Ok(map.clone())
 }

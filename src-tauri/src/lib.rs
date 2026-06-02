@@ -49,6 +49,7 @@ pub fn run() {
             model_list::stop_model,
             model_list::get_model_status,
             model_list::get_downloading_models,
+            model_list::get_downloading_phases,
             // settings.rs
             settings::save_settings,
             settings::load_settings,

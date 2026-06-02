@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>文生图</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: #1a1a2e;
+      color: #e0e0e0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    #header {
+      display: flex;
+      align-items: center;
+      padding: 10px 16px;
+      background: #0f3460;
+      border-bottom: 1px solid #1a1a3e;
+      flex-shrink: 0;
+      gap: 12px;
+    }
+
+    .back-btn {
+      background: rgba(255, 255, 255, 0.1);
+      border: none;
+      color: #e0e0e0;
+      padding: 6px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      transition: background 0.2s;
+    }
+
+    .back-btn:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    #model-name {
+      font-size: 14px;
+      font-weight: 600;
+      color: #ffffff;
+    }
+
+    #content {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .placeholder {
+      text-align: center;
+      color: #606080;
+    }
+
+    .placeholder-icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+    }
+
+    .placeholder-text {
+      font-size: 16px;
+    }
+
+    .placeholder-hint {
+      font-size: 13px;
+      margin-top: 8px;
+      color: #505070;
+    }
+  </style>
+</head>
+<body>
+  <div id="header">
+    <button class="back-btn" onclick="goBack()">← 返回</button>
+    <span id="model-name">文生图</span>
+  </div>
+  <div id="content">
+    <div class="placeholder">
+      <div class="placeholder-icon">🎨</div>
+      <div class="placeholder-text">功能开发中...</div>
+      <div class="placeholder-hint">文本生成图片功能即将上线</div>
+    </div>
+  </div>
+
+  <script>
+    const invoke = window.__TAURI_INTERNALS__?.invoke || window.__TAURI__?.core?.invoke || window.parent?.__TAURI_INTERNALS__?.invoke || window.parent?.__TAURI__?.core?.invoke;
+
+    function getParams() {
+      const params = {};
+      const search = window.location.search.substring(1);
+      if (search) {
+        search.split('&').forEach(function(pair) {
+          const parts = pair.split('=');
+          params[decodeURIComponent(parts[0])] = decodeURIComponent(parts[1] || '');
+        });
+      }
+      return params;
+    }
+
+    const params = getParams();
+    const modelId = params.model_id || '';
+    document.getElementById('model-name').textContent = modelId ? '文生图 - ' + modelId : '文生图';
+
+    function goBack() {
+      window.parent.postMessage({ type: "navigate", page: "model_list.html" }, "*");
+    }
+  </script>
+</body>
+</html>

@@ -7,6 +7,7 @@ pub struct AppState {
     pub running_model_id: Mutex<Option<String>>,
     pub running_port: Mutex<Option<u16>>,
     pub downloading_progress: Mutex<HashMap<String, u8>>,
+    pub downloading_phase: Mutex<HashMap<String, String>>,
     pub sys: Mutex<System>,
 }
 
@@ -17,6 +18,7 @@ impl AppState {
             running_model_id: Mutex::new(None),
             running_port: Mutex::new(None),
             downloading_progress: Mutex::new(HashMap::new()),
+            downloading_phase: Mutex::new(HashMap::new()),
             sys: Mutex::new(System::new_all()),
         }
     }
