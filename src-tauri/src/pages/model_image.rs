@@ -74,8 +74,14 @@ fn get_download_url() -> Result<String, String> {
             Some("nvidia") => Ok("https://adm.tuduoduo.top/sd/sd-cuda.zip".to_string()),
             Some("amd") => Ok("https://adm.tuduoduo.top/sd/sd-vulkan.zip".to_string()),
             Some("intel") => Ok("https://adm.tuduoduo.top/sd/sd-vulkan.zip".to_string()),
-            Some(other) => Err(format!("不支持的显卡型号: {}，当前仅支持 NVIDIA/AMD/Intel 显卡", other)),
-            None => Err("未检测到支持的显卡，当前仅支持 NVIDIA/AMD/Intel 显卡".to_string()),
+            Some(other) => {
+                println!("[WARN] 不支持的显卡型号: {}，将使用 Vulkan 版本", other);
+                Ok("https://adm.tuduoduo.top/sd/sd-vulkan.zip".to_string())
+            }
+            None => {
+                println!("[WARN] 未检测到支持的显卡，将使用 Vulkan 版本");
+                Ok("https://adm.tuduoduo.top/sd/sd-vulkan.zip".to_string())
+            }
         }
     } else if cfg!(target_os = "macos") {
         Ok("https://adm.tuduoduo.top/sd/sd-macos.zip".to_string())

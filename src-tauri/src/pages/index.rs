@@ -189,10 +189,12 @@ fn get_llamacpp_download_url(hardware: &HardwareDetectResult) -> Result<String, 
                     Ok("https://adm.tuduoduo.top/llamacpp/vulkan.zip".to_string())
                 }
                 Some(other) => {
-                    Err(format!("不支持的显卡型号: {}，当前仅支持 NVIDIA/AMD/Intel 显卡", other))
+                    println!("[WARN] 不支持的显卡型号: {}，将使用 Vulkan 版本", other);
+                    Ok("https://adm.tuduoduo.top/llamacpp/vulkan.zip".to_string())
                 }
                 None => {
-                    Err("未检测到支持的显卡，当前仅支持 NVIDIA/AMD/Intel 显卡".to_string())
+                    println!("[WARN] 未检测到支持的显卡，将使用 Vulkan 版本");
+                    Ok("https://adm.tuduoduo.top/llamacpp/vulkan.zip".to_string())
                 }
             }
         }
@@ -368,6 +370,13 @@ pub async fn check_update(app: tauri::AppHandle) -> Result<UpdateCheckResult, St
 
 #[tauri::command]
 pub async fn download_and_extract_llamacpp(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    if url.trim().is_empty() || !url.starts_with("http") {
+        return Err(format!(
+            "下载地址无效: {}，请重新检查更新",
+            if url.is_empty() { "地址为空" } else { &url }
+        ));
+    }
+
     let llamacpp_dir = config::get_llamacpp_dir(Some(&app))?;
 
     std::fs::create_dir_all(&llamacpp_dir).map_err(|e| format!("创建 llamacpp 目录失败: {}", e))?;
@@ -402,7 +411,20 @@ pub async fn download_and_extract_llamacpp(app: tauri::AppHandle, url: String) -
         req = req.header("Range", format!("bytes={}-", existing_size));
     }
 
-    let response = req.send().await.map_err(|e| format!("下载请求失败: {}", e))?;
+    let response = req.send().await.map_err(|e| {
+        let detail = if e.is_builder() {
+            "请求构建失败，可能是网络地址格式异常".to_string()
+        } else if e.is_connect() {
+            format!("无法连接到服务器（{}），请检查网络连接", url)
+        } else if e.is_timeout() {
+            "连接超时，请检查网络或更换网络环境".to_string()
+        } else if e.is_request() {
+            format!("请求错误: {}", e)
+        } else {
+            format!("{}", e)
+        };
+        format!("下载请求失败: {}", detail)
+    })?;
 
     let is_partial = response.status() == reqwest::StatusCode::PARTIAL_CONTENT;
     let mut total_size: u64 = 0;

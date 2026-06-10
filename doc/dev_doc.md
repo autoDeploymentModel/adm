@@ -10,7 +10,7 @@
 | 项目       | 值          |
 | -------- | ---------- |
 | 应用版本     | 0.1.8      |
-| 文档版本     | 3.4        |
+| 文档版本     | 3.5        |
 | Tauri 版本 | 2.11.2     |
 | 最后更新     | 2026-06-02 |
 | 维护者      | ADM 开发团队   |
@@ -447,7 +447,7 @@ AppState {
 | Windows + NVIDIA             | CUDA 12 包 (zip)    |
 | Windows + AMD                | Vulkan 包 (zip)     |
 | Windows + Intel              | Vulkan 包 (zip)     |
-| Windows + 其他/无 GPU           | 抛出异常提示          |
+| Windows + 其他/无 GPU           | Vulkan 包 (zip)     |
 
 ### 4.9 `pages/model_list.rs` — 模型列表页面
 
@@ -547,7 +547,7 @@ start_model(model_id, params)
 | Windows + AMD      | `sd-vulkan.zip`              |
 | Windows + Intel    | `sd-vulkan.zip`              |
 | macOS              | `sd-macos.zip`               |
-| 其他/未检测到 GPU     | 抛出异常提示                    |
+| 其他/未检测到 GPU     | `sd-vulkan.zip`              |
 
 **生成参数构造**：`start_sd_generation` 从 model_url/model_diffusion/model_vae 提取文件名，在 `{base_dir}/models/{model_id}/` 目录下查找对应的模型文件，构建 sd-cli 完整参数并启动子进程。子进程 stdout/stderr 通过 `sd-log` 事件实时输出，进程退出时发送 `sd-complete` 事件。
 
@@ -1237,7 +1237,7 @@ Rust (emit) ──→ 前端 JS (listen) ──postMessage──→ iframe/conte
 | Windows + NVIDIA   | 任意      | `windows-CUDA12.zip` |
 | Windows + AMD      | 任意      | `vulkan.zip`         |
 | Windows + Intel    | 任意      | `vulkan.zip`         |
-| Windows + 无/其他 GPU | —       | 抛出异常提示           |
+| Windows + 无/其他 GPU | —       | `vulkan.zip`         |
 | Linux              | —       | 暂不支持自动下载             |
 
 ### 9.3 版本比对
@@ -1293,6 +1293,15 @@ Rust (emit) ──→ 前端 JS (listen) ──postMessage──→ iframe/conte
 
 ***
 
-*文档版本: 3.3*\
-*最后更新: 2026-06-01*\
+*文档版本: 3.4*\
+*最后更新: 2026-06-10*\
 *维护者: ADM 开发团队*
+
+***
+
+### 更新日志
+
+| 日期 | 版本 | 变更内容 |
+|------|------|----------|
+| 2026-06-10 | 3.5 | GPU 检测回退策略改进：<br>1. llamacpp 和 sd-cli 下载时，未检测到支持的 GPU 或未知 GPU 型号时，不再抛出错误，统一回退下载 Vulkan 版本<br>2. 更新开发文档中硬件适配策略表和更新日志 |
+| 2026-06-10 | 3.4 | 修复 llamacpp 下载失败问题：<br>1. reqwest TLS 后端从 native-tls 切换到 rustls-tls，避免 Windows 上 SSL/TLS 兼容性问题<br>2. URL 为空时前端直接提示，不再发送无效请求<br>3. 改进下载错误提示，区分 builder/connect/timeout/TLS 等错误类型 |

@@ -658,26 +658,41 @@
     async function startLlamacppUpdate(result) {
       const isNotInstalled = !result.llamacpp_local_version || result.llamacpp_local_version === "未安装";
       llamacppIsMandatory = isNotInstalled;
-      
+
       const localVer = result.llamacpp_local_version || "未安装";
       const remoteVer = result.llamacpp_remote_version || "";
-      
+      const downloadUrl = result.llamacpp_download_url;
+
+      // 检查下载地址是否有效
+      if (!downloadUrl) {
+        const html = `
+          <div class="update-icon">⚠️</div>
+          <div class="update-title">无法获取下载地址</div>
+          <div class="update-desc">未检测到支持的 NVIDIA/AMD/Intel 显卡，无法下载对应版本的 llamacpp。<br>请确认显卡驱动已正确安装，或联系技术支持。</div>
+          <div class="update-buttons" style="margin-top:16px;">
+            <button class="update-btn-secondary" onclick="hideUpdateDialog()">关闭</button>
+          </div>
+        `;
+        showUpdateDialog(html);
+        return;
+      }
+
       let buttonsHtml;
       if (isNotInstalled) {
         buttonsHtml = `
           <div class="update-buttons" style="margin-top:16px;">
-            <button class="update-btn-primary" id="llamacpp-start-btn" onclick="doLlamacppDownload('${result.llamacpp_download_url}')">开始下载</button>
+            <button class="update-btn-primary" id="llamacpp-start-btn" onclick="doLlamacppDownload()">开始下载</button>
           </div>
         `;
       } else {
         buttonsHtml = `
           <div class="update-buttons" style="margin-top:16px;">
-            <button class="update-btn-primary" id="llamacpp-start-btn" onclick="doLlamacppDownload('${result.llamacpp_download_url}')">开始下载</button>
+            <button class="update-btn-primary" id="llamacpp-start-btn" onclick="doLlamacppDownload()">开始下载</button>
             <button class="update-btn-secondary" onclick="hideUpdateDialog()">稍后再说</button>
           </div>
         `;
       }
-      
+
       const html = `
         <div class="update-icon">🔧</div>
         <div class="update-title">${isNotInstalled ? "需要安装 LLamaCPP" : "LLamaCPP 需要更新"}</div>
@@ -699,24 +714,38 @@
         ${buttonsHtml}
       `;
       showUpdateDialog(html);
-      
+
+      // 存储下载链接供按钮和自动下载使用
+      pendingLlamacppUrl = downloadUrl;
+
       // 如果是未安装状态，自动开始下载
       if (isNotInstalled) {
         setTimeout(function() {
-          doLlamacppDownload(result.llamacpp_download_url);
+          doLlamacppDownload();
         }, 500);
       }
     }
 
-    async function doLlamacppDownload(url) {
+    let pendingLlamacppUrl = null;
+
+    async function doLlamacppDownload() {
       var startBtn = document.getElementById("llamacpp-start-btn");
       if (startBtn) startBtn.style.display = "none";
 
       var statusText = document.getElementById("llamacpp-status-text");
       var progressFill = document.getElementById("llamacpp-progress-fill");
 
+      if (!pendingLlamacppUrl) {
+        if (statusText) statusText.textContent = "下载失败: 缺少下载地址";
+        if (startBtn) {
+          startBtn.style.display = "";
+          startBtn.textContent = "重试";
+        }
+        return;
+      }
+
       try {
-        await invoke("download_and_extract_llamacpp", { url: url });
+        await invoke("download_and_extract_llamacpp", { url: pendingLlamacppUrl });
       } catch (e) {
         if (statusText) statusText.textContent = "下载失败: " + e;
         if (progressFill) progressFill.style.width = "0%";
