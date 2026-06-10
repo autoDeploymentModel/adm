@@ -10,9 +10,9 @@
 | 项目       | 值          |
 | -------- | ---------- |
 | 应用版本     | 0.1.8      |
-| 文档版本     | 3.5        |
+| 文档版本     | 3.6        |
 | Tauri 版本 | 2.11.2     |
-| 最后更新     | 2026-06-02 |
+| 最后更新     | 2026-06-10 |
 | 维护者      | ADM 开发团队   |
 
 ***
@@ -511,7 +511,7 @@ start_model(model_id, params)
   │
   └── 8. 启动 stdout/stderr 线程 → 逐行发送 model-log 事件
          → 检测到 "listening on" 时重新发送 model-started
-         → 进程退出时发送 model-stopped 事件
+         → 进程退出时：清除 AppState 状态 → 发送 model-stopped 事件
 ```
 
 ### 4.10 `pages/model_chat.rs` — 模型交互页面
@@ -1032,7 +1032,7 @@ pub struct AppState {
 | `download-progress`          | model\_list.rs | 模型下载中实时上报                       | `{model_id, progress, downloaded, total, type}`（type: model/mmproj/diffusion/vae） |
 | `download-complete`          | model\_list.rs | 模型下载完成                          | `{model_id, type}`（type: model/mmproj/diffusion/vae）                              |
 | `model-started`              | model\_list.rs | 模型启动成功 / 检测到 listening 日志       | `{model_id, port}`                        |
-| `model-stopped`              | model\_list.rs | 进程退出（stdout/stderr 线程结束）        | `{model_id}`                              |
+| `model-stopped`              | model\_list.rs | 进程退出（stdout/stderr 线程结束，并已清除 AppState） | `{model_id}`                              |
 | `model-log`                  | model\_list.rs | llama-server stdout/stderr 每行输出 | `{model_id, line, source}`                |
 | `llamacpp-download-progress` | index.rs       | llamacpp 下载/解压过程                | `{status, progress}`                      |
 
@@ -1089,7 +1089,7 @@ pub struct AppState {
   ├── 9. 后台线程读取 stdout/stderr
   │        ├── 逐行 emit model-log 事件
   │        ├── 检测到 listening → 再次 emit model-started（含 port）
-  │        └── 线程结束 → emit model-stopped
+  │        └── 线程结束 → 清除 AppState → emit model-stopped
   │
   └── 10. 返回启动成功
 ```
@@ -1303,5 +1303,6 @@ Rust (emit) ──→ 前端 JS (listen) ──postMessage──→ iframe/conte
 
 | 日期 | 版本 | 变更内容 |
 |------|------|----------|
+| 2026-06-10 | 3.6 | 修复模型启动失败后无法重新启动的问题：<br>1. start_model 后台线程检测到进程退出时，在发送 model-stopped 事件前清除 AppState 中的 running_process/running_model_id/running_port 状态<br>2. 更新开发文档中模型启动流程说明 |
 | 2026-06-10 | 3.5 | GPU 检测回退策略改进：<br>1. llamacpp 和 sd-cli 下载时，未检测到支持的 GPU 或未知 GPU 型号时，不再抛出错误，统一回退下载 Vulkan 版本<br>2. 更新开发文档中硬件适配策略表和更新日志 |
 | 2026-06-10 | 3.4 | 修复 llamacpp 下载失败问题：<br>1. reqwest TLS 后端从 native-tls 切换到 rustls-tls，避免 Windows 上 SSL/TLS 兼容性问题<br>2. URL 为空时前端直接提示，不再发送无效请求<br>3. 改进下载错误提示，区分 builder/connect/timeout/TLS 等错误类型 |

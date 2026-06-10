@@ -941,6 +941,14 @@ pub async fn start_model(
             }
         }
 
+        // 清除 AppState 中的状态，确保进程退出后可以重新启动
+        {
+            let state = app_clone.state::<AppState>();
+            *state.running_process.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            *state.running_model_id.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            *state.running_port.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
+
         app_clone
             .emit(
                 "model-stopped",
