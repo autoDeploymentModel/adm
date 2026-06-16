@@ -10,9 +10,9 @@
 | 项目       | 值          |
 | -------- | ---------- |
 | 应用版本     | 0.1.8      |
-| 文档版本     | 3.6        |
+| 文档版本     | 3.7        |
 | Tauri 版本 | 2.11.2     |
-| 最后更新     | 2026-06-10 |
+| 最后更新     | 2026-06-16 |
 | 维护者      | ADM 开发团队   |
 
 ***
@@ -196,9 +196,10 @@ adm/
 ├── doc/                              # 项目文档
 │   ├── dev_doc.md                    # 开发文档（本文件）
 │   └── llamacpp.txt                  # llama.cpp 参数参考
-├── scripts/                          # 构建与签名脚本
+├── scripts/                          # 构建、签名与工具脚本
 │   ├── build.mjs                     # Node.js 构建入口脚本
 │   ├── fix-macos-damaged.sh          # macOS 修复损坏应用标记
+│   ├── generate-icons.py             # 图标自动生成（从 source.png 生成全套图标）
 │   ├── sign-macos.sh                 # macOS 代码签名
 │   └── sign-windows.ps1              # Windows 代码签名
 ├── src/                              # 前端资源 (Tauri frontendDist)
@@ -1270,7 +1271,45 @@ Rust (emit) ──→ 前端 JS (listen) ──postMessage──→ iframe/conte
 
 ***
 
-## 十一、参考资料
+## 十一、应用图标
+
+### 11.1 图标源文件
+
+- **源文件**: `src-tauri/icons/source.png` (≥256×256 RGBA PNG)
+- 后续需要更换图标时，替换此文件后重新运行生成脚本即可
+
+### 11.2 图标文件清单
+
+| 文件 | 尺寸 | 用途 |
+|------|------|------|
+| `source.png` | ≥256×256 | 源图（唯一需要维护的原始素材） |
+| `32x32.png` | 32×32 | 小图标 |
+| `64x64.png` | 64×64 | 中等图标 |
+| `128x128.png` | 128×128 | 大图标 |
+| `256x256.png` | 256×256 | 高清图标 |
+| `icon.ico` | 多分辨率(16/32/48/64/128/256) | Windows 应用图标（含 256×256 保证桌面高清显示） |
+| `icon.icns` | 3 种(ic07/ic08/ic09) | macOS 应用图标 |
+
+### 11.3 自动生成
+
+使用 `scripts/generate-icons.py` 从 `source.png` 一键生成所有图标：
+
+```bash
+python scripts/generate-icons.py
+```
+
+脚本会依次执行：
+1. 缩放 PNG 到 32/64/128/256 四种尺寸
+2. 合成多分辨率 .ico（含 256×256，解决 Windows 桌面图标模糊）
+3. 合成 .icns（含 ic07/ic08/ic09 三种 macOS 图标类型）
+
+### 11.4 关键修复说明
+
+桌面图标模糊的根因是 `icon.ico` 内缺少 **256×256** 尺寸。Windows 在高 DPI 下会将 128×128 放大显示，导致模糊。新生成的 .ico 包含 256×256 后即可在桌面保持清晰。
+
+---
+
+## 十二、参考资料
 
 ### A. llama.cpp 参数详解
 
@@ -1293,8 +1332,8 @@ Rust (emit) ──→ 前端 JS (listen) ──postMessage──→ iframe/conte
 
 ***
 
-*文档版本: 3.4*\
-*最后更新: 2026-06-10*\
+*文档版本: 3.7*\
+*最后更新: 2026-06-16*\
 *维护者: ADM 开发团队*
 
 ***
@@ -1303,6 +1342,7 @@ Rust (emit) ──→ 前端 JS (listen) ──postMessage──→ iframe/conte
 
 | 日期 | 版本 | 变更内容 |
 |------|------|----------|
+| 2026-06-16 | **3.7** | 修复桌面图标模糊问题：<br>1. 新增 `scripts/generate-icons.py` 一键生成所有图标<br>2. PNG 尺寸改为 32/64/128/256，移除旧的 @2x/@4x 命名<br>3. 重新生成 `icon.ico`，从单张 128×128 升级为 6 张分辨率(含 256×256)解决模糊<br>4. 重新生成 `icon.icns`（含 ic07/ic08/ic09 三种 macOS 类型）<br>5. 更新 `tauri.conf.json` bundle.icon 配置 |
 | 2026-06-10 | 3.6 | 修复模型启动失败后无法重新启动的问题：<br>1. start_model 后台线程检测到进程退出时，在发送 model-stopped 事件前清除 AppState 中的 running_process/running_model_id/running_port 状态<br>2. 更新开发文档中模型启动流程说明 |
 | 2026-06-10 | 3.5 | GPU 检测回退策略改进：<br>1. llamacpp 和 sd-cli 下载时，未检测到支持的 GPU 或未知 GPU 型号时，不再抛出错误，统一回退下载 Vulkan 版本<br>2. 更新开发文档中硬件适配策略表和更新日志 |
 | 2026-06-10 | 3.4 | 修复 llamacpp 下载失败问题：<br>1. reqwest TLS 后端从 native-tls 切换到 rustls-tls，避免 Windows 上 SSL/TLS 兼容性问题<br>2. URL 为空时前端直接提示，不再发送无效请求<br>3. 改进下载错误提示，区分 builder/connect/timeout/TLS 等错误类型 |
