@@ -899,41 +899,44 @@
 
     const PRESET_MODES = {
       default: {
-        temperature: 0.7,
-        top_k: 40,
+        ctx_size: 4096,
+        temperature: 1.0,
+        top_k: 20,
         top_p: 0.95,
         min_p: 0.0,
-        repeat_penalty: 1.1,
+        repeat_penalty: 1.0,
         repeat_last_n: -1,
-        dry_multiplier: 0.8,
+        dry_multiplier: 0.0,
         dry_allowed_length: 2,
         dry_penalty_last_n: -1,
-        presence_penalty: 0.0,
+        presence_penalty: 1.5,
         frequency_penalty: 0.0,
         reasoning: "auto",
       },
       creative: {
-        temperature: 0.85,
-        top_k: 40,
+        ctx_size: 32768,
+        temperature: 1.0,
+        top_k: 20,
         top_p: 0.95,
         min_p: 0.0,
-        repeat_penalty: 1.05,
+        repeat_penalty: 1.0,
         repeat_last_n: -1,
-        dry_multiplier: 0.4,
-        dry_allowed_length: 3,
+        dry_multiplier: 0.0,
+        dry_allowed_length: 2,
         dry_penalty_last_n: -1,
-        presence_penalty: 0.0,
+        presence_penalty: 1.5,
         frequency_penalty: 0.0,
-        reasoning: "off",
+        reasoning: "auto",
       },
       code: {
-        temperature: 0.2,
-        top_k: 35,
-        top_p: 0.9,
+        ctx_size: 128000,
+        temperature: 0.6,
+        top_k: 20,
+        top_p: 0.95,
         min_p: 0.0,
-        repeat_penalty: 1.1,
+        repeat_penalty: 1.0,
         repeat_last_n: -1,
-        dry_multiplier: 0.4,
+        dry_multiplier: 0.0,
         dry_allowed_length: 2,
         dry_penalty_last_n: -1,
         presence_penalty: 0.0,
@@ -961,6 +964,7 @@
     }
 
     function fillSamplingFromPreset(preset) {
+      document.getElementById("ctx_size").value = preset.ctx_size;
       document.getElementById("temperature").value = preset.temperature;
       document.getElementById("top_k").value = preset.top_k;
       document.getElementById("top_p").value = preset.top_p;
@@ -1007,8 +1011,8 @@
         cache_type_v: document.getElementById("cache_type_v").value,
         mlock: document.getElementById("mlock").checked,
         mmap: document.getElementById("mmap").checked,
-        temperature: parseFloat(document.getElementById("temperature").value) || 0.8,
-        top_k: parseInt(document.getElementById("top_k").value) || 40,
+        temperature: parseFloat(document.getElementById("temperature").value) || 1.0,
+        top_k: parseInt(document.getElementById("top_k").value) || 20,
         top_p: parseFloat(document.getElementById("top_p").value) || 0.95,
         min_p: parseFloat(document.getElementById("min_p").value) || 0.0,
         repeat_penalty: parseFloat(document.getElementById("repeat_penalty").value) || 1.0,
@@ -1016,7 +1020,7 @@
         dry_multiplier: parseFloat(document.getElementById("dry_multiplier").value) || 0.0,
         dry_allowed_length: parseInt(document.getElementById("dry_allowed_length").value) || 2,
         dry_penalty_last_n: parseInt(document.getElementById("dry_penalty_last_n").value) || -1,
-        presence_penalty: parseFloat(document.getElementById("presence_penalty").value) || 0.0,
+        presence_penalty: parseFloat(document.getElementById("presence_penalty").value) || 1.5,
         frequency_penalty: parseFloat(document.getElementById("frequency_penalty").value) || 0.0,
         reasoning: document.getElementById("reasoning").value,
         port: parseInt(document.getElementById("port").value) || 8080,
@@ -1057,16 +1061,16 @@
       document.getElementById("cache_type_v").value = getParam("cache_type_v") ?? "f16";
       document.getElementById("mlock").checked = getParam("mlock") ?? false;
       document.getElementById("mmap").checked = getParam("mmap") !== false;
-      document.getElementById("temperature").value = getParam("temperature") ?? 0.2;
-      document.getElementById("top_k").value = getParam("top_k") ?? 40;
+      document.getElementById("temperature").value = getParam("temperature") ?? 1.0;
+      document.getElementById("top_k").value = getParam("top_k") ?? 20;
       document.getElementById("top_p").value = getParam("top_p") ?? 0.95;
       document.getElementById("min_p").value = getParam("min_p") ?? 0.0;
-      document.getElementById("repeat_penalty").value = getParam("repeat_penalty") ?? 1.1;
+      document.getElementById("repeat_penalty").value = getParam("repeat_penalty") ?? 1.0;
       document.getElementById("repeat_last_n").value = getParam("repeat_last_n") ?? -1;
-      document.getElementById("dry_multiplier").value = getParam("dry_multiplier") ?? 0.8;
+      document.getElementById("dry_multiplier").value = getParam("dry_multiplier") ?? 0.0;
       document.getElementById("dry_allowed_length").value = getParam("dry_allowed_length") ?? 2;
       document.getElementById("dry_penalty_last_n").value = getParam("dry_penalty_last_n") ?? -1;
-      document.getElementById("presence_penalty").value = getParam("presence_penalty") ?? 0.0;
+      document.getElementById("presence_penalty").value = getParam("presence_penalty") ?? 1.5;
       document.getElementById("frequency_penalty").value = getParam("frequency_penalty") ?? 0.0;
       document.getElementById("reasoning").value = getParam("reasoning") ?? "auto";
       document.getElementById("port").value = getParam("port") ?? 8080;
@@ -1093,7 +1097,7 @@
 
     function resetParams() {
       const defaults = {
-        ctx_size: 9096,
+        ctx_size: 4096,
         n_predict: -1,
         batch_size: 2048,
         ubatch_size: 512,
@@ -1105,12 +1109,18 @@
         cache_type_v: "f16",
         mlock: true,
         mmap: true,
-        temperature: 0.8,
-        top_k: 40,
+        temperature: 1.0,
+        top_k: 20,
         top_p: 0.95,
-        min_p: 0.05,
+        min_p: 0.0,
         repeat_penalty: 1.0,
-        reasoning: "off",
+        repeat_last_n: -1,
+        dry_multiplier: 0.0,
+        dry_allowed_length: 2,
+        dry_penalty_last_n: -1,
+        presence_penalty: 1.5,
+        frequency_penalty: 0.0,
+        reasoning: "auto",
         port: 8080,
         host: "127.0.0.1",
       };
