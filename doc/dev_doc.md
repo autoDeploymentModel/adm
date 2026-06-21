@@ -10,7 +10,7 @@
 | 项目       | 值          |
 | -------- | ---------- |
 | 应用版本     | 0.1.8      |
-| 文档版本     | 3.8        |
+| 文档版本     | 3.9        |
 | Tauri 版本 | 2.11.2     |
 | 最后更新     | 2026-06-21 |
 | 维护者      | ADM 开发团队   |
@@ -237,8 +237,10 @@ adm/
 │           ├── model_image.rs        # model_image.html 逻辑：sd-cli 下载/检测/生成/停止
 │           └── settings.rs           # settings.html 逻辑：配置持久化、版本查询
 ├── website/                          # 项目官网资源
-│   ├── index.html
-│   └── images/
+│   ├── index.html                    # 官网首页（含 SEO: OG/Twitter Card/JSON-LD/Canonical）
+│   ├── robots.txt                    # 搜索引擎爬虫规则
+│   ├── sitemap.xml                   # 站点地图
+│   └── images/                       # 官网图片
 ├── AGENTS.md                         # 项目技术栈说明
 ├── package.json
 ├── pnpm-lock.yaml
@@ -1336,7 +1338,7 @@ python scripts/generate-icons.py
 
 ***
 
-*文档版本: 3.8*\
+*文档版本: 3.9*\
 *最后更新: 2026-06-21*\
 *维护者: ADM 开发团队*
 
@@ -1346,6 +1348,7 @@ python scripts/generate-icons.py
 
 | 日期 | 版本 | 变更内容 |
 |------|------|----------|
+| 2026-06-21 | **3.9** | 官网 SEO 优化：<br>1. 添加 Open Graph / Twitter Card 元标签<br>2. 添加 canonical URL 和 JSON-LD 结构化数据<br>3. 创建 robots.txt 和 sitemap.xml<br>4. 图片添加 loading="lazy"，emoji 图标添加 role="img" + aria-label<br>5. 修复"文生图"特性图标损坏的 emoji |
 | 2026-06-21 | **3.8** | MTP 模型自动检测：<br>1. `LaunchParams` 新增 `spec_draft_n_max`、`spec_type` 字段<br>2. `start_model` 自动检测模型文件名是否包含 MTP，追加 `--spec-draft-n-max 3 --spec-type draft-mtp` 参数<br>3. 支持用户通过 `params.spec_type` 手动覆盖（设为 `"none"` 可禁用自动检测） |
 | 2026-06-16 | **3.7** | 修复桌面图标模糊问题：<br>1. 新增 `scripts/generate-icons.py` 一键生成所有图标<br>2. PNG 尺寸改为 32/64/128/256，移除旧的 @2x/@4x 命名<br>3. 重新生成 `icon.ico`，从单张 128×128 升级为 6 张分辨率(含 256×256)解决模糊<br>4. 重新生成 `icon.icns`（含 ic07/ic08/ic09 三种 macOS 类型）<br>5. 更新 `tauri.conf.json` bundle.icon 配置 |
 | 2026-06-10 | 3.6 | 修复模型启动失败后无法重新启动的问题：<br>1. start_model 后台线程检测到进程退出时，在发送 model-stopped 事件前清除 AppState 中的 running_process/running_model_id/running_port 状态<br>2. 更新开发文档中模型启动流程说明 |
