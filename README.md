@@ -279,6 +279,8 @@ pnpm fix:macos
 - **项目地址**: https://github.com/autoDeploymentModel/adm
 - **问题反馈**: [GitHub Issues](https://github.com/autoDeploymentModel/adm/issues)
 - **讨论**: [GitHub Discussions](https://github.com/autoDeploymentModel/adm/discussions)
+- **微信**: 
+![微信](src-tauri/wx.png)
 
 ---
 
