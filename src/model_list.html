@@ -1151,6 +1151,16 @@
             runningModelId = model_id;
             runningModelPort = port;
             renderModelTable();
+            // 保存 showLogPanel 清空 DOM 前的已有日志（如启动参数）
+            const pendingLogs = [];
+            document.getElementById('log-content').querySelectorAll('.log-line').forEach(function(el) {
+                pendingLogs.push({ line: el.textContent, type: (el.className || '').replace('log-line ', ''), timestamp: Date.now() });
+            });
+            if (pendingLogs.length > 0) {
+                const key = 'modelLogs_' + model_id;
+                const existing = JSON.parse(localStorage.getItem(key) || '[]');
+                localStorage.setItem(key, JSON.stringify([...existing, ...pendingLogs]));
+            }
             // 显示日志面板
             showLogPanel(model_id);
             addLogLine(`[${new Date().toLocaleTimeString()}] ✅ 模型启动成功! 端口: ${port}`, 'success');

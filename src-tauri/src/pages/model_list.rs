@@ -744,6 +744,28 @@ pub async fn start_model(
         model_path.to_string_lossy().to_string(),
     ];
 
+    // 诊断日志：打印接收到的参数
+    app.emit(
+        "model-log",
+        serde_json::json!({
+            "model_id": &model_id,
+            "line": format!("[DEBUG] model_filename: {:?}", model_filename),
+            "source": "stdout",
+        }),
+    )
+    .ok();
+    app.emit(
+        "model-log",
+        serde_json::json!({
+            "model_id": &model_id,
+            "line": format!("[DEBUG] params: ctx={:?} ngl={:?} threads={:?} fa={:?} temp={:?} port={:?} host={:?} spec_type={:?}",
+                params.ctx_size, params.n_gpu_layers, params.threads, params.flash_attn,
+                params.temperature, params.port, params.host, params.spec_type),
+            "source": "stdout",
+        }),
+    )
+    .ok();
+
     if support_images {
         let model_dir = model_path.parent().unwrap();
         let mut mmproj_path: Option<std::path::PathBuf> = None;
@@ -839,6 +861,28 @@ pub async fn start_model(
         args.extend(["--reasoning".to_string(), r.clone()]);
     }
 
+    // MTP (Multi-Token Prediction) auto-detection
+    if let Some(spec_type) = &params.spec_type {
+        if spec_type != "none" {
+            if let Some(n) = params.spec_draft_n_max {
+                args.extend(["--spec-draft-n-max".to_string(), n.to_string()]);
+            }
+            args.extend(["--spec-type".to_string(), spec_type.clone()]);
+        }
+    } else if model_id.to_lowercase().contains("mtp") {
+            args.extend(["--spec-draft-n-max".to_string(), "3".to_string()]);
+            args.extend(["--spec-type".to_string(), "draft-mtp".to_string()]);
+            app.emit(
+                "model-log",
+                serde_json::json!({
+                    "model_id": &model_id,
+                    "line": "[DEBUG] MTP auto-detection: triggered (model_id contains 'MTP')",
+                    "source": "stdout",
+                }),
+            )
+            .ok();
+        }
+
     let port = params.port.unwrap_or(8080);
     args.extend(["--port".to_string(), port.to_string()]);
 
@@ -849,6 +893,16 @@ pub async fn start_model(
     args.push("--verbose".to_string());
 
     println!("[DEBUG] llama-server args: {:?}", args);
+
+    app.emit(
+        "model-log",
+        serde_json::json!({
+            "model_id": &model_id,
+            "line": format!("启动参数: {:?}", args),
+            "source": "stdout",
+        }),
+    )
+    .ok();
 
     let mut cmd = crate::common::utils::platform::create_hidden_command(&server_path);
     #[cfg(target_os = "macos")]

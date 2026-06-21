@@ -10,9 +10,9 @@
 | 项目       | 值          |
 | -------- | ---------- |
 | 应用版本     | 0.1.8      |
-| 文档版本     | 3.7        |
+| 文档版本     | 3.8        |
 | Tauri 版本 | 2.11.2     |
-| 最后更新     | 2026-06-16 |
+| 最后更新     | 2026-06-21 |
 | 维护者      | ADM 开发团队   |
 
 ***
@@ -378,7 +378,7 @@ AppState {
 | ---------------------- | ----------------------------------------------------------------------------------- |
 | `SystemInfo`           | 系统信息返回值：RAM(总/已用)、VRAM(总/已用)、CPU 使用率/核心数                                            |
 | `ModelStatus`          | 模型运行状态：是否运行、model\_id、pid、port                                                      |
-| `LaunchParams`         | 模型启动参数（见 §5.5），新增 `dry_multiplier`、`dry_allowed_length`、`dry_penalty_last_n`、`presence_penalty`、`frequency_penalty`、`preset_mode` 字段 |
+| `LaunchParams`         | 模型启动参数（见 §5.5），新增 `dry_multiplier`、`dry_allowed_length`、`dry_penalty_last_n`、`presence_penalty`、`frequency_penalty`、`preset_mode`、`spec_draft_n_max`、`spec_type` 字段。MTP 模型自动检测（见 §6.8） |
 | `RemoteModel`          | 远程模型数据：model\_id、model\_url、model\_size、need\_ram、support\_tools/reasoning/images、model\_diffusion、model\_vae |
 | `Settings`             | 用户配置包装：`{ launch_params: LaunchParams }`                                            |
 | `PartFileProgress`     | 断点续传进度：model\_id、existing\_size                                                     |
@@ -842,6 +842,8 @@ function navigateTo(page) {
 | <br />  | 存在惩罚 | `--presence-penalty` | 0.0 |
 | <br />  | 频率惩罚 | `--frequency-penalty` | 0.0 |
 | **推理**  | 推理模式            | `--reasoning`      | auto      |
+| **推测解码** | MTP 推测解码类型 | `--spec-type` | 自动检测（文件名含 MTP 时设为 draft-mtp） |
+| <br />  | MTP 推测 token 数 | `--spec-draft-n-max` | 自动检测（文件名含 MTP 时设为 3） |
 | **服务**  | 端口              | `--port`           | 8080      |
 | <br />  | 监听地址            | `--host`           | 127.0.0.1 |
 
@@ -1079,6 +1081,8 @@ pub struct AppState {
   ├── 4. 读取 config.json → 获取 LaunchParams
   │
   ├── 5. 构建命令行参数（见参数配置表）
+  │         └── MTP 自动检测：若模型文件名包含 "mtp"（大小写不敏感），自动追加 --spec-draft-n-max 3 --spec-type draft-mtp
+  │             优先使用 params.spec_type 手动配置（设为 "none" 可禁用）
   │
   ├── 6. 静默启动（Windows 隐藏控制台窗口）
   │        macOS 设置 DYLD_LIBRARY_PATH 环境变量
@@ -1332,8 +1336,8 @@ python scripts/generate-icons.py
 
 ***
 
-*文档版本: 3.7*\
-*最后更新: 2026-06-16*\
+*文档版本: 3.8*\
+*最后更新: 2026-06-21*\
 *维护者: ADM 开发团队*
 
 ***
@@ -1342,6 +1346,7 @@ python scripts/generate-icons.py
 
 | 日期 | 版本 | 变更内容 |
 |------|------|----------|
+| 2026-06-21 | **3.8** | MTP 模型自动检测：<br>1. `LaunchParams` 新增 `spec_draft_n_max`、`spec_type` 字段<br>2. `start_model` 自动检测模型文件名是否包含 MTP，追加 `--spec-draft-n-max 3 --spec-type draft-mtp` 参数<br>3. 支持用户通过 `params.spec_type` 手动覆盖（设为 `"none"` 可禁用自动检测） |
 | 2026-06-16 | **3.7** | 修复桌面图标模糊问题：<br>1. 新增 `scripts/generate-icons.py` 一键生成所有图标<br>2. PNG 尺寸改为 32/64/128/256，移除旧的 @2x/@4x 命名<br>3. 重新生成 `icon.ico`，从单张 128×128 升级为 6 张分辨率(含 256×256)解决模糊<br>4. 重新生成 `icon.icns`（含 ic07/ic08/ic09 三种 macOS 类型）<br>5. 更新 `tauri.conf.json` bundle.icon 配置 |
 | 2026-06-10 | 3.6 | 修复模型启动失败后无法重新启动的问题：<br>1. start_model 后台线程检测到进程退出时，在发送 model-stopped 事件前清除 AppState 中的 running_process/running_model_id/running_port 状态<br>2. 更新开发文档中模型启动流程说明 |
 | 2026-06-10 | 3.5 | GPU 检测回退策略改进：<br>1. llamacpp 和 sd-cli 下载时，未检测到支持的 GPU 或未知 GPU 型号时，不再抛出错误，统一回退下载 Vulkan 版本<br>2. 更新开发文档中硬件适配策略表和更新日志 |
