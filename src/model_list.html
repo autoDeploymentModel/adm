@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
@@ -16,22 +16,26 @@
       background: #1a1a2e;
       color: #e0e0e0;
       height: 100vh;
-      overflow-y: auto;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
       user-select: none;
     }
 
     main {
-      padding: 20px;
+      flex: 1;
+      overflow-y: auto;
     }
 
     .page-title {
       font-size: 18px;
       font-weight: 600;
       color: #ffffff;
-      margin-bottom: 16px;
       display: flex;
       align-items: center;
       gap: 8px;
+      flex-shrink: 0;
+      padding: 20px 20px 16px;
     }
 
     .page-title::before {
@@ -43,15 +47,24 @@
       border-radius: 2px;
     }
 
+    .table-wrapper {
+      border-radius: 8px;
+      overflow: visible;
+      clip-path: inset(0 round 8px);
+      margin: 0 20px 20px;
+    }
+
     table {
       width: 100%;
-      border-collapse: collapse;
+      border-collapse: separate;
+      border-spacing: 0;
       background: #16213e;
-      border-radius: 8px;
-      overflow: hidden;
     }
 
     thead {
+      position: sticky;
+      top: 0;
+      z-index: 2;
       background: #0f3460;
     }
 
@@ -63,6 +76,10 @@
       color: #a0a0c0;
       text-transform: uppercase;
       letter-spacing: 0.5px;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: #0f3460;
     }
 
     th:last-child {
@@ -263,7 +280,7 @@
     }
 
     .log-panel {
-      margin-top: 20px;
+      margin: 0 20px 20px;
       background: #16213e;
       border-radius: 8px;
       overflow: hidden;
@@ -370,7 +387,8 @@
       display: flex;
       align-items: center;
       gap: 12px;
-      margin-bottom: 12px;
+      padding: 0 20px 12px;
+      flex-shrink: 0;
     }
 
     .filter-bar label {
@@ -407,14 +425,14 @@
   </style>
 </head>
 <body>
+  <div class="page-title">模型列表</div>
+  <div class="filter-bar">
+    <label for="model-type-select">模型类型</label>
+    <select id="model-type-select"></select>
+    <span class="model-desc-text" id="model-desc-text"></span>
+  </div>
   <main>
-    <div class="page-title">模型列表</div>
-    <div class="filter-bar">
-      <label for="model-type-select">模型类型</label>
-      <select id="model-type-select"></select>
-      <span class="model-desc-text" id="model-desc-text"></span>
-    </div>
-    <table id="model-table">
+    <div class="table-wrapper"><table id="model-table">
       <thead>
         <tr>
           <th>模型名称</th>
@@ -435,7 +453,7 @@
           </td>
         </tr>
       </tbody>
-    </table>
+    </table></div>
     <div id="log-panel" class="log-panel">
       <div class="log-panel-header">
         <div class="log-panel-title">📋 模型启动日志 - <span id="log-model-id"></span></div>
