@@ -30,7 +30,7 @@
 | `model_chat.rs` | **零命令** — 纯事件驱动 |
 
 ## 关键注意事项
-- **MTP 自动检测**：如果模型文件名包含 "mtp"（不区分大小写），`start_model` 会自动追加 `--spec-draft-n-max 3 --spec-type draft-mtp`。设置 `params.spec_type = "none"` 可禁用。
+- **MTP 自动检测**：如果模型文件名包含 "mtp"（不区分大小写），`start_model` 会自动追加 `--spec-draft-n-max 2 --spec-type draft-mtp`。设置 `params.spec_type = "none"` 可禁用。
 - **HuggingFace 镜像**：`download_model` 会自动将所有 `huggingface.co` 链接替换为 `hf-mirror.com`。
 - **断点续传**：使用 `.part` 后缀 + HTTP `Range` 头；`scan_part_files` 列出未完成的下载。
 - **硬件优先级**：`hwinfo` 插件数据覆盖 `sysinfo`。

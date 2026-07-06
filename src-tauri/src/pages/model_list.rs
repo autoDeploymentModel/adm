@@ -870,7 +870,7 @@ pub async fn start_model(
             args.extend(["--spec-type".to_string(), spec_type.clone()]);
         }
     } else if model_id.to_lowercase().contains("mtp") {
-            args.extend(["--spec-draft-n-max".to_string(), "3".to_string()]);
+            args.extend(["--spec-draft-n-max".to_string(), "2".to_string()]);
             args.extend(["--spec-type".to_string(), "draft-mtp".to_string()]);
             app.emit(
                 "model-log",

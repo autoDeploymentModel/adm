@@ -845,7 +845,7 @@ function navigateTo(page) {
 | <br />  | 频率惩罚 | `--frequency-penalty` | 0.0 |
 | **推理**  | 推理模式            | `--reasoning`      | auto      |
 | **推测解码** | MTP 推测解码类型 | `--spec-type` | 自动检测（文件名含 MTP 时设为 draft-mtp） |
-| <br />  | MTP 推测 token 数 | `--spec-draft-n-max` | 自动检测（文件名含 MTP 时设为 3） |
+| <br />  | MTP 推测 token 数 | `--spec-draft-n-max` | 自动检测（文件名含 MTP 时设为 2） |
 | **服务**  | 端口              | `--port`           | 8080      |
 | <br />  | 监听地址            | `--host`           | 127.0.0.1 |
 
@@ -1083,7 +1083,7 @@ pub struct AppState {
   ├── 4. 读取 config.json → 获取 LaunchParams
   │
   ├── 5. 构建命令行参数（见参数配置表）
-  │         └── MTP 自动检测：若模型文件名包含 "mtp"（大小写不敏感），自动追加 --spec-draft-n-max 3 --spec-type draft-mtp
+  │         └── MTP 自动检测：若模型文件名包含 "mtp"（大小写不敏感），自动追加 --spec-draft-n-max 2 --spec-type draft-mtp
   │             优先使用 params.spec_type 手动配置（设为 "none" 可禁用）
   │
   ├── 6. 静默启动（Windows 隐藏控制台窗口）
