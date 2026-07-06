@@ -214,23 +214,6 @@
       margin-top: 2px;
     }
 
-    .btn-save {
-      background: #6c63ff;
-      color: #fff;
-      border: none;
-      padding: 10px 28px;
-      border-radius: 8px;
-      font-size: 14px;
-      font-weight: 500;
-      cursor: pointer;
-      transition: background 0.2s;
-      margin-top: 16px;
-    }
-
-    .btn-save:hover {
-      background: #5a52d5;
-    }
-
     .btn-reset {
       background: rgba(255, 255, 255, 0.1);
       color: #e0e0e0;
@@ -451,7 +434,7 @@
                   <option value="creative">创意写作</option>
                   <option value="code">写代码 / 编程（推荐）</option>
                 </select>
-                <div class="param-desc">选择后自动填充并保存采样参数，可手动微调后点保存</div>
+                <div class="param-desc">选择后自动填充并保存采样参数，可手动微调后自动保存</div>
               </div>
             </div>
           </div>
@@ -796,7 +779,6 @@
             </div>
           </div>
 
-          <button class="btn-save" onclick="saveParams()">保存设置</button>
           <button class="btn-reset" onclick="resetParams()">恢复默认</button>
         </div>
 
@@ -1125,6 +1107,7 @@
         host: "127.0.0.1",
       };
       fillFormFromParams(defaults);
+      autoSave();
     }
 
     document.getElementById("n_gpu_layers").addEventListener("change", function () {
@@ -1134,7 +1117,31 @@
       } else {
         customRow.style.display = "none";
       }
+      autoSave();
     });
+
+    function autoSave() {
+      saveParams();
+    }
+
+    function setupAutoSave() {
+      var paramIds = [
+        "ctx_size", "n_predict", "batch_size", "ubatch_size",
+        "n_gpu_layers_custom", "threads", "threads_batch",
+        "flash_attn", "cache_type_k", "cache_type_v",
+        "mlock", "mmap",
+        "temperature", "top_k", "top_p", "min_p",
+        "repeat_penalty", "repeat_last_n",
+        "dry_multiplier", "dry_allowed_length", "dry_penalty_last_n",
+        "presence_penalty", "frequency_penalty",
+        "reasoning", "port", "host"
+      ];
+      for (var i = 0; i < paramIds.length; i++) {
+        var el = document.getElementById(paramIds[i]);
+        if (el) el.addEventListener("change", autoSave);
+      }
+    }
+    setupAutoSave();
 
     async function loadVersionInfo() {
       try {
