@@ -650,9 +650,21 @@ pub async fn start_agent_terminal(
         })
         .map_err(|e| format!("创建终端失败: {}", e))?;
 
-    // 构造要启动的 shell 命令
+    // 读取工作目录（Windows 直接作为 admAgent 的 --cwd 参数；macOS 走 zsh 启动命令时使用）
+    let workdir = load_agent_workdir(&app);
+
+    // 构造要启动的命令。
+    // Windows：直接启动 admAgent.exe，不再经过 powershell.exe。
+    // 原因：release 版 adm.exe 带 #![windows_subsystem = "windows"]（无控制台），
+    // portable-pty 的 ConPTY 在「无控制台父进程」中启动 powershell 时，powershell
+    // 初始化失败并弹 0xc0000142 错误。直接以 admAgent 作为 PTY 子进程即可规避。
     let mut cmd = if cfg!(target_os = "windows") {
-        CommandBuilder::new("powershell.exe")
+        let mut c = CommandBuilder::new(agent_path.clone());
+        if !workdir.is_empty() {
+            c.arg("--cwd");
+            c.arg(&workdir);
+        }
+        c
     } else {
         let shell = std::env::var("SHELL")
             .ok()
@@ -716,22 +728,16 @@ pub async fn start_agent_terminal(
         });
     }
 
-    // 自动在终端中启动 admAgent 工具（若配置了工作目录则附加 --cwd 参数）
-    let workdir = load_agent_workdir(&app);
-    let launch = if cfg!(target_os = "windows") {
-        if workdir.is_empty() {
-            format!("& \"{}\"\r\n", agent_path.display())
-        } else {
-            format!("& \"{}\" --cwd \"{}\"\r\n", agent_path.display(), workdir)
-        }
-    } else {
-        if workdir.is_empty() {
+    // 自动在终端中启动 admAgent 工具。
+    // Windows：上面已直接以 admAgent 作为 PTY 子进程启动，无需再向 shell 写启动命令。
+    // macOS：走 zsh -i，需要显式写入启动命令。
+    #[cfg(target_os = "macos")]
+    {
+        let launch = if workdir.is_empty() {
             format!("\"{}\"\r\n", agent_path.display())
         } else {
             format!("\"{}\" --cwd \"{}\"\r\n", agent_path.display(), workdir)
-        }
-    };
-    {
+        };
         let mut s = state
             .agent_session
             .lock()

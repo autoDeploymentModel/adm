@@ -1341,8 +1341,8 @@ python scripts/generate-icons.py
 
 - `agent.html` 使用 `xterm.js`（已离线内置在 `src/vendor/xterm/`）作为终端界面。
 - `start_agent_terminal` 通过 `portable-pty` 创建 PTY：
-  - **Windows**：启动 `powershell.exe`。
-  - **macOS**：启动系统默认 shell（`dirs::shell()`，通常为 `/bin/zsh`，以 `-i` 交互模式运行）。
+  - **Windows**：**直接启动 `admAgent.exe`**（不再经过 `powershell.exe`）。原因：release 版 `adm.exe` 带 `#![windows_subsystem = "windows"]`（无控制台），`portable-pty` 的 ConPTY 在「无控制台父进程」中拉起 `powershell.exe` 会触发 `0xc0000142` 初始化失败；直接以 admAgent 作为 PTY 子进程规避该问题。`--cwd` 作为参数传入。
+  - **macOS**：启动系统默认 shell（`$SHELL`，通常为 `/bin/zsh`，以 `-i` 交互模式运行），再写入启动命令运行 admAgent。
 - PTY 输出经后台线程读取后以 base64 通过 `agent-terminal-data` 事件推送到前端；前端按键经 `agent_terminal_input` 写回 PTY。
 - 终端就绪后自动向 shell 发送启动命令运行 `admAgent` 工具（同时启动终端与 `admAgent`）。
 - **启动前自动生成 `admAgent.json`**：`ensure_adm_agent_config` 读取 ADM 配置文件（`config.json`）中 `launch_params.ctx_size` 作为上下文大小，于用户目录 `<home>/.config/admAgent/admAgent.json` 生成（或更新）配置。`context_window` 取该值，`default_max_tokens` 取其 30%（四舍五入）；若文件已存在则仅就地更新这两个字段，尽量保留其它内容。`ctx_size` 缺失或非法时回退默认 `context_window = 128000`。

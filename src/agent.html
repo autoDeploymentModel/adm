@@ -62,6 +62,17 @@
     }
     #terminal { width: 100%; height: 100%; }
 
+    /* Agent 终端不需要纵向滚动条，并禁止鼠标滚动：viewport 改为 hidden，隐藏滚动条 */
+    .xterm .xterm-viewport {
+      overflow-y: hidden !important;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+    .xterm .xterm-viewport::-webkit-scrollbar {
+      width: 0;
+      height: 0;
+    }
+
     #loading-overlay {
       position: absolute;
       inset: 0;
@@ -516,6 +527,16 @@
       fitAddon = new FitAddon.FitAddon();
       term.loadAddon(fitAddon);
       term.open(document.getElementById("terminal"));
+
+      // 禁止鼠标滚动：xterm 自身监听 wheel 事件滚动缓冲区，仅靠 CSS overflow:hidden 不够，
+      // 需在捕获阶段拦截 wheel 事件并阻止默认/冒泡，使终端始终停在最新输出。
+      var termEl = document.getElementById("terminal");
+      if (termEl) {
+        termEl.addEventListener("wheel", function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+        }, { capture: true, passive: false });
+      }
 
       // 用 ResizeObserver 兜底尺寸适配：容器（首次显示、窗口缩放、布局变化）任意尺寸变化都重新 fit。
       // observe 后会立即回调一次当前尺寸 —— 首次进入时本页面已加载、容器已可见，可拿到正确宽度，
