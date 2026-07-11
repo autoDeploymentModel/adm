@@ -932,6 +932,8 @@ pub async fn start_model(
         let mut port_lock = state.running_port.lock().map_err(|e| e.to_string())?;
         *port_lock = Some(port);
     }
+    state.set_model_running(true);
+    state.bump_model_generation(); // 模型重启代次 +1，供 Agent 页判断是否需要重启 admAgent
 
     app.emit(
         "model-started",
@@ -1001,6 +1003,7 @@ pub async fn start_model(
             *state.running_process.lock().unwrap_or_else(|e| e.into_inner()) = None;
             *state.running_model_id.lock().unwrap_or_else(|e| e.into_inner()) = None;
             *state.running_port.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            state.set_model_running(false);
         }
 
         app_clone
@@ -1051,8 +1054,15 @@ pub async fn stop_model(state: tauri::State<'_, AppState>) -> Result<(), String>
         let mut port_lock = state.running_port.lock().map_err(|e| e.to_string())?;
         *port_lock = None;
     }
+    state.set_model_running(false);
 
     Ok(())
+}
+
+/// 查询是否有模型已成功启动（全局标识），用于进入 Agent 页前的判断
+#[tauri::command]
+pub async fn is_model_running(state: tauri::State<'_, AppState>) -> Result<bool, String> {
+    Ok(state.is_model_running())
 }
 
 #[tauri::command]

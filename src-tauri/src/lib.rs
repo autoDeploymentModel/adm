@@ -3,7 +3,7 @@ mod common;
 mod pages;
 
 use app_state::AppState;
-use pages::{index, model_list, model_image, settings};
+use pages::{agent, index, model_list, model_image, settings};
 
 use tauri::Manager;
 
@@ -34,6 +34,9 @@ pub fn run() {
                             .spawn();
                     }
                 }
+
+                // 关闭 Agent 终端会话
+                agent::kill_agent_session(&state);
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -49,6 +52,7 @@ pub fn run() {
             model_list::start_model,
             model_list::stop_model,
             model_list::get_model_status,
+            model_list::is_model_running,
             model_list::get_downloading_models,
             model_list::get_downloading_phases,
             // model_image.rs
@@ -63,6 +67,20 @@ pub fn run() {
             settings::get_app_version,
             settings::get_llamacpp_version,
             settings::delete_llamacpp,
+            // agent.rs
+            agent::get_platform_os,
+            agent::prepare_adm_agent_config,
+            agent::check_adm_agent,
+            agent::download_adm_agent,
+            agent::check_adm_agent_update,
+            agent::download_adm_agent_update,
+            agent::get_agent_workdir,
+            agent::set_agent_workdir,
+            agent::get_agent_status,
+            agent::start_agent_terminal,
+            agent::agent_terminal_input,
+            agent::agent_terminal_resize,
+            agent::stop_agent_terminal,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

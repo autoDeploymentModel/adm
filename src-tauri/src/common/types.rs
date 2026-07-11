@@ -116,6 +116,8 @@ pub struct RemoteModel {
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
 pub struct Settings {
     pub launch_params: LaunchParams,
+    #[serde(default)]
+    pub agent_workdir: String,
 }
 
 // ===== 自动更新相关结构 =====
@@ -132,6 +134,8 @@ pub struct UpdateInfo {
     pub version: String,
     #[serde(rename = "llamacppVersion")]
     pub llamacpp_version: Option<String>,
+    #[serde(rename = "admAgentVersion")]
+    pub adm_agent_version: Option<String>,
     pub windows: Option<PlatformUpdate>,
     #[serde(rename = "mac")]
     pub mac_os: Option<PlatformUpdate>,
@@ -149,6 +153,14 @@ pub struct UpdateCheckResult {
     pub llamacpp_local_version: Option<String>,
     pub llamacpp_download_url: Option<String>,
     pub vc_redist_installed: bool,
+}
+
+#[derive(Serialize, Clone)]
+pub struct AdmAgentUpdateCheck {
+    pub needs_update: bool,
+    pub remote_version: Option<String>,
+    pub local_version: Option<String>,
+    pub download_url: Option<String>,
 }
 
 #[derive(Serialize, Clone)]

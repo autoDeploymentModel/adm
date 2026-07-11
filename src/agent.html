@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ADM · Agent 终端</title>
+  <link rel="stylesheet" href="vendor/xterm/xterm.css">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: #13131f;
+      color: #e0e0e0;
+      overflow: hidden;
+    }
+    #app { display: flex; flex-direction: column; height: 100vh; }
+
+    #top-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: #0f3460;
+      padding: 8px 16px;
+      font-size: 13px;
+      border-bottom: 1px solid #1a1a3e;
+      flex-shrink: 0;
+    }
+    #top-bar .title {
+      font-weight: 600;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    #top-bar .title .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #6c63ff;
+      box-shadow: 0 0 8px #6c63ff;
+    }
+    #top-bar .spacer { flex: 1; }
+    #top-bar button {
+      background: rgba(255,255,255,0.08);
+      color: #e0e0e0;
+      border: 1px solid rgba(255,255,255,0.12);
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    #top-bar button:hover { background: rgba(255,255,255,0.18); }
+    #top-bar button.primary { background: #6c63ff; border-color: #6c63ff; color: #fff; }
+    #top-bar button.primary:hover { background: #5a52d5; }
+
+    #terminal-wrap {
+      flex: 1;
+      position: relative;
+      background: #13131f;
+      padding: 8px 10px;
+      overflow: hidden;
+    }
+    #terminal { width: 100%; height: 100%; }
+
+    #loading-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(19,19,31,0.92);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      z-index: 10;
+    }
+    #loading-overlay.hidden { display: none !important; }
+    #loading-overlay .spinner {
+      width: 28px; height: 28px;
+      border: 3px solid #2a2a4e;
+      border-top-color: #6c63ff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    #loading-overlay .loading-text { color: #a0a0c0; font-size: 14px; text-align: center; padding: 0 20px; }
+    #loading-overlay .error-text { color: #ff6b6b; font-size: 14px; text-align: center; padding: 0 20px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* 工作目录选择弹窗 */
+    #workdir-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(10,10,20,0.75);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 20;
+    }
+    #workdir-overlay.show { display: flex; }
+    .workdir-dialog {
+      width: 440px;
+      max-width: 90%;
+      background: #1b1b2e;
+      border: 1px solid #2a2a4e;
+      border-radius: 10px;
+      padding: 22px 24px;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+    }
+    .workdir-dialog h3 {
+      margin-bottom: 6px;
+      font-size: 15px;
+      color: #fff;
+    }
+    .workdir-dialog .wd-desc {
+      font-size: 12px;
+      color: #9090b0;
+      margin-bottom: 16px;
+      line-height: 1.5;
+    }
+    .workdir-row {
+      display: flex;
+      gap: 8px;
+    }
+    .workdir-row input {
+      flex: 1;
+      background: #13131f;
+      border: 1px solid #2a2a4e;
+      color: #e0e0e0;
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-size: 13px;
+      outline: none;
+    }
+    .workdir-row input:focus { border-color: #6c63ff; }
+    .workdir-row button {
+      background: rgba(255,255,255,0.08);
+      color: #e0e0e0;
+      border: 1px solid rgba(255,255,255,0.12);
+      padding: 0 14px;
+      border-radius: 6px;
+      font-size: 13px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .workdir-row button:hover { background: rgba(255,255,255,0.18); }
+    .workdir-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 20px;
+    }
+    .workdir-actions button {
+      padding: 8px 18px;
+      border-radius: 6px;
+      font-size: 13px;
+      cursor: pointer;
+      border: 1px solid rgba(255,255,255,0.12);
+    }
+    .workdir-actions .btn-cancel {
+      background: transparent;
+      color: #b0b0c8;
+    }
+    .workdir-actions .btn-ok {
+      background: #6c63ff;
+      border-color: #6c63ff;
+      color: #fff;
+    }
+    .workdir-actions .btn-ok:hover { background: #5a52d5; }
+    .workdir-actions .btn-cancel:hover { background: rgba(255,255,255,0.08); }
+    .workdir-error { color: #ff6b6b; font-size: 12px; margin-top: 10px; min-height: 14px; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="top-bar">
+      <div class="title"><span class="dot"></span>Agent 终端</div>
+      <div class="spacer"></div>
+      <button onclick="openWorkdirDialog()">设置工作目录</button>
+      <button class="primary" onclick="stopAndHome()">停止并返回</button>
+    </div>
+    <div id="terminal-wrap">
+      <div id="terminal"></div>
+      <div id="loading-overlay">
+        <div class="spinner"></div>
+        <div class="loading-text">正在启动终端并加载 admAgent…</div>
+      </div>
+    </div>
+
+    <!-- 工作目录选择弹窗 -->
+    <div id="workdir-overlay">
+      <div class="workdir-dialog">
+        <h3>设置 Agent 工作目录</h3>
+        <div class="wd-desc">请设置您的工作目录</div>
+        <div class="workdir-row">
+          <input id="workdir-input" type="text" placeholder="例如：D:\projects 或 /Users/me/workspace" autocomplete="off" />
+          <button onclick="browseWorkdir()">浏览…</button>
+        </div>
+        <div class="workdir-error" id="workdir-error"></div>
+        <div class="workdir-actions">
+          <button class="btn-cancel" id="workdir-cancel" onclick="closeWorkdirDialog(true)">取消</button>
+          <button class="btn-ok" onclick="confirmWorkdir()">确定</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="vendor/xterm/xterm.js"></script>
+  <script src="vendor/xterm/addon-fit.js"></script>
+  <script>
+    // ===== Tauri IPC（iframe 兼容 macOS 回退到父窗口）=====
+    var invoke = (function () {
+      var invokeId = 0, pending = {};
+      window.addEventListener("message", function (e) {
+        if (e.data && e.data.type === "__invoke_result__") {
+          var p = pending[e.data.id];
+          if (p) {
+            if (e.data.error) p.reject(new Error(e.data.error));
+            else p.resolve(e.data.result);
+            delete pending[e.data.id];
+          }
+        }
+      });
+      function resolveDirect() {
+        return window.__TAURI__?.core?.invoke
+          || window.__TAURI_INTERNALS__?.invoke
+          || window.parent?.__TAURI_INTERNALS__?.invoke
+          || window.parent?.__TAURI__?.core?.invoke;
+      }
+      var direct = resolveDirect();
+      if (typeof direct === "function") return direct;
+      return function (cmd, args) {
+        var fn = resolveDirect();
+        if (fn) return fn(cmd, args);
+        return new Promise(function (resolve, reject) {
+          var id = ++invokeId;
+          pending[id] = { resolve: resolve, reject: reject };
+          window.parent.postMessage({ type: "__invoke__", cmd: cmd, args: args, id: id }, "*");
+          setTimeout(function () {
+            if (pending[id]) { delete pending[id]; reject(new Error("IPC 调用超时")); }
+          }, 30000);
+        });
+      };
+    })();
+
+    // ===== 编解码工具 =====
+    function base64ToBytes(b64) {
+      var bin = atob(b64);
+      var bytes = new Uint8Array(bin.length);
+      for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return bytes;
+    }
+    function bytesToBase64(bytes) {
+      var bin = "";
+      var chunk = 0x8000;
+      for (var i = 0; i < bytes.length; i += chunk) {
+        bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+      }
+      return btoa(bin);
+    }
+    var encoder = new TextEncoder();
+
+    // ===== 终端实例 =====
+    var term, fitAddon;
+    var terminalStarted = false;
+    var startRequested = false;
+    // 上次启动 admAgent 时记录到的模型代次；只有模型被重启（代次变化）或进程退出时，
+    // 再次进入 Agent 页才会重启 admAgent。上下文配置变化但模型未重启 → 不重启。
+    var currentModelGen = null;
+
+    function goHome() {
+      window.parent.postMessage({ type: "navigate", page: "model_list.html" }, "*");
+    }
+
+    // ===== 通过 postMessage 接收主窗口转发的 Tauri 事件（与 model_list.html 相同模式）=====
+    function setupMessageListener() {
+      window.addEventListener("message", function (event) {
+        var data = event.data;
+        if (!data || !data.type) return;
+
+        switch (data.type) {
+          case "agent-terminal-data":
+            if (data.payload && data.payload.data && term) {
+              term.write(base64ToBytes(data.payload.data));
+            }
+            break;
+          case "agent-terminal-exit":
+            if (term) {
+              term.write("\r\n\x1b[33m[admAgent 进程已退出，可重新进入 Agent 页面启动]\x1b[0m\r\n");
+            }
+            break;
+          case "agent-terminal-ready":
+            hideLoading();
+            if (term) {
+              // PTY 已就绪：重新 fit 并把实际列/行同步给后端（后端初始固定 120×30，需在此纠正为真实宽度）
+              try { fitAddon.fit(); } catch (_) {}
+              if (term.rows > 0 && term.cols > 0) {
+                invoke("agent_terminal_resize", { rows: term.rows, cols: term.cols }).catch(function () {});
+              }
+              term.focus();
+            }
+            window.parent.postMessage({ type: "agent-focus-me" }, "*");
+            break;
+          case "agent-resize":
+            // 父窗口切换显示 Agent 页面后，重新自适应尺寸并聚焦
+            if (term) {
+              try { fitAddon.fit(); } catch (_) {}
+              if (term.rows > 0 && term.cols > 0) {
+                invoke("agent_terminal_resize", { rows: term.rows, cols: term.cols }).catch(function () {});
+              }
+              term.focus();
+            }
+            // 每次显示页面时：检测模型上下文是否变化，变化则先停旧终端再重启 admAgent；否则仅在尚未运行时启动
+            handleEnterAgent();
+            break;
+        }
+      });
+    }
+
+    function hideLoading() {
+      var ov = document.getElementById("loading-overlay");
+      if (ov) ov.classList.add("hidden");
+    }
+
+    function showError(msg) {
+      var ov = document.getElementById("loading-overlay");
+      if (ov) {
+        ov.innerHTML = '<div class="error-text">' + msg + '</div>';
+      }
+    }
+
+    // ===== 启动终端（先检查工作目录）=====
+    async function startTerminal() {
+      if (startRequested) return;
+      startRequested = true;
+      // 进入页面先检查工作目录是否已配置
+      try {
+        var wd = await invoke("get_agent_workdir");
+        if (!wd || !wd.trim()) {
+          // 工作目录为空：必须先设置（不启动终端，允许下次重新触发）
+          startRequested = false;
+          hideLoading();
+          openWorkdirDialog(true);
+          return;
+        }
+      } catch (e) {
+        startRequested = false;
+        hideLoading();
+        openWorkdirDialog(true);
+        return;
+      }
+      startAgentNow();
+    }
+
+    // 每次进入 Agent 页面时调用：综合判断是否需要 (重)启动 admAgent。
+    // 判据（后端 get_agent_status 为权威来源，不依赖前端可能过期的标记）：
+    //   - 进程已退出（running=false，含崩溃）：需要重启
+    //   - 模型代次变化（模型被重启过）：需要重启
+    //   - 二者都没变（哪怕只是切换页面，或仅改了上下文配置但没重启模型）：保持原状，不重启
+    async function handleEnterAgent() {
+      try {
+        var st = await invoke("get_agent_status");
+        var alive = !!(st && st.running);
+        var gen = st ? st.model_generation : null;
+
+        var keep =
+          alive &&
+          terminalStarted &&
+          gen === currentModelGen;
+        if (keep) {
+          // 进程存活且模型代次未变 → 不触碰原终端（上下文配置变化但模型未重启也不重启）
+          return;
+        }
+
+        // 其余情形（进程已退出 / 模型重启过 / 从未启动）一律重新启动。
+        // start_agent_terminal 内部会先清理旧会话（若存在）再拉起新 admAgent，无需手动 stop。
+        terminalStarted = false;
+        startRequested = false;
+        startTerminal();
+      } catch (e) {
+        // 查询失败则兜底：若当前未运行则尝试启动
+        if (!terminalStarted && !startRequested) {
+          terminalStarted = false;
+          startRequested = false;
+          startTerminal();
+        }
+      }
+    }
+
+    // 真正启动终端（工作目录已确认）
+    async function startAgentNow() {
+      var ov = document.getElementById("loading-overlay");
+      if (ov) {
+        ov.classList.remove("hidden");
+        ov.innerHTML = '<div class="spinner"></div><div class="loading-text">正在启动终端并加载 admAgent…</div>';
+      }
+      // 每次 (重)启动前清空终端旧内容（含上次的「进程已退出」提示）
+      if (term) { try { term.reset(); } catch (_) {} }
+      try {
+        // 关键：先按当前容器真实尺寸 fit，拿到真实 rows/cols，在「创建 PTY」时就传给后端。
+        // 这样 admAgent 启动时读到的 PTY 宽度就是真实显示宽度，其 TUI（右边栏上下文实时统计）
+        // 才不会按默认 120 列错位。（之前 PTY 写死 120 列，admAgent 按 120 布局，而实际显示更宽，
+        // 且事后 agent_terminal_resize 于启动后才调用，admAent 已按旧宽度布局，故显示异常。）
+        try { fitAddon.fit(); } catch (_) {}
+        var initRows = term.rows > 0 ? term.rows : 30;
+        var initCols = term.cols > 0 ? term.cols : 120;
+
+        // 15 秒超时：防止后端 PTY 创建或进程 spawn 卡死
+        await Promise.race([
+          invoke("start_agent_terminal", { rows: initRows, cols: initCols }),
+          new Promise(function (_, reject) {
+            setTimeout(function () { reject(new Error("终端启动超时（15秒）")); }, 15000);
+          })
+        ]);
+        hideLoading();
+        terminalStarted = true;
+        // 记录本次启动时的模型代次，模型重启后代次变化将触发 admAgent 重启
+        invoke("get_agent_status")
+          .then(function (st) { if (st) currentModelGen = st.model_generation; })
+          .catch(function () {});
+        // 兜底：再 fit + resize 一次（布局可能又变化），确保 PTY 与显示一致
+        try { fitAddon.fit(); } catch (_) {}
+        if (term.rows > 0 && term.cols > 0) {
+          invoke("agent_terminal_resize", { rows: term.rows, cols: term.cols }).catch(function () {});
+        }
+      } catch (err) {
+        showError("终端启动失败：" + err);
+      }
+    }
+
+    async function stopAndHome() {
+      try { await invoke("stop_agent_terminal", {}); } catch (_) {}
+      terminalStarted = false;
+      startRequested = false;
+      goHome();
+    }
+
+    // ===== 工作目录选择弹窗 =====
+    var workdirRequired = false;
+
+    function openWorkdirDialog(required) {
+      workdirRequired = !!required;
+      var overlay = document.getElementById("workdir-overlay");
+      var input = document.getElementById("workdir-input");
+      var cancelBtn = document.getElementById("workdir-cancel");
+      var err = document.getElementById("workdir-error");
+      if (err) err.textContent = "";
+      // 预填当前已配置的值
+      try {
+        invoke("get_agent_workdir").then(function (wd) {
+          if (input && wd) input.value = wd;
+        }).catch(function () {});
+      } catch (_) {}
+      if (cancelBtn) cancelBtn.style.display = workdirRequired ? "none" : "";
+      if (overlay) overlay.classList.add("show");
+      if (input) setTimeout(function () { input.focus(); }, 50);
+    }
+
+    function closeWorkdirDialog() {
+      var overlay = document.getElementById("workdir-overlay");
+      if (overlay) overlay.classList.remove("show");
+    }
+
+    async function browseWorkdir() {
+      try {
+        var result = await invoke("plugin:dialog|open", {
+          options: {
+            directory: true,
+            multiple: false,
+            title: "选择 Agent 工作目录"
+          }
+        });
+        if (result && typeof result === "string") {
+          var input = document.getElementById("workdir-input");
+          if (input) input.value = result;
+        }
+      } catch (e) {
+        var err = document.getElementById("workdir-error");
+        if (err) err.textContent = "打开选择器失败：" + e;
+      }
+    }
+
+    async function confirmWorkdir() {
+      var input = document.getElementById("workdir-input");
+      var err = document.getElementById("workdir-error");
+      var val = input ? input.value.trim() : "";
+      if (!val) {
+        if (err) err.textContent = "工作目录不能为空";
+        return;
+      }
+      try {
+        await invoke("set_agent_workdir", { workdir: val });
+        closeWorkdirDialog();
+        // 重启终端以应用新的工作目录（stop 在尚未启动时为 no-op）
+        try { await invoke("stop_agent_terminal", {}); } catch (_) {}
+        terminalStarted = false;
+        startAgentNow();
+      } catch (e) {
+        if (err) err.textContent = "保存失败：" + e;
+      }
+    }
+
+    // ===== 初始化 =====
+    function initTerminal() {
+      term = new Terminal({
+        fontFamily: 'Menlo, Consolas, "DejaVu Sans Mono", monospace',
+        fontSize: 13,
+        cursorBlink: true,
+        theme: {
+          background: "#13131f",
+          foreground: "#e0e0e0",
+          cursor: "#6c63ff",
+          selectionBackground: "rgba(108,99,255,0.3)",
+          black: "#13131f",
+          brightBlack: "#555",
+        },
+      });
+      fitAddon = new FitAddon.FitAddon();
+      term.loadAddon(fitAddon);
+      term.open(document.getElementById("terminal"));
+
+      // 用 ResizeObserver 兜底尺寸适配：容器（首次显示、窗口缩放、布局变化）任意尺寸变化都重新 fit。
+      // observe 后会立即回调一次当前尺寸 —— 首次进入时本页面已加载、容器已可见，可拿到正确宽度，
+      // 不依赖任何可能被错过的一次性事件。PTY 未建时 resize 为 no-op，建好后再由 startAgentNow 补一次。
+      var roWrap = document.getElementById("terminal-wrap");
+      if (roWrap && typeof ResizeObserver !== "undefined") {
+        var roTimer = null;
+        var ro = new ResizeObserver(function () {
+          if (roTimer) clearTimeout(roTimer);
+          roTimer = setTimeout(function () {
+            try { fitAddon.fit(); } catch (_) {}
+            if (term.rows > 0 && term.cols > 0) {
+              invoke("agent_terminal_resize", { rows: term.rows, cols: term.cols }).catch(function () {});
+            }
+          }, 120);
+        });
+        ro.observe(roWrap);
+      }
+
+      // iframe 内嵌时键盘焦点容易丢失，主动聚焦 + 点击聚焦
+      term.focus();
+      window.parent.postMessage({ type: "agent-focus-me" }, "*");
+      var termWrap = document.getElementById("terminal-wrap");
+      if (termWrap) {
+        termWrap.addEventListener("mousedown", function () { term.focus(); window.parent.postMessage({ type: "agent-focus-me" }, "*"); });
+        termWrap.tabIndex = -1;
+      }
+
+      term.onData(function (data) {
+        invoke("agent_terminal_input", { data: bytesToBase64(encoder.encode(data)) })
+          .catch(function (e) {
+            // 输入失败时在终端内短暂提示，便于排查
+            try { term.write("\r\n\x1b[31m[输入发送失败: " + e + "]\x1b[0m\r\n"); } catch (_) {}
+          });
+      });
+
+      // 监听主窗口通过 postMessage 转发的 Tauri 事件
+      setupMessageListener();
+
+      window.addEventListener("resize", function () {
+        try {
+          fitAddon.fit();
+          if (term.rows > 0 && term.cols > 0) {
+            invoke("agent_terminal_resize", { rows: term.rows, cols: term.cols }).catch(function () {});
+          }
+        } catch (_) {}
+      });
+
+      startTerminal();
+    }
+
+    window.addEventListener("DOMContentLoaded", initTerminal);
+  </script>
+</body>
+</html>

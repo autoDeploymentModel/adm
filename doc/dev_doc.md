@@ -47,7 +47,7 @@
 | **硬件监控**        | 实时显示内存/显存/CPU 信息（hwinfo 插件增强检测）                  |
 | **模型交互**        | 内嵌 iframe 加载 llama-server 的 Web UI，自动轮询检测服务就绪    |
 | **参数配置**        | 可视化配置 llama.cpp 启动参数，支持保存/加载/恢复默认                |
-| **自动更新**        | 应用版本 → VC++ 运行库(Windows) → llamacpp 二进制（有序三重检查） |
+| **自动更新**        | 启动时：应用版本 → VC++ 运行库(Windows) → llamacpp 二进制（有序三重检查）；admAgent 版本检查改在点击底部栏 Agent 按钮时触发（仅 Windows） |
 | **llamacpp 管理** | 自动检测硬件并下载匹配的 llama-server 二进制                    |
 
 ***
@@ -384,7 +384,7 @@ AppState {
 | `RemoteModel`          | 远程模型数据：model\_id、model\_url、model\_size、need\_ram、support\_tools/reasoning/images、model\_diffusion、model\_vae |
 | `Settings`             | 用户配置包装：`{ launch_params: LaunchParams }`                                            |
 | `PartFileProgress`     | 断点续传进度：model\_id、existing\_size                                                     |
-| `UpdateInfo`           | 远程更新信息：版本号、llamacpp 版本、各平台下载配置                                                      |
+| `UpdateInfo`           | 远程更新信息：版本号、llamacpp 版本、admAgent 版本、各平台下载配置                                                      |
 | `UpdateCheckResult`    | 更新检查结果：应用/llamacpp 是否有更新、下载地址、VC++ 运行库状态、更新日志                                       |
 | `HardwareDetectResult` | 硬件检测结果：os、gpu\_vendor、gpu\_name、nvidia\_series                                      |
 
@@ -425,7 +425,7 @@ AppState {
 | Command                         | 签名                                              | 说明                                              |
 | ------------------------------- | ----------------------------------------------- | ----------------------------------------------- |
 | `get_system_info`               | `(state: State<AppState>) → Result<SystemInfo>` | 获取 RAM/VRAM/CPU 信息，调 `platform::get_gpu_info()` |
-| `check_update`                  | `(app: AppHandle) → Result<UpdateCheckResult>`  | 检查应用版本、VC++ 运行库(Windows)、llamacpp 更新          |
+| `check_update`                  | `(app: AppHandle) → Result<UpdateCheckResult>`  | 检查应用版本、VC++ 运行库(Windows)、llamacpp 更新（admAgent 不在此处检查）          |
 | `download_and_extract_llamacpp` | `(app: AppHandle, url: String) → Result<()>`    | 下载并解压 llamacpp（含断点续传）                           |
 
 **辅助函数**：
@@ -633,12 +633,15 @@ start_model(model_id, params)
   │
   ├── 6. 监听 message 事件，接收 iframe 子页面的 navigate 请求
   │
-  └── 7. 延迟 3 秒后静默 check_update → 有新版本才弹窗
-          ① 先检查系统版本更新 → 有更新则弹窗提示
-          ② 用户关闭系统更新弹窗后 → 检查 VC++ 运行库（仅 Windows）
-          ③ 若 VC++ 运行库未安装 → 提示下载安装
-          ④ VC++ 安装完成后 → 检查 llamacpp 版本/下载
-          ⑤ 若系统无更新且 VC++ 已安装 → 直接检查 llamacpp 版本/下载
+  └── 7. 延迟 3 秒后静默 check_update → 有新版本才弹窗（不含 admAgent；admAgent 版本检查在点击底部栏 Agent 按钮时触发）
+      ① 先检查系统版本更新 → 有更新则弹窗提示
+      ② 用户关闭系统更新弹窗后 → 检查 VC++ 运行库（仅 Windows）
+      ③ 若 VC++ 运行库未安装 → 提示下载安装
+      ④ VC++ 安装完成后 → 检查 llamacpp 版本/下载
+      ⑤ 若系统无更新且 VC++ 已安装 → 直接检查 llamacpp 版本/下载
+      ⑥ llamacpp 处理完成后 → 检查 admAgent 版本（仅 Windows）：
+        本地执行 `admAgent -v` 解析版本，与 `update.json` 的 `admAgentVersion` 对比，
+        不同则下载 `https://adm.tuduoduo.top/agent/win/admAgent.exe` 并替换
 ```
 
 #### 硬件信息栏
@@ -974,8 +977,9 @@ ModelStatus    — running: bool, model_id, pid, port
 LaunchParams   — 所有 llama-server CLI 参数的 Option 封装（ctx_size, n_gpu_layers, temp 等）
 RemoteModel    — 远程模型信息：model_id, model_url, model_size, need_ram, support_*, model_diffusion, model_vae
 Settings       — 用户配置包装：{ launch_params: LaunchParams }
-UpdateInfo     — 远程更新信息：version, llamacpp_version, windows/mac 平台更新
+UpdateInfo     — 远程更新信息：version, llamacpp_version, adm_agent_version, windows/mac 平台更新
 UpdateCheckResult — 更新检查结果：has_update, 各平台下载 URL, llamacpp 版本对比, vc_redist_installed
+AdmAgentUpdateCheck — admAgent 版本检查结果（点击 Agent 按钮时调用）：needs_update, remote_version, local_version, download_url
 PartFileProgress   — .part 文件进度：model_id, existing_size
 HardwareDetectResult — 硬件检测结果：os, gpu_vendor, gpu_name, nvidia_series
 ```
@@ -1183,7 +1187,8 @@ pnpm sign:macos
 
 | 端点                                     | 用途       |
 | -------------------------------------- | -------- |
-| `https://adm.tuduoduo.top/update.json` | 应用版本更新检查 |
+| `https://adm.tuduoduo.top/update.json` | 应用版本更新检查；含 `llamacppVersion` 与 `admAgentVersion` 字段 |
+| `https://adm.tuduoduo.top/agent/win/admAgent.exe` | admAgent 版本更新下载地址（仅 Windows） |
 | `https://adm.tuduoduo.top/model.json`  | 远程模型列表   |
 
 ***
@@ -1312,6 +1317,52 @@ python scripts/generate-icons.py
 ### 11.4 关键修复说明
 
 桌面图标模糊的根因是 `icon.ico` 内缺少 **256×256** 尺寸。Windows 在高 DPI 下会将 128×128 放大显示，导致模糊。新生成的 .ico 包含 256×256 后即可在桌面保持清晰。
+
+---
+
+## 十三、Agent 终端
+
+底部栏「设置」右侧新增「Agent」按钮，点击后进入内嵌命令终端并自动运行 `admAgent` 工具。
+
+### 13.1 交互流程
+
+1. 点击底部栏 **Agent** 按钮（`index.html` 的 `goAgent()`）。
+2. 调用 `check_adm_agent` 检查本地是否已下载 `admAgent`：
+   - **Windows**：默认路径为软件所在根目录（`exe` 同级目录），文件名 `admAgent.exe`。
+   - **macOS**：默认路径为应用用户目录（`app_data_dir`，如 `~/Library/Application Support/com.adm.admapp`），文件名 `admAgent`。
+3. 若已存在，直接打开 `agent.html` 终端页面。
+4. 若不存在，弹出下载进度弹窗（`#agent-download-overlay`），调用 `download_adm_agent` 下载：
+   - Windows：`http://adm.tuduoduo.top/admAgent.exe`
+   - macOS：`http://adm.tuduoduo.top/admAgent`
+   - 下载过程通过 `agent-download-progress` 事件向前端推送进度。
+5. 下载完成后自动进入 `agent.html` 终端页面。
+
+### 13.2 内嵌终端实现
+
+- `agent.html` 使用 `xterm.js`（已离线内置在 `src/vendor/xterm/`）作为终端界面。
+- `start_agent_terminal` 通过 `portable-pty` 创建 PTY：
+  - **Windows**：启动 `powershell.exe`。
+  - **macOS**：启动系统默认 shell（`dirs::shell()`，通常为 `/bin/zsh`，以 `-i` 交互模式运行）。
+- PTY 输出经后台线程读取后以 base64 通过 `agent-terminal-data` 事件推送到前端；前端按键经 `agent_terminal_input` 写回 PTY。
+- 终端就绪后自动向 shell 发送启动命令运行 `admAgent` 工具（同时启动终端与 `admAgent`）。
+- **启动前自动生成 `admAgent.json`**：`ensure_adm_agent_config` 读取 ADM 配置文件（`config.json`）中 `launch_params.ctx_size` 作为上下文大小，于用户目录 `<home>/.config/admAgent/admAgent.json` 生成（或更新）配置。`context_window` 取该值，`default_max_tokens` 取其 30%（四舍五入）；若文件已存在则仅就地更新这两个字段，尽量保留其它内容。`ctx_size` 缺失或非法时回退默认 `context_window = 128000`。
+  - **触发时机 1（更早）**：点击 Agent 按钮时，`goAgent()` 在平台判断通过后即调用 `prepare_adm_agent_config`（早于模型运行检查与 admAgent 下载）。
+  - **触发时机 2（兜底）**：`start_agent_terminal` 创建 PTY 之前也会再调用一次，保证最终一致。
+- 支持通过 `agent_terminal_resize` 调整终端大小、`stop_agent_terminal` 关闭会话；窗口关闭时 `lib.rs` 会调用 `kill_agent_session` 清理子进程。
+
+### 13.3 相关命令（`src-tauri/src/pages/agent.rs`）
+
+| 命令 | 说明 |
+|------|------|
+| `prepare_adm_agent_config` | 点击 Agent 按钮时（平台判断通过后）提前调用：生成 / 更新 `admAgent.json`（早于模型检查与 admAgent 下载，不依赖两者） |
+| `check_adm_agent` | 检查本地 `admAgent` 是否存在，返回路径（Agent 按钮点击时优先级 2 判断本地是否已下载） |
+| `check_adm_agent_update` | 点击 Agent 按钮时触发（优先级 3）：拉取远程清单比对本地 `admAgent` 版本号，返回是否需要更新及下载地址（仅 Windows） |
+| `download_adm_agent` | 首次安装：下载 `admAgent` 工具并推送进度（Agent 按钮点击时优先级 2 调用） |
+| `download_adm_agent_update` | 版本更新用：从 `check_adm_agent_update` 下发的地址下载并替换 `admAgent`（仅 Windows，推送 `adm-agent-update-progress`） |
+| `start_agent_terminal` | 启动内嵌 PTY 终端并自动运行 `admAgent` |
+| `agent_terminal_input` | 向前端按键写入 PTY |
+| `agent_terminal_resize` | 调整终端行列 |
+| `stop_agent_terminal` | 关闭终端会话 |
 
 ---
 

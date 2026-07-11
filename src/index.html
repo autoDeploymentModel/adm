@@ -28,12 +28,13 @@
       height: 100vh;
     }
 
-    #content-frame {
+    #content-frame, #agent-frame {
       flex: 1;
       width: 100%;
       border: none;
       background: #1a1a2e;
     }
+    #agent-frame { display: none; }
 
     #hardware-bar {
       display: flex;
@@ -49,7 +50,8 @@
 
 
     #home-btn,
-    #settings-btn {
+    #settings-btn,
+    #agent-btn {
       cursor: pointer;
       font-size: 13px;
       padding: 2px 10px;
@@ -73,7 +75,23 @@
     }
 
     #home-btn:hover,
-    #settings-btn:hover {
+    #settings-btn:hover,
+    #agent-btn:hover {
+      color: #6c63ff;
+    }
+
+    /* 当前选中项：柔和紫色高亮背景 */
+    #home-btn.active,
+    #settings-btn.active,
+    #agent-btn.active {
+      background: rgba(108, 99, 255, 0.20);
+      color: #ffffff;
+      border-radius: 6px;
+      border-right-color: transparent;
+    }
+    #home-btn.active .btn-icon,
+    #settings-btn.active .btn-icon,
+    #agent-btn.active .btn-icon {
       color: #6c63ff;
     }
 
@@ -243,6 +261,49 @@
       margin-top: 6px;
       text-align: center;
     }
+
+    /* Agent 下载弹窗 */
+    #agent-download-overlay {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.6);
+      z-index: 9998;
+      justify-content: center;
+      align-items: center;
+    }
+    #agent-download-overlay.show {
+      display: flex;
+    }
+    .agent-download-dialog {
+      background: #16213e;
+      border: 1px solid #2a2a4e;
+      border-radius: 12px;
+      padding: 28px 32px;
+      max-width: 460px;
+      width: 90%;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+      text-align: center;
+    }
+    .agent-download-dialog .ad-icon {
+      font-size: 40px;
+      margin-bottom: 12px;
+    }
+    .agent-download-dialog .ad-title {
+      font-size: 20px;
+      font-weight: 600;
+      color: #ffffff;
+      margin-bottom: 8px;
+    }
+    .agent-download-dialog .ad-desc {
+      font-size: 14px;
+      color: #a0a0c0;
+      margin-bottom: 20px;
+      line-height: 1.6;
+    }
   </style>
 </head>
 <body>
@@ -255,8 +316,22 @@
     </div>
   </div>
 
+  <!-- Agent 下载弹窗 -->
+  <div id="agent-download-overlay">
+    <div class="agent-download-dialog">
+      <div class="ad-icon">🤖</div>
+      <div class="ad-title">正在下载 Agent 工具</div>
+      <div class="ad-desc">首次使用需要下载 admAgent 工具，下载完成后将自动进入 Agent 终端。</div>
+      <div class="llamacpp-progress-bar">
+        <div class="llamacpp-progress-fill" id="agent-progress-fill" style="width: 0%"></div>
+      </div>
+      <div class="llamacpp-status-text" id="agent-status-text">准备下载...</div>
+    </div>
+  </div>
+
   <div id="app">
     <iframe id="content-frame" src="model_list.html"></iframe>
+    <iframe id="agent-frame" style="display:none"></iframe>
     <div id="hardware-bar">
       <div id="home-btn" onclick="goHome()">
         <span class="btn-icon">&#8962;</span>
@@ -265,6 +340,10 @@
       <div id="settings-btn" onclick="goSettings()">
         <span class="btn-icon">&#9881;</span>
         <span class="btn-text">设置</span>
+      </div>
+      <div id="agent-btn" onclick="goAgent()">
+        <span class="btn-icon">&#129302;</span>
+        <span class="btn-text">Agent</span>
       </div>
       <div id="hw-items">
         <div class="hw-item">
@@ -321,12 +400,198 @@
       return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + sizes[i];
     }
 
+    // 页面显隐切换：content-frame 与常驻 agent-frame 二选一可见
+    function showContentFrame() {
+      const cf = document.getElementById("content-frame");
+      const af = document.getElementById("agent-frame");
+      // 用显式值覆盖样式表规则，避免清空内联样式后被 CSS 的 display:none 命中
+      if (af) af.style.display = "none";
+      if (cf) cf.style.display = "block";
+    }
+
+    function showAgentFrame() {
+      const cf = document.getElementById("content-frame");
+      const af = document.getElementById("agent-frame");
+      if (cf) cf.style.display = "none";
+      if (af) {
+        // 必须用显式 block，否则会被样式表里的 #agent-frame{display:none} 覆盖导致黑屏
+        af.style.display = "block";
+        setActiveNav("agent-btn");
+        try { af.focus(); } catch (_) {}
+      }
+      // 显示后通知 agent 页面重新自适应尺寸
+      setTimeout(function () {
+        if (af && af.contentWindow) af.contentWindow.postMessage({ type: "agent-resize" }, "*");
+      }, 60);
+    }
+
+    // 首次进入时懒加载 agent 页面（之后常驻，不再重新加载）
+    var agentFrameLoaded = false;
+    function ensureAgentFrame() {
+      const af = document.getElementById("agent-frame");
+      if (af && !agentFrameLoaded) {
+        af.src = "agent.html";
+        agentFrameLoaded = true;
+      }
+    }
+
+    // 更新底部导航栏的选中态（深色背景）
+    function setActiveNav(id) {
+      ["home-btn", "settings-btn", "agent-btn"].forEach(function (b) {
+        const el = document.getElementById(b);
+        if (el) el.classList.toggle("active", b === id);
+      });
+    }
+
     function goHome() {
+      showContentFrame();
+      setActiveNav("home-btn");
       document.getElementById("content-frame").src = "model_list.html";
     }
 
     function goSettings() {
+      showContentFrame();
+      setActiveNav("settings-btn");
       document.getElementById("content-frame").src = "settings.html";
+    }
+
+    async function goAgent() {
+      try {
+        // 平台判断：仅 Windows 支持 Agent 终端，其它系统提示即将开放
+        const osName = String(await invoke("get_platform_os")).toLowerCase();
+        if (osName !== "windows") {
+          showComingSoon();
+          return;
+        }
+        // 点击 Agent 即先生成 / 更新 admAgent.json 配置（早于终端真正启动）
+        try {
+          await invoke("prepare_adm_agent_config");
+        } catch (_) {}
+        // 优先级 1：模型是否启动（未启动则不允许进入 Agent）
+        const running = await invoke("is_model_running");
+        if (!running) {
+          showComingSoon("请先启动模型");
+          return;
+        }
+        // 优先级 2：本地是否已下载 admAgent（未下载则首次安装）
+        const info = await invoke("check_adm_agent");
+        if (!info.exists) {
+          showAgentDownloadDialog();
+          await invoke("download_adm_agent");
+          // 下载完成，隐藏弹窗并进入 Agent 页面（常驻，不重复加载）
+          setTimeout(function () {
+            hideAgentDownloadDialog();
+            ensureAgentFrame();
+            showAgentFrame();
+          }, 700);
+          return;
+        }
+
+        // 优先级 3：版本号判断（与远程比对，仅 Windows 需要更新）
+        const upd = await invoke("check_adm_agent_update");
+        if (upd.needs_update && upd.download_url) {
+          // 弹出更新进度框，下载完成后进入 Agent 页面
+          startAdmAgentUpdate(upd, function () {
+            ensureAgentFrame();
+            showAgentFrame();
+          });
+          return;
+        }
+
+        // 已是最新，直接进入 Agent 页面
+        ensureAgentFrame();
+        showAgentFrame();
+      } catch (e) {
+        hideAgentDownloadDialog();
+        showComingSoon("操作失败: " + e);
+      }
+    }
+
+    // 进入 Agent 时的轻量提示（可自定义文案，默认「该功能即将开放，敬请期待」）
+    function showComingSoon(msg) {
+      let tip = document.getElementById("os-tip");
+      if (!tip) {
+        tip = document.createElement("div");
+        tip.id = "os-tip";
+        tip.style.cssText =
+          "position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);" +
+          "background:rgba(20,20,40,0.96);color:#e0e0e0;padding:18px 28px;" +
+          "border-radius:10px;font-size:15px;z-index:9999;border:1px solid #4a4a7e;" +
+          "box-shadow:0 8px 30px rgba(0,0,0,0.5);cursor:default;";
+        document.body.appendChild(tip);
+      }
+      tip.textContent = msg || "该功能即将开放，敬请期待";
+      tip.style.display = "block";
+      clearTimeout(showComingSoon._t);
+      showComingSoon._t = setTimeout(function () {
+        tip.style.display = "none";
+      }, 2500);
+    }
+
+    function showAgentDownloadDialog() {
+      const fill = document.getElementById("agent-progress-fill");
+      const text = document.getElementById("agent-status-text");
+      if (fill) fill.style.width = "0%";
+      if (text) {
+        text.textContent = "准备下载...";
+        text.style.color = "#8080a0";
+      }
+      document.getElementById("agent-download-overlay").classList.add("show");
+    }
+
+    function hideAgentDownloadDialog() {
+      document.getElementById("agent-download-overlay").classList.remove("show");
+    }
+
+    function updateAgentDownloadStatus(msg, isError) {
+      const text = document.getElementById("agent-status-text");
+      if (text) {
+        text.textContent = msg;
+        if (isError) text.style.color = "#ff6b6b";
+      }
+    }
+
+    function setupAgentDownloadListener() {
+      if (typeof listen !== "function") return;
+      try {
+        listen("agent-download-progress", function (event) {
+          const payload = event.payload || {};
+          const fill = document.getElementById("agent-progress-fill");
+          const text = document.getElementById("agent-status-text");
+          if (payload.status === "downloading") {
+            if (text) text.textContent = "正在下载... " + payload.progress + "%";
+            if (fill) fill.style.width = payload.progress + "%";
+          } else if (payload.status === "done") {
+            if (text) text.textContent = "下载完成！";
+            if (fill) fill.style.width = "100%";
+          }
+        });
+      } catch (_) {}
+    }
+
+    // 将 Agent 终端事件转发给常驻的 agent iframe
+    function setupAgentTerminalEventForwarding() {
+      if (typeof listen !== "function") return;
+      try {
+        listen("agent-terminal-data", function (event) {
+          const frame = document.getElementById("agent-frame");
+          if (frame && frame.contentWindow) {
+            frame.contentWindow.postMessage({ type: "agent-terminal-data", payload: event.payload }, "*");
+          }
+        });
+        listen("agent-terminal-exit", function (event) {
+          const frame = document.getElementById("agent-frame");
+          if (frame && frame.contentWindow) {
+            frame.contentWindow.postMessage({ type: "agent-terminal-exit", payload: event.payload }, "*");
+          }
+        });
+        listen("agent-terminal-ready", function (event) {
+          const frame = document.getElementById("agent-frame");
+          if (frame && frame.contentWindow) {
+            frame.contentWindow.postMessage({ type: "agent-terminal-ready", payload: event.payload }, "*");
+          }
+        });
+      } catch (_) {}
     }
 
     function updateHardwareBar() {
@@ -363,6 +628,8 @@
 
     window.addEventListener("message", function (event) {
       if (event.data && event.data.type === "navigate") {
+        showContentFrame();
+        setActiveNav("home-btn");
         document.getElementById("content-frame").src = event.data.page;
       }
       if (event.data && event.data.type === "show-update-dialog") {
@@ -396,6 +663,14 @@
         }).catch(function(err) {
           event.source.postMessage({ type: "__invoke_result__", id: id, result: null, error: String(err) }, "*");
         });
+      }
+      // Agent 页面请求父窗口把键盘焦点交给 iframe（内嵌终端需要焦点才能接收按键）
+      if (event.data && event.data.type === "agent-focus-me") {
+        const f = document.getElementById("agent-frame");
+        if (f) {
+          try { f.focus(); } catch (_) {}
+          try { if (f.contentWindow) f.contentWindow.focus(); } catch (_) {}
+        }
       }
     });
 
@@ -781,10 +1056,137 @@
       } catch (_) {}
     }
 
+    // ===== admAgent 版本更新（接入主升级流程） =====
+
+    let pendingAdmAgentUrl = null;
+    let pendingAdmAgentOnComplete = null;
+
+    async function startAdmAgentUpdate(result, onComplete) {
+      pendingAdmAgentOnComplete = typeof onComplete === "function" ? onComplete : null;
+      const isNotInstalled = !result.local_version || result.local_version === "未安装";
+      const localVer = result.local_version || "未安装";
+      const remoteVer = result.remote_version || "";
+      const downloadUrl = result.download_url;
+
+      if (!downloadUrl) {
+        const html = `
+          <div class="update-icon">⚠️</div>
+          <div class="update-title">无法获取下载地址</div>
+          <div class="update-desc">当前系统暂不支持 admAgent 自动更新，请前往官网手动下载。</div>
+          <div class="update-buttons" style="margin-top:16px;">
+            <button class="update-btn-secondary" onclick="dismissAdmAgentUpdate()">关闭</button>
+          </div>
+        `;
+        showUpdateDialog(html);
+        return;
+      }
+
+      let buttonsHtml;
+      if (isNotInstalled) {
+        buttonsHtml = `
+          <div class="update-buttons" style="margin-top:16px;">
+            <button class="update-btn-primary" id="admagent-start-btn" onclick="doAdmAgentDownload()">开始下载</button>
+          </div>
+        `;
+      } else {
+        buttonsHtml = `
+          <div class="update-buttons" style="margin-top:16px;">
+            <button class="update-btn-primary" id="admagent-start-btn" onclick="doAdmAgentDownload()">开始下载</button>
+            <button class="update-btn-secondary" onclick="dismissAdmAgentUpdate()">稍后再说</button>
+          </div>
+        `;
+      }
+
+      const html = `
+        <div class="update-icon">🤖</div>
+        <div class="update-title">${isNotInstalled ? "需要安装 admAgent" : "admAgent 需要更新"}</div>
+        <div class="update-desc">${isNotInstalled ? "首次使用需要安装 admAgent 工具" : "检测到 admAgent 工具需要更新"}</div>
+        <div class="update-info-row">
+          <div class="info-item">
+            <div class="info-label">当前版本</div>
+            <div class="info-value">${localVer}</div>
+          </div>
+          <div class="info-item">
+            <div class="info-label">最新版本</div>
+            <div class="info-value">${remoteVer}</div>
+          </div>
+        </div>
+        <div class="llamacpp-progress-bar">
+          <div class="llamacpp-progress-fill" id="admagent-progress-fill" style="width: 0%"></div>
+        </div>
+        <div class="llamacpp-status-text" id="admagent-status-text">准备下载...</div>
+        ${buttonsHtml}
+      `;
+      showUpdateDialog(html);
+
+      pendingAdmAgentUrl = downloadUrl;
+
+      // 未安装时自动开始下载
+      if (isNotInstalled) {
+        setTimeout(function() { doAdmAgentDownload(); }, 500);
+      }
+    }
+
+    function dismissAdmAgentUpdate() {
+      hideUpdateDialog();
+      const cb = pendingAdmAgentOnComplete;
+      pendingAdmAgentOnComplete = null;
+      if (cb) cb();
+    }
+
+    async function doAdmAgentDownload() {
+      var startBtn = document.getElementById("admagent-start-btn");
+      if (startBtn) startBtn.style.display = "none";
+
+      var statusText = document.getElementById("admagent-status-text");
+      var progressFill = document.getElementById("admagent-progress-fill");
+
+      if (!pendingAdmAgentUrl) {
+        if (statusText) statusText.textContent = "下载失败: 缺少下载地址";
+        if (startBtn) { startBtn.style.display = ""; startBtn.textContent = "重试"; }
+        return;
+      }
+
+      try {
+        await invoke("download_adm_agent_update", { url: pendingAdmAgentUrl });
+      } catch (e) {
+        if (statusText) statusText.textContent = "下载失败: " + e;
+        if (progressFill) progressFill.style.width = "0%";
+        if (startBtn) { startBtn.style.display = ""; startBtn.textContent = "重试"; }
+      }
+    }
+
+    function setupAdmAgentUpdateProgressListener() {
+      if (typeof listen !== "function") return;
+      try {
+        listen("adm-agent-update-progress", function (event) {
+          var payload = event.payload;
+          var statusText = document.getElementById("admagent-status-text");
+          var progressFill = document.getElementById("admagent-progress-fill");
+          if (payload.status === "downloading") {
+            if (statusText) statusText.textContent = "正在下载... " + payload.progress + "%";
+            if (progressFill) progressFill.style.width = payload.progress + "%";
+          } else if (payload.status === "done") {
+            if (statusText) statusText.textContent = "安装完成！";
+            if (progressFill) progressFill.style.width = "100%";
+            const cb = pendingAdmAgentOnComplete;
+            pendingAdmAgentOnComplete = null;
+            setTimeout(function () {
+              hideUpdateDialog();
+              if (cb) cb();
+            }, 1500);
+          }
+        });
+      } catch (_) {}
+    }
+
     async function init() {
       try {
         setupEventForwarding();
         setupLlamacppProgressListener();
+        setupAdmAgentUpdateProgressListener();
+        setupAgentDownloadListener();
+        setupAgentTerminalEventForwarding();
         systemInfo = await invoke("get_system_info");
 
         try {
@@ -808,6 +1210,8 @@
         }
 
         updateHardwareBar();
+        // 默认首页为选中态
+        setActiveNav("home-btn");
       } catch (e) {
         console.error("获取系统信息失败:", e);
         document.getElementById("ram-info").textContent = "加载失败";

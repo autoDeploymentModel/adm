@@ -449,6 +449,7 @@
               </div>
               <div class="param-input">
                 <input type="number" id="ctx_size" value="4096" min="0">
+                <div class="param-desc" id="ctx-floor-hint"></div>
               </div>
             </div>
 
@@ -881,7 +882,7 @@
 
     const PRESET_MODES = {
       default: {
-        ctx_size: 4096,
+        ctx_size: 65536,
         temperature: 1.0,
         top_k: 20,
         top_p: 0.95,
@@ -896,7 +897,7 @@
         reasoning: "auto",
       },
       creative: {
-        ctx_size: 32768,
+        ctx_size: 65536,
         temperature: 1.0,
         top_k: 20,
         top_p: 0.95,
@@ -927,6 +928,14 @@
       },
     };
 
+    // 各选择模式下的上下文大小（ctx_size）下限
+    // 日常聊天 / 创意写作 不允许低于 65536；写代码模式不限制（下限 1）
+    const MODE_MIN_CTX = {
+      default: 65536,
+      creative: 65536,
+      code: 1,
+    };
+
     function switchPanel(panelId) {
       document.querySelectorAll(".nav-item").forEach((el) => el.classList.remove("active"));
       document.querySelectorAll(".panel").forEach((el) => el.classList.remove("active"));
@@ -947,6 +956,7 @@
 
     function fillSamplingFromPreset(preset) {
       document.getElementById("ctx_size").value = preset.ctx_size;
+      applyCtxFloor();
       document.getElementById("temperature").value = preset.temperature;
       document.getElementById("top_k").value = preset.top_k;
       document.getElementById("top_p").value = preset.top_p;
@@ -959,6 +969,21 @@
       document.getElementById("presence_penalty").value = preset.presence_penalty;
       document.getElementById("frequency_penalty").value = preset.frequency_penalty;
       document.getElementById("reasoning").value = preset.reasoning;
+    }
+
+    // 根据当前选择模式，设置上下文大小输入框的下限，并强制钳制已填值
+    function applyCtxFloor() {
+      const mode = document.getElementById("preset_mode").value;
+      const floor = MODE_MIN_CTX[mode] || 1;
+      const ctxEl = document.getElementById("ctx_size");
+      ctxEl.min = floor;
+      const v = parseInt(ctxEl.value) || 0;
+      if (v < floor) {
+        ctxEl.value = floor;
+        showToast("当前模式上下文大小不能低于 " + floor, false);
+      }
+      const hint = document.getElementById("ctx-floor-hint");
+      if (hint) hint.textContent = floor > 1 ? ("当前模式最小 " + floor) : "";
     }
 
     async function onPresetModeChange() {
@@ -980,8 +1005,12 @@
       const threadsVal = document.getElementById("threads").value;
       const threadsBatchVal = document.getElementById("threads_batch").value;
 
+      let ctxSize = parseInt(document.getElementById("ctx_size").value) || 0;
+      const ctxFloor = MODE_MIN_CTX[document.getElementById("preset_mode").value] || 1;
+      if (ctxSize < ctxFloor) ctxSize = ctxFloor;
+
       return {
-        ctx_size: parseInt(document.getElementById("ctx_size").value) || 4096,
+        ctx_size: ctxSize,
         n_predict: parseInt(document.getElementById("n_predict").value) || -1,
         batch_size: parseInt(document.getElementById("batch_size").value) || 2048,
         ubatch_size: parseInt(document.getElementById("ubatch_size").value) || 512,
@@ -1107,6 +1136,7 @@
         host: "127.0.0.1",
       };
       fillFormFromParams(defaults);
+      applyCtxFloor();
       autoSave();
     }
 
@@ -1117,6 +1147,11 @@
       } else {
         customRow.style.display = "none";
       }
+      autoSave();
+    });
+
+    document.getElementById("ctx_size").addEventListener("change", function () {
+      applyCtxFloor();
       autoSave();
     });
 
@@ -1237,6 +1272,7 @@
         if (settings && params) {
           fillFormFromParams(params);
         }
+        applyCtxFloor();
       } catch (e) {
         console.error("加载设置失败:", e);
       }

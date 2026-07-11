@@ -9,6 +9,8 @@
     "core:event:allow-listen",
     "core:event:allow-emit",
     "opener:default",
+    "dialog:default",
+    "dialog:allow-open",
     "core:window:default",
     "core:window:allow-center",
     "hwinfo:allow-cpu-info",

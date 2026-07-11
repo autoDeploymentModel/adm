@@ -231,6 +231,32 @@ fn compare_versions(current: &str, remote: &str) -> std::cmp::Ordering {
 
 // ===== Tauri Command =====
 
+/// 拉取远程更新清单 update.json（15s 超时）。
+/// 供 check_update 与 admAgent 版本检查共用。
+pub(crate) async fn fetch_update_info() -> Result<UpdateInfo, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+
+    let response = client
+        .get("https://adm.tuduoduo.top/update.json")
+        .send()
+        .await
+        .map_err(|e| format!("检查更新失败: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("服务器返回错误状态码: {}", response.status()));
+    }
+
+    let text = response
+        .text()
+        .await
+        .map_err(|e| format!("读取响应文本失败: {}", e))?;
+
+    serde_json::from_str(&text).map_err(|e| format!("解析更新信息失败: {}", e))
+}
+
 #[tauri::command]
 pub async fn get_system_info(state: tauri::State<'_, AppState>) -> Result<SystemInfo, String> {
     let mut sys = state.sys.lock().map_err(|e| format!("锁获取失败: {}", e))?;
@@ -260,28 +286,7 @@ pub async fn get_system_info(state: tauri::State<'_, AppState>) -> Result<System
 pub async fn check_update(app: tauri::AppHandle) -> Result<UpdateCheckResult, String> {
     let current_version = app.config().version.clone().unwrap_or_else(|| "0.0.0".to_string());
 
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
-
-    let response = client
-        .get("https://adm.tuduoduo.top/update.json")
-        .send()
-        .await
-        .map_err(|e| format!("检查更新失败: {}", e))?;
-
-    if !response.status().is_success() {
-        return Err(format!("服务器返回错误状态码: {}", response.status()));
-    }
-
-    let text = response
-        .text()
-        .await
-        .map_err(|e| format!("读取响应文本失败: {}", e))?;
-
-    let update_info: UpdateInfo = serde_json::from_str(&text)
-        .map_err(|e| format!("解析更新信息失败: {}", e))?;
+    let update_info = fetch_update_info().await?;
 
     let has_update = compare_versions(&current_version, &update_info.version) == std::cmp::Ordering::Less;
 

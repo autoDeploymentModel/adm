@@ -12,11 +12,11 @@
       {
         "label": "main",
         "title": "ADM",
-        "width": 1280,
-        "height": 768,
+        "width": 1440,
+        "height": 800,
         "center": true,
-        "minWidth": 800,
-        "minHeight": 600,
+        "minWidth": 1440,
+        "minHeight": 800,
         "decorations": true
       }
     ],
