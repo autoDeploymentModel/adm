@@ -269,6 +269,61 @@
     }
     var encoder = new TextEncoder();
 
+    // ===== 剪贴板：复制 / 粘贴（让 agent 终端像真实终端一样支持 Ctrl+C / Ctrl+V）=====
+    var clipboardReqId = 0;
+    var clipboardPending = {};
+
+    // 复制文本到系统剪贴板：优先 navigator.clipboard，失败回退到 textarea + execCommand（iframe 内更稳）
+    function copyToClipboard(text) {
+      return new Promise(function (resolve) {
+        function fallback() {
+          try {
+            var ta = document.createElement("textarea");
+            ta.value = text;
+            ta.setAttribute("readonly", "");
+            ta.style.position = "fixed";
+            ta.style.top = "-1000px";
+            ta.style.opacity = "0";
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+            ta.setSelectionRange(0, ta.value.length);
+            var ok = document.execCommand("copy");
+            document.body.removeChild(ta);
+            resolve(!!ok);
+          } catch (e) {
+            resolve(false);
+          }
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text)
+            .then(function () { resolve(true); })
+            .catch(function () { fallback(); });
+        } else {
+          fallback();
+        }
+      });
+    }
+
+    // 从系统剪贴板读取文本：优先 navigator.clipboard.readText，
+    // 失败（iframe 内剪贴板被限制）则通过父窗口代理读取。
+    function readClipboard() {
+      if (navigator.clipboard && navigator.clipboard.readText) {
+        return navigator.clipboard.readText();
+      }
+      return new Promise(function (resolve, reject) {
+        var id = ++clipboardReqId;
+        clipboardPending[id] = { resolve: resolve, reject: reject };
+        window.parent.postMessage({ type: "agent-read-clipboard", id: id }, "*");
+        setTimeout(function () {
+          if (clipboardPending[id]) {
+            delete clipboardPending[id];
+            reject(new Error("读取剪贴板超时"));
+          }
+        }, 5000);
+      });
+    }
+
     // ===== 终端实例 =====
     var term, fitAddon;
     var terminalStarted = false;
@@ -310,6 +365,16 @@
             }
             window.parent.postMessage({ type: "agent-focus-me" }, "*");
             break;
+          case "agent-clipboard-result": {
+            // 父窗口代理读取剪贴板后回填结果
+            var cp = clipboardPending[data.id];
+            if (cp) {
+              if (data.error) cp.reject(new Error(data.error));
+              else cp.resolve(data.text);
+              delete clipboardPending[data.id];
+            }
+            break;
+          }
           case "agent-resize":
             // 父窗口切换显示 Agent 页面后，重新自适应尺寸并聚焦
             if (term) {
@@ -527,6 +592,40 @@
       fitAddon = new FitAddon.FitAddon();
       term.loadAddon(fitAddon);
       term.open(document.getElementById("terminal"));
+
+      // ===== Ctrl+C / Ctrl+V 复制粘贴（模拟真实终端体验）=====
+      // - 有选区时 Ctrl+C 复制，无选区时放行（把 SIGINT 发给 agent，等价于终端中断）
+      // - Ctrl+V 从系统剪贴板读取并粘贴到终端
+      term.attachCustomKeyEventHandler(function (e) {
+        if (e.type !== "keydown") return true;
+        var mod = e.ctrlKey || e.metaKey;
+        if (!mod) return true;
+
+        var k = (e.key || "").toLowerCase();
+        // 复制：仅在有选区时拦截；无选区则交还给 xterm（Ctrl+C 作为中断信号，Cmd+C 在 Mac 上不发送）
+        if (k === "c" && (e.ctrlKey || e.metaKey)) {
+          var sel = term.getSelection();
+          if (sel && sel.length > 0) {
+            copyToClipboard(sel);
+            e.preventDefault();
+            return false; // 已处理，阻止默认（否则会触发 SIGINT）
+          }
+          return true; // 无选区：放行
+        }
+        // 粘贴
+        if (k === "v" && (e.ctrlKey || e.metaKey)) {
+          e.preventDefault();
+          readClipboard()
+            .then(function (text) {
+              if (text) term.paste(text);
+            })
+            .catch(function () {
+              try { term.write("\r\n\x1b[31m[粘贴失败：无法访问剪贴板]\x1b[0m\r\n"); } catch (_) {}
+            });
+          return false; // 已处理
+        }
+        return true;
+      });
 
       // 禁止鼠标滚动：xterm 自身监听 wheel 事件滚动缓冲区，仅靠 CSS overflow:hidden 不够，
       // 需在捕获阶段拦截 wheel 事件并阻止默认/冒泡，使终端始终停在最新输出。

@@ -672,6 +672,23 @@
           try { if (f.contentWindow) f.contentWindow.focus(); } catch (_) {}
         }
       }
+      // Agent 页面（iframe）内剪贴板受限时，由父窗口代理读取系统剪贴板
+      if (event.data && event.data.type === "agent-read-clipboard") {
+        const id = event.data.id;
+        const frame = document.getElementById("agent-frame");
+        const send = function (text, error) {
+          if (frame && frame.contentWindow) {
+            frame.contentWindow.postMessage({ type: "agent-clipboard-result", id: id, text: text, error: error }, "*");
+          }
+        };
+        if (navigator.clipboard && navigator.clipboard.readText) {
+          navigator.clipboard.readText()
+            .then(function (t) { send(t, null); })
+            .catch(function (err) { send(null, String(err)); });
+        } else {
+          send(null, "剪贴板不可用");
+        }
+      }
     });
 
     // 监听 Tauri 事件并转发给 iframe（下载进度等）
