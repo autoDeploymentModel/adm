@@ -386,7 +386,11 @@ pub fn get_adm_agent_local_version(app: &tauri::AppHandle) -> Result<Option<Stri
 /// 下载并替换 admAgent 工具（版本更新用）。
 /// 使用服务端下发的下载地址，下载到 admAgent 默认存放路径并覆盖旧版本。
 #[tauri::command]
-pub async fn download_adm_agent_update(app: tauri::AppHandle, url: String) -> Result<(), String> {
+pub async fn download_adm_agent_update(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    url: String,
+) -> Result<(), String> {
     if url.trim().is_empty() || !url.starts_with("http") {
         return Err(format!(
             "下载地址无效: {}，请重新检查更新",
@@ -462,9 +466,36 @@ pub async fn download_adm_agent_update(app: tauri::AppHandle, url: String) -> Re
     file.flush().await.map_err(|e| format!("刷新文件失败: {}", e))?;
     drop(file);
 
-    // 替换旧文件：先尝试删除旧文件（若正在运行会失败，属预期），再重命名
+    // 替换前先停掉正在运行的 Agent 终端，释放被 Windows 锁定的 admAgent.exe。
+    // 典型场景：用户离开 Agent 页但进程未退出，再次进入触发更新时 admAgent.exe 仍在运行，
+    // 不先结束进程会导致下方 rename 失败（表现即「升级失败」）。这里自动结束进程，
+    // 无需用户手动去关 Agent 终端。进程被杀后，PTY 读取线程会自然收到 EOF 并推送
+    // agent-terminal-exit 事件，前端会显示「进程已退出」，并在更新完成后自动重启。
+    {
+        let mut s = state
+            .agent_session
+            .lock()
+            .map_err(|e| e.to_string())?;
+        if let Some(mut sess) = s.take() {
+            kill_agent_child_tree(&mut sess.child);
+        }
+    }
+
+    // 替换旧文件：先尝试删除旧文件（进程刚结束可能仍有极短占用，故带重试），再重命名。
     if dest.exists() {
-        let _ = std::fs::remove_file(&dest);
+        let mut removed = false;
+        for _ in 0..15 {
+            if std::fs::remove_file(&dest).is_ok() {
+                removed = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        if !removed {
+            return Err(
+                "替换 admAgent 失败：旧文件仍被占用，请手动关闭 Agent 终端后重试".to_string(),
+            );
+        }
     }
     std::fs::rename(&part_path, &dest).map_err(|e| {
         format!(

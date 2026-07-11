@@ -1358,7 +1358,7 @@ python scripts/generate-icons.py
 | `check_adm_agent` | 检查本地 `admAgent` 是否存在，返回路径（Agent 按钮点击时优先级 2 判断本地是否已下载） |
 | `check_adm_agent_update` | 点击 Agent 按钮时触发（优先级 3）：拉取远程清单比对本地 `admAgent` 版本号，返回是否需要更新及下载地址（仅 Windows） |
 | `download_adm_agent` | 首次安装：下载 `admAgent` 工具并推送进度（Agent 按钮点击时优先级 2 调用） |
-| `download_adm_agent_update` | 版本更新用：从 `check_adm_agent_update` 下发的地址下载并替换 `admAgent`（仅 Windows，推送 `adm-agent-update-progress`） |
+| `download_adm_agent_update` | 版本更新用：从 `check_adm_agent_update` 下发的地址下载并替换 `admAgent`（仅 Windows，推送 `adm-agent-update-progress`）。**替换前会自动停掉仍在运行的 Agent 终端**以释放 Windows 文件锁，避免「Agent 页未关闭时回到首页再进入触发更新 → 升级失败」的问题 |
 | `start_agent_terminal` | 启动内嵌 PTY 终端并自动运行 `admAgent` |
 | `agent_terminal_input` | 向前端按键写入 PTY |
 | `agent_terminal_resize` | 调整终端行列 |
@@ -1400,6 +1400,7 @@ python scripts/generate-icons.py
 | 日期 | 版本 | 变更内容 |
 |------|------|----------|
 | 2026-06-21 | **3.9** | 官网 SEO 优化：<br>1. 添加 Open Graph / Twitter Card 元标签<br>2. 添加 canonical URL 和 JSON-LD 结构化数据<br>3. 创建 robots.txt 和 sitemap.xml<br>4. 图片添加 loading="lazy"，emoji 图标添加 role="img" + aria-label<br>5. 修复"文生图"特性图标损坏的 emoji |
+| 2026-07-11 | **3.10** | 修复 admAgent 升级失败：<br>1. `download_adm_agent_update` 在替换 `admAgent.exe` 前，先停掉仍在运行的 Agent 终端进程树，释放 Windows 文件锁<br>2. 对删除旧文件的 `remove_file` 增加重试（最多 15 次、间隔 200ms），容忍进程退出延迟<br>3. 修复场景：Agent 页已打开 → 回首页 → 再次进入并弹出升级提示时，因旧进程占用二进制导致 rename 失败报「升级失败」，现无需手动关闭 Agent 进程即可完成更新 |
 | 2026-06-21 | **3.8** | MTP 模型自动检测：<br>1. `LaunchParams` 新增 `spec_draft_n_max`、`spec_type` 字段<br>2. `start_model` 自动检测模型文件名是否包含 MTP，追加 `--spec-draft-n-max 3 --spec-type draft-mtp` 参数<br>3. 支持用户通过 `params.spec_type` 手动覆盖（设为 `"none"` 可禁用自动检测） |
 | 2026-06-16 | **3.7** | 修复桌面图标模糊问题：<br>1. 新增 `scripts/generate-icons.py` 一键生成所有图标<br>2. PNG 尺寸改为 32/64/128/256，移除旧的 @2x/@4x 命名<br>3. 重新生成 `icon.ico`，从单张 128×128 升级为 6 张分辨率(含 256×256)解决模糊<br>4. 重新生成 `icon.icns`（含 ic07/ic08/ic09 三种 macOS 类型）<br>5. 更新 `tauri.conf.json` bundle.icon 配置 |
 | 2026-06-10 | 3.6 | 修复模型启动失败后无法重新启动的问题：<br>1. start_model 后台线程检测到进程退出时，在发送 model-stopped 事件前清除 AppState 中的 running_process/running_model_id/running_port 状态<br>2. 更新开发文档中模型启动流程说明 |
