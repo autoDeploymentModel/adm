@@ -19,10 +19,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # 仅打包 Windows x64 安装包 (x64-setup.exe / NSIS)
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
+            bundles: nsis
+          # 仅打包 macOS aarch64 磁盘镜像 (aarch64.dmg)
           - platform: macos-latest
             target: aarch64-apple-darwin
+            bundles: dmg
 
     runs-on: ${{ matrix.platform }}
     permissions:
@@ -67,7 +71,8 @@ jobs:
           releaseName: 'ADM v__VERSION__'
           releaseDraft: false
           prerelease: false
-          args: --target ${{ matrix.target }}
+          # 每个平台只产出指定格式的包，发布里仅保留 x64-setup.exe 与 aarch64.dmg
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
 
       - name: macOS 自签名
         if: matrix.platform == 'macos-latest'
@@ -96,11 +101,26 @@ jobs:
         if: matrix.platform == 'windows-latest'
         shell: powershell
         run: |
-          $ExePath = Get-ChildItem -Path "src-tauri\target\release" -Filter "*.exe" | Select-Object -First 1 -ExpandProperty FullName
-          if ($ExePath) {
-            Write-Host "创建自签名证书"
-            $Cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=ADM Self-Signed Cert" -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddYears(10)
-            Write-Host "对可执行文件签名: $ExePath"
-            Set-AuthenticodeSignature -FilePath $ExePath -Certificate $Cert -HashAlgorithm SHA256
-            Get-AuthenticodeSignature -FilePath $ExePath | Format-List
+          Write-Host "创建自签名证书"
+          $Cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=ADM Self-Signed Cert" -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddYears(10)
+          Write-Host "证书指纹: $($Cert.Thumbprint)"
+
+          # 签名 NSIS 安装包（发布产物 x64-setup.exe，实际位于 bundle/nsis 目录）
+          $Setup = Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "*-setup.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($Setup) {
+            Write-Host "对安装包签名: $($Setup.FullName)"
+            Set-AuthenticodeSignature -FilePath $Setup.FullName -Certificate $Cert -HashAlgorithm SHA256
+            Get-AuthenticodeSignature -FilePath $Setup.FullName | Format-List
+          } else {
+            Write-Warning "未找到 *-setup.exe，安装包未被签名"
+          }
+
+          # 同时签名主程序二进制（release 目录下的 ADM.exe，便于直接分发）
+          $App = Get-ChildItem -Path "src-tauri\target" -Recurse -Filter "ADM.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($App) {
+            Write-Host "对主程序签名: $($App.FullName)"
+            Set-AuthenticodeSignature -FilePath $App.FullName -Certificate $Cert -HashAlgorithm SHA256
+            Get-AuthenticodeSignature -FilePath $App.FullName | Format-List
+          } else {
+            Write-Warning "未找到 ADM.exe"
           }
