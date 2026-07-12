@@ -3,17 +3,18 @@
 use crate::common::*;
 use crate::app_state::AppState;
 use crate::common::config;
+use crate::common::utils::download::download_with_resume;
+use crate::bail;
+use crate::dbg_log;
 
 use std::collections::HashMap;
 use tauri::Emitter;
 use tauri::Manager;
-use tokio::io::AsyncWriteExt;
-use futures_util::StreamExt;
 
 // ===== Tauri Command =====
 
 #[tauri::command]
-pub async fn scan_local_models(app: tauri::AppHandle) -> Result<Vec<LocalModel>, String> {
+pub async fn scan_local_models(app: tauri::AppHandle) -> Result<Vec<LocalModel>, AppError> {
     let data_dir = config::get_data_dir(Some(&app))?;
     let models_dir = data_dir.join("models");
 
@@ -64,7 +65,7 @@ pub async fn scan_local_models(app: tauri::AppHandle) -> Result<Vec<LocalModel>,
 }
 
 #[tauri::command]
-pub async fn scan_part_files(app: tauri::AppHandle) -> Result<Vec<PartFileProgress>, String> {
+pub async fn scan_part_files(app: tauri::AppHandle) -> Result<Vec<PartFileProgress>, AppError> {
     let data_dir = config::get_data_dir(Some(&app))?;
     let models_dir = data_dir.join("models");
 
@@ -116,7 +117,7 @@ pub async fn scan_part_files(app: tauri::AppHandle) -> Result<Vec<PartFileProgre
 }
 
 #[tauri::command]
-pub async fn fetch_model_list() -> Result<Vec<RemoteModel>, String> {
+pub async fn fetch_model_list() -> Result<Vec<RemoteModel>, AppError> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
@@ -129,7 +130,7 @@ pub async fn fetch_model_list() -> Result<Vec<RemoteModel>, String> {
         .map_err(|e| format!("获取模型列表失败: {}", e))?;
 
     if !response.status().is_success() {
-        return Err(format!("服务器返回错误状态码: {}", response.status()));
+        bail!("服务器返回错误状态码: {}", response.status());
     }
 
     let text = response
@@ -152,12 +153,12 @@ pub async fn download_model(
     model_diffusion: Option<String>,
     model_vae: Option<String>,
     model_type: String,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     {
         let state = app.state::<AppState>();
         let map = state.downloading_progress.lock().map_err(|e| e.to_string())?;
         if map.contains_key(&model_id) {
-            return Err("该模型正在下载中，请勿重复点击".to_string());
+            bail!("该模型正在下载中，请勿重复点击");
         }
     }
 
@@ -175,18 +176,12 @@ pub async fn download_model(
     let final_path = model_dir.join(&model_filename);
     let part_path = model_dir.join(format!("{}.part", model_filename));
 
-    let resolve_client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|e| format!("创建客户端失败: {}", e))?;
-
     let download_client = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .build()
         .map_err(|e| format!("创建下载客户端失败: {}", e))?;
 
-    app.state::<AppState>().downloading_progress.lock().unwrap().insert(model_id.clone(), 0u8);
+    app.state::<AppState>().downloading_progress.lock().unwrap_or_else(|e| e.into_inner()).insert(model_id.clone(), 0u8);
 
     struct CleanupGuard {
         h: tauri::AppHandle,
@@ -204,323 +199,59 @@ pub async fn download_model(
     }
     let _guard = CleanupGuard { h: app.clone(), id: model_id.clone() };
 
-    if !final_path.exists() {
-        let existing_size = if part_path.exists() {
-            std::fs::metadata(&part_path)
-                .map(|m| m.len())
-                .unwrap_or(0)
-        } else {
-            0
-        };
-
-        let resolve_resp = resolve_client
-            .get(&model_url)
-            .header("Accept", "*/*")
-            .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-            .send()
-            .await
-            .map_err(|e| format!("连接失败: {}", e))?;
-
-        let status = resolve_resp.status();
-        let final_url = if status.is_redirection() {
-            resolve_resp
-                .headers()
-                .get("location")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| model_url.clone())
-        } else if status.is_success() {
-            model_url.clone()
-        } else {
-            return Err(format!("获取下载链接失败，HTTP 状态码: {}", status.as_u16()));
-        };
-
-        let mut req = download_client
-            .get(&final_url)
-            .header("Accept", "*/*")
-            .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
-
-        if existing_size > 0 {
-            req = req.header("Range", format!("bytes={}-", existing_size));
-        }
-
-        let response = req
-            .send()
-            .await
-            .map_err(|e| format!("下载请求失败: {}", e))?;
-
-        let status = response.status();
-
-        if existing_size > 0 && status != reqwest::StatusCode::PARTIAL_CONTENT {
-            let _ = std::fs::remove_file(&part_path);
-            return Err(format!("续传失败 (HTTP {}), 请重新下载", status.as_u16()));
-        }
-
-        if !status.is_success() && status != reqwest::StatusCode::PARTIAL_CONTENT {
-            return Err(format!("下载失败，HTTP 状态码: {}", status.as_u16()));
-        }
-
-        let total_size = if existing_size > 0 {
-            if let Some(content_range) = response.headers().get("content-range") {
-                if let Ok(range_str) = content_range.to_str() {
-                    if let Some(total_str) = range_str.split('/').nth(1) {
-                        total_str.trim().parse::<u64>().unwrap_or(0)
-                    } else {
-                        0
-                    }
-                } else {
-                    0
-                }
-            } else {
-                0
-            }
-        } else {
-            response.content_length().unwrap_or(0)
-        };
-
-        let mut file = if existing_size > 0 {
-            tokio::fs::OpenOptions::new()
-                .append(true)
-                .open(&part_path)
-                .await
-                .map_err(|e| format!("打开续传文件失败: {}", e))?
-        } else {
-            tokio::fs::File::create(&part_path)
-                .await
-                .map_err(|e| format!("创建文件失败: {}", e))?
-        };
-
-        let mut downloaded: u64 = existing_size;
-        let mut stream = response.bytes_stream();
-
-        while let Some(chunk_result) = stream.next().await {
-            let chunk = chunk_result.map_err(|e| format!("下载数据读取失败: {}", e))?;
-            file.write_all(&chunk)
-                .await
-                .map_err(|e| format!("写入文件失败: {}", e))?;
-            downloaded += chunk.len() as u64;
-
-            let progress = if total_size > 0 {
-                ((downloaded as f64 / total_size as f64) * 100.0).min(99.0) as u8
-            } else {
-                0
-            };
-
-            app.emit(
-                "download-progress",
-                serde_json::json!({
-                    "model_id": &model_id,
-                    "progress": progress,
-                    "downloaded": downloaded,
-                    "total": total_size,
-                    "type": "model",
-                }),
-            )
-            .ok();
-
-            if let Ok(mut map) = app.state::<AppState>().downloading_progress.lock() {
-                map.insert(model_id.clone(), progress);
-            }
-        }
-
-        file.flush().await.map_err(|e| format!("刷新文件失败: {}", e))?;
-        drop(file);
-
-        tokio::fs::rename(&part_path, &final_path)
-            .await
-            .map_err(|e| format!("重命名文件失败: {}", e))?;
-
-        app.emit(
-            "download-complete",
-            serde_json::json!({ "model_id": &model_id, "type": "model" }),
-        )
-        .ok();
-    } else {
-        let _ = std::fs::remove_file(&part_path);
-        app.emit(
-            "download-complete",
-            serde_json::json!({ "model_id": &model_id, "type": "model" }),
-        )
-        .ok();
-    }
-
-    if model_type == "视觉多模态理解" {
-        if let Some(mmproj_url) = model_mmproj {
-            app.state::<AppState>().downloading_phase.lock().unwrap().insert(model_id.clone(), "mmproj".to_string());
-            let mmproj_url = mmproj_url.replace("https://huggingface.co/", "https://hf-mirror.com/");
-            let mmproj_filename = mmproj_url
-                .rsplit('/')
-                .next()
-                .unwrap_or("mmproj.gguf")
-                .to_string();
-            let mmproj_final_path = model_dir.join(&mmproj_filename);
-            let mmproj_part_path = model_dir.join(format!("{}.part", mmproj_filename));
-
-            if mmproj_final_path.exists() {
-                let _ = std::fs::remove_file(&mmproj_part_path);
-                app.emit(
-                    "download-complete",
-                    serde_json::json!({ "model_id": &model_id, "type": "mmproj" }),
-                )
-                .ok();
-                return Ok(());
-            }
-
-            let mmproj_existing_size = if mmproj_part_path.exists() {
-                std::fs::metadata(&mmproj_part_path)
-                    .map(|m| m.len())
-                    .unwrap_or(0)
-            } else {
-                0
-            };
-
-            app.emit(
-                "download-progress",
-                serde_json::json!({
-                    "model_id": &model_id,
-                    "progress": 0u8,
-                    "downloaded": 0u64,
-                    "total": 0u64,
-                    "type": "mmproj",
-                }),
-            )
-            .ok();
-
-            let mmproj_resolve_resp = resolve_client
-                .get(&mmproj_url)
-                .header("Accept", "*/*")
-                .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-                .send()
-                .await
-                .map_err(|e| format!("mmproj 连接失败: {}", e))?;
-
-            let mmproj_status = mmproj_resolve_resp.status();
-            let mmproj_final_url = if mmproj_status.is_redirection() {
-                mmproj_resolve_resp
-                    .headers()
-                    .get("location")
-                    .and_then(|v| v.to_str().ok())
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| mmproj_url.clone())
-            } else if mmproj_status.is_success() {
-                mmproj_url.clone()
-            } else {
-                return Err(format!("获取 mmproj 下载链接失败，HTTP 状态码: {}", mmproj_status.as_u16()));
-            };
-
-            let mut mmproj_req = download_client
-                .get(&mmproj_final_url)
-                .header("Accept", "*/*")
-                .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
-
-            if mmproj_existing_size > 0 {
-                mmproj_req = mmproj_req.header("Range", format!("bytes={}-", mmproj_existing_size));
-            }
-
-            let mmproj_response = mmproj_req
-                .send()
-                .await
-                .map_err(|e| format!("mmproj 下载请求失败: {}", e))?;
-
-            let mmproj_dl_status = mmproj_response.status();
-
-            if mmproj_existing_size > 0 && mmproj_dl_status != reqwest::StatusCode::PARTIAL_CONTENT {
-                let _ = std::fs::remove_file(&mmproj_part_path);
-                return Err(format!("mmproj 续传失败 (HTTP {}), 请重新下载", mmproj_dl_status.as_u16()));
-            }
-
-            if !mmproj_dl_status.is_success() && mmproj_dl_status != reqwest::StatusCode::PARTIAL_CONTENT {
-                return Err(format!("mmproj 下载失败，HTTP 状态码: {}", mmproj_dl_status.as_u16()));
-            }
-
-            let mmproj_total_size = if mmproj_existing_size > 0 {
-                if let Some(content_range) = mmproj_response.headers().get("content-range") {
-                    if let Ok(range_str) = content_range.to_str() {
-                        if let Some(total_str) = range_str.split('/').nth(1) {
-                            total_str.trim().parse::<u64>().unwrap_or(0)
-                        } else {
-                            0
-                        }
-                    } else {
-                        0
-                    }
-                } else {
-                    0
-                }
-            } else {
-                mmproj_response.content_length().unwrap_or(0)
-            };
-
-            let mut mmproj_file = if mmproj_existing_size > 0 {
-                tokio::fs::OpenOptions::new()
-                    .append(true)
-                    .open(&mmproj_part_path)
-                    .await
-                    .map_err(|e| format!("打开 mmproj 续传文件失败: {}", e))?
-            } else {
-                tokio::fs::File::create(&mmproj_part_path)
-                    .await
-                    .map_err(|e| format!("创建 mmproj 文件失败: {}", e))?
-            };
-
-            let mut mmproj_downloaded: u64 = mmproj_existing_size;
-            let mut mmproj_stream = mmproj_response.bytes_stream();
-
-            while let Some(chunk_result) = mmproj_stream.next().await {
-                let chunk = chunk_result.map_err(|e| format!("mmproj 下载数据读取失败: {}", e))?;
-                mmproj_file
-                    .write_all(&chunk)
-                    .await
-                    .map_err(|e| format!("mmproj 写入文件失败: {}", e))?;
-                mmproj_downloaded += chunk.len() as u64;
-
-                let mmproj_progress = if mmproj_total_size > 0 {
-                    ((mmproj_downloaded as f64 / mmproj_total_size as f64) * 100.0).min(99.0) as u8
-                } else {
-                    0
-                };
-
-                app.emit(
+    // ===== 主模型文件下载 =====
+    {
+        let app_clone = app.clone();
+        let mid = model_id.clone();
+        download_with_resume(
+            &download_client, &model_url, &final_path, &part_path,
+            |progress, downloaded, total| {
+                app_clone.emit(
                     "download-progress",
                     serde_json::json!({
-                        "model_id": &model_id,
-                        "progress": mmproj_progress,
-                        "downloaded": mmproj_downloaded,
-                        "total": mmproj_total_size,
-                        "type": "mmproj",
+                        "model_id": &mid,
+                        "progress": progress,
+                        "downloaded": downloaded,
+                        "total": total,
+                        "type": "model",
                     }),
-                )
-                .ok();
-            }
+                ).ok();
+                if let Ok(mut map) = app_clone.state::<AppState>().downloading_progress.lock() {
+                    map.insert(mid.clone(), progress);
+                }
+            },
+        ).await?;
+        app.emit(
+            "download-complete",
+            serde_json::json!({ "model_id": &model_id, "type": "model" }),
+        ).ok();
+    }
 
-            mmproj_file.flush().await.map_err(|e| format!("刷新 mmproj 文件失败: {}", e))?;
-            drop(mmproj_file);
-
-            tokio::fs::rename(&mmproj_part_path, &mmproj_final_path)
-                .await
-                .map_err(|e| format!("重命名 mmproj 文件失败: {}", e))?;
-
-            app.emit(
-                "download-complete",
-                serde_json::json!({ "model_id": &model_id, "type": "mmproj" }),
-            )
-            .ok();
+    // ===== 视觉多模态：mmproj 文件下载 =====
+    if model_type == "视觉多模态理解" {
+        if let Some(mmproj_url) = model_mmproj {
+            app.state::<AppState>().downloading_phase.lock().unwrap_or_else(|e| e.into_inner()).insert(model_id.clone(), "mmproj".to_string());
+            download_extra_file(
+                &app, &model_id, &model_dir, &mmproj_url,
+                &download_client, "mmproj"
+            ).await?;
         }
     }
 
+    // ===== 文生图：diffusion + vae 文件下载 =====
     if model_type == "文本生成图片" {
         if let Some(diffusion_url) = model_diffusion {
-            app.state::<AppState>().downloading_phase.lock().unwrap().insert(model_id.clone(), "diffusion".to_string());
+            app.state::<AppState>().downloading_phase.lock().unwrap_or_else(|e| e.into_inner()).insert(model_id.clone(), "diffusion".to_string());
             download_extra_file(
                 &app, &model_id, &model_dir, &diffusion_url,
-                &resolve_client, &download_client, "diffusion"
+                &download_client, "diffusion"
             ).await?;
         }
         if let Some(vae_url) = model_vae {
-            app.state::<AppState>().downloading_phase.lock().unwrap().insert(model_id.clone(), "vae".to_string());
+            app.state::<AppState>().downloading_phase.lock().unwrap_or_else(|e| e.into_inner()).insert(model_id.clone(), "vae".to_string());
             download_extra_file(
                 &app, &model_id, &model_dir, &vae_url,
-                &resolve_client, &download_client, "vae"
+                &download_client, "vae"
             ).await?;
         }
     }
@@ -533,10 +264,9 @@ async fn download_extra_file(
     model_id: &str,
     model_dir: &std::path::Path,
     file_url: &str,
-    resolve_client: &reqwest::Client,
     download_client: &reqwest::Client,
     file_type: &str,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let file_url = file_url.replace("https://huggingface.co/", "https://hf-mirror.com/");
 
     let filename = file_url
@@ -547,24 +277,7 @@ async fn download_extra_file(
     let final_path = model_dir.join(&filename);
     let part_path = model_dir.join(format!("{}.part", filename));
 
-    if final_path.exists() {
-        let _ = std::fs::remove_file(&part_path);
-        app.emit(
-            "download-complete",
-            serde_json::json!({ "model_id": model_id, "type": file_type }),
-        )
-        .ok();
-        return Ok(());
-    }
-
-    let existing_size = if part_path.exists() {
-        std::fs::metadata(&part_path)
-            .map(|m| m.len())
-            .unwrap_or(0)
-    } else {
-        0
-    };
-
+    // 发送初始进度（0%）
     app.emit(
         "download-progress",
         serde_json::json!({
@@ -577,120 +290,27 @@ async fn download_extra_file(
     )
     .ok();
 
-    let resolve_resp = resolve_client
-        .get(&file_url)
-        .header("Accept", "*/*")
-        .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-        .send()
-        .await
-        .map_err(|e| format!("{} 连接失败: {}", file_type, e))?;
-
-    let status = resolve_resp.status();
-    let final_url = if status.is_redirection() {
-        resolve_resp
-            .headers()
-            .get("location")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| file_url.clone())
-    } else if status.is_success() {
-        file_url.clone()
-    } else {
-        return Err(format!("获取 {} 下载链接失败，HTTP 状态码: {}", file_type, status.as_u16()));
-    };
-
-    let mut req = download_client
-        .get(&final_url)
-        .header("Accept", "*/*")
-        .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
-
-    if existing_size > 0 {
-        req = req.header("Range", format!("bytes={}-", existing_size));
-    }
-
-    let response = req
-        .send()
-        .await
-        .map_err(|e| format!("{} 下载请求失败: {}", file_type, e))?;
-
-    let dl_status = response.status();
-
-    if existing_size > 0 && dl_status != reqwest::StatusCode::PARTIAL_CONTENT {
-        let _ = std::fs::remove_file(&part_path);
-        return Err(format!("{} 续传失败 (HTTP {}), 请重新下载", file_type, dl_status.as_u16()));
-    }
-
-    if !dl_status.is_success() && dl_status != reqwest::StatusCode::PARTIAL_CONTENT {
-        return Err(format!("{} 下载失败，HTTP 状态码: {}", file_type, dl_status.as_u16()));
-    }
-
-    let total_size = if existing_size > 0 {
-        if let Some(content_range) = response.headers().get("content-range") {
-            if let Ok(range_str) = content_range.to_str() {
-                if let Some(total_str) = range_str.split('/').nth(1) {
-                    total_str.trim().parse::<u64>().unwrap_or(0)
-                } else {
-                    0
-                }
-            } else {
-                0
-            }
-        } else {
-            0
-        }
-    } else {
-        response.content_length().unwrap_or(0)
-    };
-
-    use tokio::io::AsyncWriteExt;
-    let mut file = if existing_size > 0 {
-        tokio::fs::OpenOptions::new()
-            .append(true)
-            .open(&part_path)
-            .await
-            .map_err(|e| format!("打开 {} 续传文件失败: {}", file_type, e))?
-    } else {
-        tokio::fs::File::create(&part_path)
-            .await
-            .map_err(|e| format!("创建 {} 文件失败: {}", file_type, e))?
-    };
-
-    let mut downloaded: u64 = existing_size;
-    let mut stream = response.bytes_stream();
-    use futures_util::StreamExt;
-
-    while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result.map_err(|e| format!("{} 下载数据读取失败: {}", file_type, e))?;
-        file.write_all(&chunk)
-            .await
-            .map_err(|e| format!("{} 写入文件失败: {}", file_type, e))?;
-        downloaded += chunk.len() as u64;
-
-        let progress = if total_size > 0 {
-            ((downloaded as f64 / total_size as f64) * 100.0).min(99.0) as u8
-        } else {
-            0
-        };
-
-        app.emit(
-            "download-progress",
-            serde_json::json!({
-                "model_id": model_id,
-                "progress": progress,
-                "downloaded": downloaded,
-                "total": total_size,
-                "type": file_type,
-            }),
-        )
-        .ok();
-    }
-
-    file.flush().await.map_err(|e| format!("刷新 {} 文件失败: {}", file_type, e))?;
-    drop(file);
-
-    tokio::fs::rename(&part_path, &final_path)
-        .await
-        .map_err(|e| format!("重命名 {} 文件失败: {}", file_type, e))?;
+    // 使用通用下载函数（带断点续传）
+    let app_clone = app.clone();
+    let mid = model_id.to_string();
+    let ft = file_type.to_string();
+    download_with_resume(
+        download_client, &file_url, &final_path, &part_path,
+        |progress, downloaded, total| {
+            app_clone.emit(
+                "download-progress",
+                serde_json::json!({
+                    "model_id": &mid,
+                    "progress": progress,
+                    "downloaded": downloaded,
+                    "total": total,
+                    "type": &ft,
+                }),
+            )
+            .ok();
+        },
+    )
+    .await?;
 
     app.emit(
         "download-complete",
@@ -709,11 +329,11 @@ pub async fn start_model(
     params: LaunchParams,
     support_images: bool,
     model_filename: Option<String>,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     {
         let pid_lock = state.running_process.lock().map_err(|e| e.to_string())?;
         if pid_lock.is_some() {
-            return Err("已有模型在运行中，请先停止当前模型".to_string());
+            bail!("已有模型在运行中，请先停止当前模型");
         }
     }
 
@@ -725,7 +345,7 @@ pub async fn start_model(
         if subfolder_path.exists() {
             subfolder_path
         } else {
-            return Err(format!("模型文件不存在: {:?}", subfolder_path));
+            return Err(AppError::msg(format!("模型文件不存在: {:?}", subfolder_path)));
         }
     } else {
         let subfolder_path = models_dir.join(&model_id).join(format!("{}.gguf", model_id));
@@ -735,7 +355,7 @@ pub async fn start_model(
         } else if root_path.exists() {
             root_path
         } else {
-            return Err(format!("模型文件不存在: {:?}", subfolder_path));
+            return Err(AppError::msg(format!("模型文件不存在: {:?}", subfolder_path)));
         }
     };
 
@@ -892,7 +512,7 @@ pub async fn start_model(
 
     args.push("--verbose".to_string());
 
-    println!("[DEBUG] llama-server args: {:?}", args);
+    dbg_log!("[DEBUG] llama-server args: {:?}", args);
 
     app.emit(
         "model-log",
@@ -1018,7 +638,7 @@ pub async fn start_model(
 }
 
 #[tauri::command]
-pub async fn stop_model(state: tauri::State<'_, AppState>) -> Result<(), String> {
+pub async fn stop_model(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
     let pid = {
         let pid_lock = state.running_process.lock().map_err(|e| e.to_string())?;
         pid_lock.ok_or("没有正在运行的模型")?
@@ -1061,12 +681,12 @@ pub async fn stop_model(state: tauri::State<'_, AppState>) -> Result<(), String>
 
 /// 查询是否有模型已成功启动（全局标识），用于进入 Agent 页前的判断
 #[tauri::command]
-pub async fn is_model_running(state: tauri::State<'_, AppState>) -> Result<bool, String> {
+pub async fn is_model_running(state: tauri::State<'_, AppState>) -> Result<bool, AppError> {
     Ok(state.is_model_running())
 }
 
 #[tauri::command]
-pub async fn get_model_status(state: tauri::State<'_, AppState>) -> Result<ModelStatus, String> {
+pub async fn get_model_status(state: tauri::State<'_, AppState>) -> Result<ModelStatus, AppError> {
     let pid = *state
         .running_process
         .lock()
@@ -1104,13 +724,13 @@ pub async fn get_model_status(state: tauri::State<'_, AppState>) -> Result<Model
 }
 
 #[tauri::command]
-pub async fn get_downloading_models(state: tauri::State<'_, AppState>) -> Result<HashMap<String, u8>, String> {
+pub async fn get_downloading_models(state: tauri::State<'_, AppState>) -> Result<HashMap<String, u8>, AppError> {
     let map = state.downloading_progress.lock().map_err(|e| e.to_string())?;
     Ok(map.clone())
 }
 
 #[tauri::command]
-pub async fn get_downloading_phases(state: tauri::State<'_, AppState>) -> Result<HashMap<String, String>, String> {
+pub async fn get_downloading_phases(state: tauri::State<'_, AppState>) -> Result<HashMap<String, String>, AppError> {
     let map = state.downloading_phase.lock().map_err(|e| e.to_string())?;
     Ok(map.clone())
 }

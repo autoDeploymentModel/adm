@@ -5,32 +5,13 @@ use crate::app_state::AppState;
 use crate::common::config;
 use crate::common::utils::archive;
 use crate::common::utils::platform;
+use crate::common::utils::download::download_with_resume;
 use crate::pages::settings::get_llamacpp_version;
+use crate::bail;
 
 use tauri::Emitter;
 
 // ===== 辅助函数 =====
-
-#[cfg(target_os = "windows")]
-fn decode_wmic_output(bytes: &[u8]) -> String {
-    if bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE {
-        let u16_data: Vec<u16> = bytes[2..]
-            .chunks(2)
-            .filter(|c| c.len() == 2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
-            .collect();
-        String::from_utf16_lossy(&u16_data)
-    } else if bytes.len() >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF {
-        let u16_data: Vec<u16> = bytes[2..]
-            .chunks(2)
-            .filter(|c| c.len() == 2)
-            .map(|c| u16::from_be_bytes([c[0], c[1]]))
-            .collect();
-        String::from_utf16_lossy(&u16_data)
-    } else {
-        String::from_utf8_lossy(bytes).to_string()
-    }
-}
 
 #[cfg(target_os = "windows")]
 fn extract_nvidia_series(gpu_name: &str) -> Option<u32> {
@@ -93,13 +74,15 @@ fn detect_hardware_for_llamacpp() -> HardwareDetectResult {
 
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
-        if let Ok(output) = std::process::Command::new("wmic")
-            .creation_flags(0x08000000)
-            .args(["path", "win32_VideoController", "get", "Name"])
+        // 使用 PowerShell Get-CimInstance 替代已弃用的 wmic
+        if let Ok(output) = platform::create_hidden_command("powershell")
+            .args([
+                "-NoProfile", "-NonInteractive", "-Command",
+                "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name",
+            ])
             .output()
         {
-            let stdout = decode_wmic_output(&output.stdout);
+            let stdout = String::from_utf8_lossy(&output.stdout);
             let mut nvidia_found = None;
             let mut amd_found = None;
             let mut intel_found = None;
@@ -107,7 +90,7 @@ fn detect_hardware_for_llamacpp() -> HardwareDetectResult {
 
             for line in stdout.lines() {
                 let trimmed = line.trim();
-                if trimmed.is_empty() || trimmed == "Name" {
+                if trimmed.is_empty() {
                     continue;
                 }
                 if first_gpu.is_none() {
@@ -172,7 +155,7 @@ fn detect_hardware_for_llamacpp() -> HardwareDetectResult {
     }
 }
 
-fn get_llamacpp_download_url(hardware: &HardwareDetectResult) -> Result<String, String> {
+fn get_llamacpp_download_url(hardware: &HardwareDetectResult) -> Result<String, AppError> {
     match hardware.os.as_str() {
         "macos" => {
             Ok("https://adm.tuduoduo.top/llamacpp/macos.tar.gz".to_string())
@@ -189,17 +172,17 @@ fn get_llamacpp_download_url(hardware: &HardwareDetectResult) -> Result<String, 
                     Ok("https://adm.tuduoduo.top/llamacpp/vulkan.zip".to_string())
                 }
                 Some(other) => {
-                    println!("[WARN] 不支持的显卡型号: {}，将使用 Vulkan 版本", other);
+                    eprintln!("[WARN] 不支持的显卡型号: {}，将使用 Vulkan 版本", other);
                     Ok("https://adm.tuduoduo.top/llamacpp/vulkan.zip".to_string())
                 }
                 None => {
-                    println!("[WARN] 未检测到支持的显卡，将使用 Vulkan 版本");
+                    eprintln!("[WARN] 未检测到支持的显卡，将使用 Vulkan 版本");
                     Ok("https://adm.tuduoduo.top/llamacpp/vulkan.zip".to_string())
                 }
             }
         }
         other => {
-            Err(format!("不支持的操作系统: {}，当前仅支持 Windows 和 macOS", other))
+            bail!("不支持的操作系统: {}，当前仅支持 Windows 和 macOS", other)
         }
     }
 }
@@ -233,7 +216,7 @@ fn compare_versions(current: &str, remote: &str) -> std::cmp::Ordering {
 
 /// 拉取远程更新清单 update.json（15s 超时）。
 /// 供 check_update 与 admAgent 版本检查共用。
-pub(crate) async fn fetch_update_info() -> Result<UpdateInfo, String> {
+pub(crate) async fn fetch_update_info() -> Result<UpdateInfo, AppError> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .build()
@@ -246,7 +229,7 @@ pub(crate) async fn fetch_update_info() -> Result<UpdateInfo, String> {
         .map_err(|e| format!("检查更新失败: {}", e))?;
 
     if !response.status().is_success() {
-        return Err(format!("服务器返回错误状态码: {}", response.status()));
+        bail!("服务器返回错误状态码: {}", response.status());
     }
 
     let text = response
@@ -254,11 +237,11 @@ pub(crate) async fn fetch_update_info() -> Result<UpdateInfo, String> {
         .await
         .map_err(|e| format!("读取响应文本失败: {}", e))?;
 
-    serde_json::from_str(&text).map_err(|e| format!("解析更新信息失败: {}", e))
+    serde_json::from_str(&text).map_err(|e| AppError::msg(format!("解析更新信息失败: {}", e)))
 }
 
 #[tauri::command]
-pub async fn get_system_info(state: tauri::State<'_, AppState>) -> Result<SystemInfo, String> {
+pub async fn get_system_info(state: tauri::State<'_, AppState>) -> Result<SystemInfo, AppError> {
     let mut sys = state.sys.lock().map_err(|e| format!("锁获取失败: {}", e))?;
     sys.refresh_all();
 
@@ -283,7 +266,7 @@ pub async fn get_system_info(state: tauri::State<'_, AppState>) -> Result<System
 }
 
 #[tauri::command]
-pub async fn check_update(app: tauri::AppHandle) -> Result<UpdateCheckResult, String> {
+pub async fn check_update(app: tauri::AppHandle) -> Result<UpdateCheckResult, AppError> {
     let current_version = app.config().version.clone().unwrap_or_else(|| "0.0.0".to_string());
 
     let update_info = fetch_update_info().await?;
@@ -374,12 +357,12 @@ pub async fn check_update(app: tauri::AppHandle) -> Result<UpdateCheckResult, St
 }
 
 #[tauri::command]
-pub async fn download_and_extract_llamacpp(app: tauri::AppHandle, url: String) -> Result<(), String> {
+pub async fn download_and_extract_llamacpp(app: tauri::AppHandle, url: String) -> Result<(), AppError> {
     if url.trim().is_empty() || !url.starts_with("http") {
-        return Err(format!(
+        bail!(
             "下载地址无效: {}，请重新检查更新",
             if url.is_empty() { "地址为空" } else { &url }
-        ));
+        );
     }
 
     let llamacpp_dir = config::get_llamacpp_dir(Some(&app))?;
@@ -404,105 +387,18 @@ pub async fn download_and_extract_llamacpp(app: tauri::AppHandle, url: String) -
         .build()
         .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
 
-    let mut existing_size: u64 = 0;
-    if archive_path.exists() {
-        existing_size = std::fs::metadata(&archive_path)
-            .map(|m| m.len())
-            .unwrap_or(0);
-    }
+    let part_path = archive_path.with_extension("part");
 
-    let mut req = client.get(&url);
-    if existing_size > 0 {
-        req = req.header("Range", format!("bytes={}-", existing_size));
-    }
-
-    let response = req.send().await.map_err(|e| {
-        let detail = if e.is_builder() {
-            "请求构建失败，可能是网络地址格式异常".to_string()
-        } else if e.is_connect() {
-            format!("无法连接到服务器（{}），请检查网络连接", url)
-        } else if e.is_timeout() {
-            "连接超时，请检查网络或更换网络环境".to_string()
-        } else if e.is_request() {
-            format!("请求错误: {}", e)
-        } else {
-            format!("{}", e)
-        };
-        format!("下载请求失败: {}", detail)
-    })?;
-
-    let is_partial = response.status() == reqwest::StatusCode::PARTIAL_CONTENT;
-    let mut total_size: u64 = 0;
-
-    if is_partial && existing_size > 0 {
-        // 解析 Content-Range 头获取总大小
-        if let Some(content_range) = response.headers().get("Content-Range") {
-            if let Ok(range_str) = content_range.to_str() {
-                if let Some(total_part) = range_str.split('/').nth(1) {
-                    if let Ok(t) = total_part.parse::<u64>() {
-                        total_size = t;
-                    }
-                }
-            }
-        }
-        app.emit(
-            "llamacpp-download-progress",
-            serde_json::json!({ "status": "resuming", "progress": if total_size > 0 { (existing_size as f64 / total_size as f64) * 100.0 } else { 0.0 } as u8 }),
-        )
-        .ok();
-    } else if existing_size > 0 {
-        // 服务器不支持续传，删除旧文件从头下载
-        let _ = std::fs::remove_file(&archive_path);
-        existing_size = 0;
-    }
-
-    if !response.status().is_success() && !is_partial {
-        return Err(format!("下载失败，HTTP 状态码: {}", response.status()));
-    }
-
-    if total_size == 0 {
-        total_size = response.content_length().unwrap_or(0);
-    }
-
-    use tokio::io::AsyncWriteExt;
-    let mut file = if existing_size > 0 {
-        tokio::fs::OpenOptions::new()
-            .append(true)
-            .open(&archive_path)
-            .await
-            .map_err(|e| format!("打开续传文件失败: {}", e))?
-    } else {
-        tokio::fs::File::create(&archive_path)
-            .await
-            .map_err(|e| format!("创建临时文件失败: {}", e))?
-    };
-
-    let mut downloaded: u64 = existing_size;
-    let mut stream = response.bytes_stream();
-    use futures_util::StreamExt;
-
-    while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result.map_err(|e| format!("下载数据读取失败: {}", e))?;
-        file.write_all(&chunk)
-            .await
-            .map_err(|e| format!("写入文件失败: {}", e))?;
-        downloaded += chunk.len() as u64;
-
-        let progress = if total_size > 0 {
-            ((downloaded as f64 / total_size as f64) * 100.0).min(99.0) as u8
-        } else {
-            0
-        };
-
-        app.emit(
-            "llamacpp-download-progress",
-            serde_json::json!({ "status": "downloading", "progress": progress }),
-        )
-        .ok();
-    }
-
-    file.flush().await.map_err(|e| format!("刷新文件失败: {}", e))?;
-    drop(file);
+    let app_clone = app.clone();
+    download_with_resume(
+        &client, &url, &archive_path, &part_path,
+        |progress, _downloaded, _total| {
+            app_clone.emit(
+                "llamacpp-download-progress",
+                serde_json::json!({ "status": "downloading", "progress": progress }),
+            ).ok();
+        },
+    ).await?;
 
     app.emit(
         "llamacpp-download-progress",
@@ -526,14 +422,14 @@ pub async fn download_and_extract_llamacpp(app: tauri::AppHandle, url: String) -
 
     // 验证压缩包是否存在
     if !archive_path.exists() {
-        return Err(format!("压缩包不存在: {:?}", archive_path));
+        bail!("压缩包不存在: {:?}", archive_path);
     }
 
     let archive_size = std::fs::metadata(&archive_path)
         .map(|m| m.len())
         .unwrap_or(0);
     if archive_size == 0 {
-        return Err(format!("压缩包为空: {:?}", archive_path));
+        bail!("压缩包为空: {:?}", archive_path);
     }
 
     let ext = archive_path
@@ -549,10 +445,10 @@ pub async fn download_and_extract_llamacpp(app: tauri::AppHandle, url: String) -
     };
 
     if copied == 0 {
-        return Err(format!(
+        bail!(
             "解压后未找到任何文件\n压缩包: {:?}\n压缩包大小: {} bytes\n请检查压缩包是否完整",
             archive_path, archive_size
-        ));
+        );
     }
 
     let _ = std::fs::remove_dir_all(&temp_dir);

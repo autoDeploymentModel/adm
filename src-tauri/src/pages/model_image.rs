@@ -1,8 +1,13 @@
 use crate::common::config;
 use crate::common::utils::platform;
+use crate::common::utils::download::download_with_resume;
+use crate::common::error::AppError;
 use crate::app_state::AppState;
+use crate::bail;
+use crate::dbg_log;
 use serde::Serialize;
 use tauri::Emitter;
+use tauri::Manager;
 
 #[derive(Serialize, Clone)]
 pub struct SdStatus {
@@ -48,7 +53,7 @@ fn find_newest_image_in_sd(sd_dir: &std::path::Path) -> Option<std::path::PathBu
 }
 
 #[tauri::command]
-pub async fn get_sd_status(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<SdStatus, String> {
+pub async fn get_sd_status(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<SdStatus, AppError> {
     let base_dir = config::get_base_dir(Some(&app))?;
     let sd_dir = base_dir.join("sd");
     let target = if cfg!(target_os = "windows") {
@@ -66,7 +71,7 @@ pub async fn get_sd_status(app: tauri::AppHandle, state: tauri::State<'_, AppSta
     Ok(SdStatus { exists, downloading, progress, status })
 }
 
-fn get_download_url() -> Result<String, String> {
+fn get_download_url() -> Result<String, AppError> {
     let gpu_vendor = platform::detect_gpu_vendor();
 
     if cfg!(target_os = "windows") {
@@ -75,18 +80,18 @@ fn get_download_url() -> Result<String, String> {
             Some("amd") => Ok("https://adm.tuduoduo.top/sd/sd-vulkan.zip".to_string()),
             Some("intel") => Ok("https://adm.tuduoduo.top/sd/sd-vulkan.zip".to_string()),
             Some(other) => {
-                println!("[WARN] 不支持的显卡型号: {}，将使用 Vulkan 版本", other);
+                eprintln!("[WARN] 不支持的显卡型号: {}，将使用 Vulkan 版本", other);
                 Ok("https://adm.tuduoduo.top/sd/sd-vulkan.zip".to_string())
             }
             None => {
-                println!("[WARN] 未检测到支持的显卡，将使用 Vulkan 版本");
+                eprintln!("[WARN] 未检测到支持的显卡，将使用 Vulkan 版本");
                 Ok("https://adm.tuduoduo.top/sd/sd-vulkan.zip".to_string())
             }
         }
     } else if cfg!(target_os = "macos") {
         Ok("https://adm.tuduoduo.top/sd/sd-macos.zip".to_string())
     } else {
-        Err("不支持的操作系统，当前仅支持 Windows 和 macOS".to_string())
+        bail!("不支持的操作系统，当前仅支持 Windows 和 macOS")
     }
 }
 
@@ -94,9 +99,13 @@ fn calc_part_file_progress(base_dir: &std::path::Path, download_url: &str) -> u8
     let sd_dir = base_dir.join("sd");
     let file_name = download_url.split('/').next_back().unwrap_or("download");
     let archive_path = sd_dir.join(".tmp_download").join(file_name);
+    let part_path = archive_path.with_extension("part");
 
-    if archive_path.exists() {
-        if let Ok(metadata) = std::fs::metadata(&archive_path) {
+    // 检查 .part 文件（新格式）或 archive 文件（旧格式兼容）
+    let check_path = if part_path.exists() { &part_path } else { &archive_path };
+
+    if check_path.exists() {
+        if let Ok(metadata) = std::fs::metadata(check_path) {
             let size = metadata.len();
             if size > 0 {
                 // 粗略按文件大小估算，50MB 以下视为 <10%，100MB 以上视为 ~50%
@@ -112,7 +121,7 @@ fn calc_part_file_progress(base_dir: &std::path::Path, download_url: &str) -> u8
 }
 
 #[tauri::command]
-pub async fn download_and_extract_sd(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
+pub async fn download_and_extract_sd(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), AppError> {
     // 检查是否已在下载中，防止并发
     {
         let mut downloading = state.sd_downloading.lock().map_err(|e| e.to_string())?;
@@ -123,7 +132,7 @@ pub async fn download_and_extract_sd(app: tauri::AppHandle, state: tauri::State<
                 serde_json::json!({ "status": "resuming", "progress": progress }),
             )
             .ok();
-            return Err("SD 推理框架正在下载中，请勿重复操作".to_string());
+            bail!("SD 推理框架正在下载中，请勿重复操作");
         }
         *downloading = true;
     }
@@ -175,108 +184,32 @@ pub async fn download_and_extract_sd(app: tauri::AppHandle, state: tauri::State<
         .build()
         .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
 
-    let mut existing_size: u64 = 0;
-    if archive_path.exists() {
-        existing_size = std::fs::metadata(&archive_path)
-            .map(|m| m.len())
-            .unwrap_or(0);
-    }
+    let part_path = archive_path.with_extension("part");
 
-    let mut req = client.get(&download_url);
-    if existing_size > 0 {
-        req = req.header("Range", format!("bytes={}-", existing_size));
-    }
-
-    let response = req.send().await.map_err(|e| format!("下载请求失败: {}", e))?;
-
-    let is_partial = response.status() == reqwest::StatusCode::PARTIAL_CONTENT;
-    let mut total_size: u64 = 0;
-
-    if is_partial && existing_size > 0 {
-        if let Some(content_range) = response.headers().get("Content-Range") {
-            if let Ok(range_str) = content_range.to_str() {
-                if let Some(total_part) = range_str.split('/').nth(1) {
-                    if let Ok(t) = total_part.parse::<u64>() {
-                        total_size = t;
-                    }
-                }
+    let app_clone = app.clone();
+    download_with_resume(
+        &client, &download_url, &archive_path, &part_path,
+        |progress, _downloaded, _total| {
+            let st = app_clone.state::<AppState>();
+            if let Ok(mut p) = st.sd_download_progress.lock() {
+                *p = progress;
             }
-        }
-        let resume_progress = if total_size > 0 { (existing_size as f64 / total_size as f64) * 100.0 } else { 0.0 } as u8;
-        {
-            let mut p = state.sd_download_progress.lock().map_err(|e| e.to_string())?;
-            *p = resume_progress;
-        }
-        app.emit(
-            "sd-download-progress",
-            serde_json::json!({ "status": "resuming", "progress": resume_progress }),
-        )
-        .ok();
-    } else if existing_size > 0 {
-        let _ = std::fs::remove_file(&archive_path);
-        existing_size = 0;
-    }
-
-    if !response.status().is_success() && !is_partial {
-        {
-            let mut downloading = state.sd_downloading.lock().map_err(|e| e.to_string())?;
+            app_clone.emit(
+                "sd-download-progress",
+                serde_json::json!({ "status": "downloading", "progress": progress }),
+            ).ok();
+        },
+    ).await.map_err(|e| {
+        // 下载失败时重置状态
+        let st = app.state::<AppState>();
+        if let Ok(mut downloading) = st.sd_downloading.lock() {
             *downloading = false;
         }
-        {
-            let mut s = state.sd_download_status.lock().map_err(|e| e.to_string())?;
+        if let Ok(mut s) = st.sd_download_status.lock() {
             *s = "".to_string();
         }
-        return Err(format!("下载失败，HTTP 状态码: {}", response.status()));
-    }
-
-    if total_size == 0 {
-        total_size = response.content_length().unwrap_or(0);
-    }
-
-    use tokio::io::AsyncWriteExt;
-    let mut file = if existing_size > 0 {
-        tokio::fs::OpenOptions::new()
-            .append(true)
-            .open(&archive_path)
-            .await
-            .map_err(|e| format!("打开续传文件失败: {}", e))?
-    } else {
-        tokio::fs::File::create(&archive_path)
-            .await
-            .map_err(|e| format!("创建临时文件失败: {}", e))?
-    };
-
-    let mut downloaded: u64 = existing_size;
-    let mut stream = response.bytes_stream();
-    use futures_util::StreamExt;
-
-    while let Some(chunk_result) = stream.next().await {
-        let chunk = chunk_result.map_err(|e| format!("下载数据读取失败: {}", e))?;
-        file.write_all(&chunk)
-            .await
-            .map_err(|e| format!("写入文件失败: {}", e))?;
-        downloaded += chunk.len() as u64;
-
-        let progress = if total_size > 0 {
-            ((downloaded as f64 / total_size as f64) * 100.0).min(99.0) as u8
-        } else {
-            0
-        };
-
-        {
-            let mut p = state.sd_download_progress.lock().map_err(|e| e.to_string())?;
-            *p = progress;
-        }
-
-        app.emit(
-            "sd-download-progress",
-            serde_json::json!({ "status": "downloading", "progress": progress }),
-        )
-        .ok();
-    }
-
-    file.flush().await.map_err(|e| format!("刷新文件失败: {}", e))?;
-    drop(file);
+        e
+    })?;
 
     {
         let mut p = state.sd_download_progress.lock().map_err(|e| e.to_string())?;
@@ -302,7 +235,7 @@ pub async fn download_and_extract_sd(app: tauri::AppHandle, state: tauri::State<
             let mut s = state.sd_download_status.lock().map_err(|e| e.to_string())?;
             *s = "".to_string();
         }
-        return Err(format!("压缩包不存在: {:?}", archive_path));
+        bail!("压缩包不存在: {:?}", archive_path);
     }
 
     let archive_size = std::fs::metadata(&archive_path)
@@ -317,7 +250,7 @@ pub async fn download_and_extract_sd(app: tauri::AppHandle, state: tauri::State<
             let mut s = state.sd_download_status.lock().map_err(|e| e.to_string())?;
             *s = "".to_string();
         }
-        return Err(format!("压缩包为空: {:?}", archive_path));
+        bail!("压缩包为空: {:?}", archive_path);
     }
 
     let ext = archive_path
@@ -340,10 +273,10 @@ pub async fn download_and_extract_sd(app: tauri::AppHandle, state: tauri::State<
             let mut s = state.sd_download_status.lock().map_err(|e| e.to_string())?;
             *s = "".to_string();
         }
-        return Err(format!(
+        bail!(
             "解压后未找到任何文件\n压缩包: {:?}\n压缩包大小: {} bytes\n请检查压缩包是否完整",
             archive_path, archive_size
-        ));
+        );
     }
 
     let _ = std::fs::remove_dir_all(&temp_dir);
@@ -384,7 +317,7 @@ pub async fn download_and_extract_sd(app: tauri::AppHandle, state: tauri::State<
 }
 
 #[tauri::command]
-pub async fn save_sd_image_as(app: tauri::AppHandle, source_path: String) -> Result<(), String> {
+pub async fn save_sd_image_as(app: tauri::AppHandle, source_path: String) -> Result<(), AppError> {
     use tauri_plugin_dialog::DialogExt;
 
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -420,11 +353,11 @@ pub async fn start_sd_generation(
     model_url: String,
     model_diffusion: Option<String>,
     model_vae: Option<String>,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     {
         let pid_lock = state.running_process.lock().map_err(|e| e.to_string())?;
         if pid_lock.is_some() {
-            return Err("已有进程在运行中，请先停止当前进程".to_string());
+            bail!("已有进程在运行中，请先停止当前进程");
         }
     }
 
@@ -438,7 +371,7 @@ pub async fn start_sd_generation(
     let model_dir = models_dir.join(&model_id);
 
     if !model_dir.exists() {
-        return Err(format!("模型目录不存在: {:?}", model_dir));
+        bail!("模型目录不存在: {:?}", model_dir);
     }
 
     let get_filename = |url: &str| -> String {
@@ -449,7 +382,7 @@ pub async fn start_sd_generation(
     let llm_path = model_dir.join(&llm_filename);
 
     if !llm_path.exists() {
-        return Err(format!("模型文件不存在: {:?}", llm_path));
+        bail!("模型文件不存在: {:?}", llm_path);
     }
 
     let args: Vec<String> = vec![
@@ -483,7 +416,7 @@ pub async fn start_sd_generation(
         "8".to_string(),
     ];
 
-    println!("[DEBUG] sd-cli args: {:?}", args);
+    dbg_log!("[DEBUG] sd-cli args: {:?}", args);
 
     let mut cmd = platform::create_hidden_command(&sd_cli_path);
     #[cfg(target_os = "macos")]
@@ -650,7 +583,7 @@ pub async fn start_sd_generation(
 }
 
 #[tauri::command]
-pub async fn stop_sd(state: tauri::State<'_, AppState>) -> Result<(), String> {
+pub async fn stop_sd(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
     let pid = {
         let pid_lock = state.running_process.lock().map_err(|e| e.to_string())?;
         pid_lock.ok_or("没有正在运行的进程")?

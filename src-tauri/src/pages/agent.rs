@@ -5,6 +5,8 @@ use crate::common::config;
 use crate::common::types::Settings;
 use crate::common::types::AdmAgentUpdateCheck;
 use crate::common::utils::platform;
+use crate::common::error::AppError;
+use crate::bail;
 use crate::pages::index::fetch_update_info;
 
 use base64::Engine;
@@ -31,7 +33,7 @@ fn load_agent_workdir(app: &tauri::AppHandle) -> String {
 }
 
 // 原子写入工作目录到配置文件
-fn save_agent_workdir(app: &tauri::AppHandle, workdir: &str) -> Result<(), String> {
+fn save_agent_workdir(app: &tauri::AppHandle, workdir: &str) -> Result<(), AppError> {
     let data_dir = config::get_data_dir(Some(app))?;
     let config_path = data_dir.join("config.json");
 
@@ -61,7 +63,7 @@ fn save_agent_workdir(app: &tauri::AppHandle, workdir: &str) -> Result<(), Strin
 /// - Windows：软件所在根目录（可执行文件所在目录）
 /// - macOS：应用用户目录（app_data_dir，如 ~/Library/Application Support/com.adm.admapp）
 #[allow(unused_variables)]
-fn adm_agent_target_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+fn adm_agent_target_dir(app: &tauri::AppHandle) -> Result<PathBuf, AppError> {
     #[cfg(target_os = "windows")]
     {
         config::get_exe_dir()
@@ -72,7 +74,7 @@ fn adm_agent_target_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        Err("不支持的操作系统，当前仅支持 Windows / macOS".to_string())
+        bail!("不支持的操作系统，当前仅支持 Windows / macOS")
     }
 }
 
@@ -94,7 +96,7 @@ fn adm_agent_download_url() -> &'static str {
     }
 }
 
-fn adm_agent_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+fn adm_agent_path(app: &tauri::AppHandle) -> Result<PathBuf, AppError> {
     Ok(adm_agent_target_dir(app)?.join(adm_agent_file_name()))
 }
 
@@ -105,13 +107,13 @@ const DEFAULT_CONTEXT_WINDOW: u32 = 128000;
 
 /// admAgent.json 的存放目录：`$HOME/.config/admAgent`
 /// Windows 下 $HOME 即 C:\Users\{username}，最终路径为 C:\Users\{username}\.config\admAgent
-fn adm_agent_config_dir() -> Result<PathBuf, String> {
+fn adm_agent_config_dir() -> Result<PathBuf, AppError> {
     let home = if let Ok(p) = std::env::var("USERPROFILE") {
         PathBuf::from(p)
     } else if let Ok(p) = std::env::var("HOME") {
         PathBuf::from(p)
     } else {
-        return Err("无法确定用户主目录，无法创建 admAgent 配置目录".to_string());
+        return Err(AppError::msg("无法确定用户主目录，无法创建 admAgent 配置目录"));
     };
     Ok(home.join(".config").join("admAgent"))
 }
@@ -159,7 +161,7 @@ fn build_adm_agent_config(context_window: u32) -> serde_json::Value {
 /// - 文件不存在：写入完整的默认结构（context_window 来自配置，default_max_tokens = 30%）。
 /// - 文件已存在：原地更新 providers.local.models[0] 的 context_window 与 default_max_tokens，
 ///   尽量保留文件中其它字段；若结构异常无法原地更新，则回退写入完整默认结构。
-fn ensure_adm_agent_config(app: &tauri::AppHandle) -> Result<(), String> {
+fn ensure_adm_agent_config(app: &tauri::AppHandle) -> Result<(), AppError> {
     let ctx = load_ctx_size(app)
         .filter(|v| *v > 0)
         .unwrap_or(DEFAULT_CONTEXT_WINDOW as i32) as u32;
@@ -201,7 +203,7 @@ fn ensure_adm_agent_config(app: &tauri::AppHandle) -> Result<(), String> {
 }
 
 /// 原子写入 JSON：先写临时文件再 rename，避免写入中途崩溃产生半截文件。
-fn write_json_atomic(path: &std::path::Path, value: &serde_json::Value) -> Result<(), String> {
+fn write_json_atomic(path: &std::path::Path, value: &serde_json::Value) -> Result<(), AppError> {
     let json = serde_json::to_string_pretty(value)
         .map_err(|e| format!("序列化 admAgent 配置失败: {}", e))?;
     let temp = path.with_extension("tmp");
@@ -215,7 +217,7 @@ fn write_json_atomic(path: &std::path::Path, value: &serde_json::Value) -> Resul
 /// 不依赖模型是否已启动或 admAgent 是否已下载。供前端在 goAgent() 阶段提前调用，
 /// 早于真正启动终端（start_agent_terminal 内部也会再调用一次以保证最终一致）。
 #[tauri::command]
-pub async fn prepare_adm_agent_config(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn prepare_adm_agent_config(app: tauri::AppHandle) -> Result<(), AppError> {
     ensure_adm_agent_config(&app)
 }
 
@@ -238,7 +240,7 @@ pub fn get_platform_os() -> String {
 
 /// 检查本地是否已下载 admAgent 工具
 #[tauri::command]
-pub async fn check_adm_agent(app: tauri::AppHandle) -> Result<AdmAgentInfo, String> {
+pub async fn check_adm_agent(app: tauri::AppHandle) -> Result<AdmAgentInfo, AppError> {
     let path = adm_agent_path(&app)?;
     let exists = path.exists();
     Ok(AdmAgentInfo {
@@ -249,7 +251,7 @@ pub async fn check_adm_agent(app: tauri::AppHandle) -> Result<AdmAgentInfo, Stri
 
 /// 下载 admAgent 工具（不覆盖已存在的可执行权限问题，Windows 为 exe，macOS 为二进制）
 #[tauri::command]
-pub async fn download_adm_agent(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn download_adm_agent(app: tauri::AppHandle) -> Result<(), AppError> {
     let url = adm_agent_download_url().to_string();
     let dir = adm_agent_target_dir(&app)?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建目录失败: {}", e))?;
@@ -275,7 +277,7 @@ pub async fn download_adm_agent(app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| format!("下载请求失败: {}", e))?;
 
     if !response.status().is_success() {
-        return Err(format!("下载失败，HTTP 状态码: {}", response.status()));
+        bail!("下载失败，HTTP 状态码: {}", response.status());
     }
 
     let total_size: u64 = response.content_length().unwrap_or(0);
@@ -362,7 +364,7 @@ fn parse_adm_agent_version_output(output: &str) -> Option<String> {
 
 /// 获取本地已安装 admAgent 的版本号（运行 `admAgent -v`）。
 /// 未安装或无法解析时返回 Ok(None)。
-pub fn get_adm_agent_local_version(app: &tauri::AppHandle) -> Result<Option<String>, String> {
+pub fn get_adm_agent_local_version(app: &tauri::AppHandle) -> Result<Option<String>, AppError> {
     let path = adm_agent_path(app)?;
     if !path.exists() {
         return Ok(None);
@@ -390,12 +392,12 @@ pub async fn download_adm_agent_update(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     url: String,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     if url.trim().is_empty() || !url.starts_with("http") {
-        return Err(format!(
+        bail!(
             "下载地址无效: {}，请重新检查更新",
             if url.is_empty() { "地址为空" } else { &url }
-        ));
+        );
     }
 
     let dest = adm_agent_path(&app)?;
@@ -431,7 +433,7 @@ pub async fn download_adm_agent_update(
     })?;
 
     if !response.status().is_success() {
-        return Err(format!("下载失败，HTTP 状态码: {}", response.status()));
+        bail!("下载失败，HTTP 状态码: {}", response.status());
     }
 
     let total_size: u64 = response.content_length().unwrap_or(0);
@@ -492,9 +494,7 @@ pub async fn download_adm_agent_update(
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
         if !removed {
-            return Err(
-                "替换 admAgent 失败：旧文件仍被占用，请手动关闭 Agent 终端后重试".to_string(),
-            );
+            bail!("替换 admAgent 失败：旧文件仍被占用，请手动关闭 Agent 终端后重试");
         }
     }
     std::fs::rename(&part_path, &dest).map_err(|e| {
@@ -526,7 +526,7 @@ pub async fn download_adm_agent_update(
 /// 检查 admAgent 是否需要更新（仅在点击底部栏 Agent 按钮时调用，不在启动时检查）。
 /// 优先级由前端 goAgent 控制：先判断模型是否启动，再判断本地是否下载，最后判断版本号。
 #[tauri::command]
-pub async fn check_adm_agent_update(app: tauri::AppHandle) -> Result<AdmAgentUpdateCheck, String> {
+pub async fn check_adm_agent_update(app: tauri::AppHandle) -> Result<AdmAgentUpdateCheck, AppError> {
     // 仅 Windows 提供下载地址（mac/linux 暂不支持自动更新）
     #[cfg(target_os = "windows")]
     let download_url = Some("https://adm.tuduoduo.top/agent/win/admAgent.exe".to_string());
@@ -588,13 +588,13 @@ pub async fn check_adm_agent_update(app: tauri::AppHandle) -> Result<AdmAgentUpd
 
 /// 获取已配置的 agent 工作目录（默认为空字符串）
 #[tauri::command]
-pub async fn get_agent_workdir(app: tauri::AppHandle) -> Result<String, String> {
+pub async fn get_agent_workdir(app: tauri::AppHandle) -> Result<String, AppError> {
     Ok(load_agent_workdir(&app))
 }
 
 /// 保存 agent 工作目录到配置文件
 #[tauri::command]
-pub async fn set_agent_workdir(app: tauri::AppHandle, workdir: String) -> Result<(), String> {
+pub async fn set_agent_workdir(app: tauri::AppHandle, workdir: String) -> Result<(), AppError> {
     save_agent_workdir(&app, workdir.trim())
 }
 
@@ -612,7 +612,7 @@ pub struct AgentStatus {
 #[tauri::command]
 pub async fn get_agent_status(
     state: tauri::State<'_, AppState>,
-) -> Result<AgentStatus, String> {
+) -> Result<AgentStatus, AppError> {
     let mut s = state
         .agent_session
         .lock()
@@ -644,7 +644,7 @@ pub async fn start_agent_terminal(
     state: tauri::State<'_, AppState>,
     rows: u16,
     cols: u16,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     // 若已有会话，先关闭旧会话
     {
         let mut s = state
@@ -667,7 +667,7 @@ pub async fn start_agent_terminal(
 
     let agent_path = adm_agent_path(&app)?;
     if !agent_path.exists() {
-        return Err(format!("未找到 admAgent 工具: {}", agent_path.display()));
+        bail!("未找到 admAgent 工具: {}", agent_path.display());
     }
 
     // 创建 PTY（使用前端真实尺寸）
@@ -788,7 +788,7 @@ pub async fn start_agent_terminal(
 pub async fn agent_terminal_input(
     state: tauri::State<'_, AppState>,
     data: String,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(&data)
         .map_err(|e| format!("解码输入失败: {}", e))?;
@@ -811,7 +811,7 @@ pub async fn agent_terminal_resize(
     state: tauri::State<'_, AppState>,
     rows: u16,
     cols: u16,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let s = state
         .agent_session
         .lock()
@@ -852,7 +852,7 @@ fn kill_agent_child_tree(child: &mut Box<dyn Child + Send>) {
 
 /// 关闭终端会话
 #[tauri::command]
-pub async fn stop_agent_terminal(state: tauri::State<'_, AppState>) -> Result<(), String> {
+pub async fn stop_agent_terminal(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
     let mut s = state
         .agent_session
         .lock()

@@ -20,8 +20,12 @@ pub fn get_gpu_info() -> (u64, u64, bool) {
 
     #[cfg(target_os = "windows")]
     {
-        if let Ok(output) = create_hidden_command("wmic")
-            .args(["path", "win32_VideoController", "get", "AdapterRAM"])
+        // 使用 PowerShell Get-CimInstance 替代已弃用的 wmic（Windows 11 22H2+ 标记为 deprecated）
+        if let Ok(output) = create_hidden_command("powershell")
+            .args([
+                "-NoProfile", "-NonInteractive", "-Command",
+                "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty AdapterRAM",
+            ])
             .output()
         {
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -77,44 +81,25 @@ pub fn get_gpu_info() -> (u64, u64, bool) {
     (total_vram, used_vram, has_gpu)
 }
 
-#[cfg(target_os = "windows")]
-fn decode_wmic_output(bytes: &[u8]) -> String {
-    if bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE {
-        let u16_data: Vec<u16> = bytes[2..]
-            .chunks(2)
-            .filter(|c| c.len() == 2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
-            .collect();
-        String::from_utf16_lossy(&u16_data)
-    } else if bytes.len() >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF {
-        let u16_data: Vec<u16> = bytes[2..]
-            .chunks(2)
-            .filter(|c| c.len() == 2)
-            .map(|c| u16::from_be_bytes([c[0], c[1]]))
-            .collect();
-        String::from_utf16_lossy(&u16_data)
-    } else {
-        String::from_utf8_lossy(bytes).to_string()
-    }
-}
-
 pub fn detect_gpu_vendor() -> Option<String> {
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
-        if let Ok(output) = std::process::Command::new("wmic")
-            .creation_flags(0x08000000)
-            .args(["path", "win32_VideoController", "get", "Name"])
+        // 使用 PowerShell Get-CimInstance 替代已弃用的 wmic
+        if let Ok(output) = create_hidden_command("powershell")
+            .args([
+                "-NoProfile", "-NonInteractive", "-Command",
+                "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name",
+            ])
             .output()
         {
-            let stdout = decode_wmic_output(&output.stdout);
+            let stdout = String::from_utf8_lossy(&output.stdout);
             let mut nvidia_found = None;
             let mut amd_found = None;
             let mut intel_found = None;
 
             for line in stdout.lines() {
                 let trimmed = line.trim();
-                if trimmed.is_empty() || trimmed == "Name" {
+                if trimmed.is_empty() {
                     continue;
                 }
                 let lower = trimmed.to_lowercase();

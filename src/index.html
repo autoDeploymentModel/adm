@@ -691,113 +691,35 @@
       }
     });
 
-    // 监听 Tauri 事件并转发给 iframe（下载进度等）
+    // 监听 Tauri 事件并转发给 content-frame iframe（下载进度等）
+    function forwardEvent(eventName) {
+      try {
+        listen(eventName, function (event) {
+          var frame = document.getElementById("content-frame");
+          if (frame && frame.contentWindow) {
+            frame.contentWindow.postMessage({ type: eventName, payload: event.payload }, "*");
+          }
+        });
+      } catch (_) {}
+    }
+
     function setupEventForwarding() {
       if (typeof listen !== "function") return;
-      try {
-        listen("download-progress", (event) => {
-          const frame = document.getElementById("content-frame");
-          if (frame && frame.contentWindow) {
-            frame.contentWindow.postMessage({ type: "download-progress", payload: event.payload }, "*");
-          }
-        });
-      } catch (_) {}
-      try {
-        listen("download-complete", (event) => {
-          const frame = document.getElementById("content-frame");
-          if (frame && frame.contentWindow) {
-            frame.contentWindow.postMessage({ type: "download-complete", payload: event.payload }, "*");
-          }
-        });
-      } catch (_) {}
-      try {
-        listen("model-started", (event) => {
-          const frame = document.getElementById("content-frame");
-          if (frame && frame.contentWindow) {
-            frame.contentWindow.postMessage({ type: "model-started", payload: event.payload }, "*");
-          }
-        });
-      } catch (_) {}
-      try {
-        listen("model-stopped", (event) => {
-          const frame = document.getElementById("content-frame");
-          if (frame && frame.contentWindow) {
-            frame.contentWindow.postMessage({ type: "model-stopped", payload: event.payload }, "*");
-          }
-        });
-      } catch (_) {}
-      try {
-        listen("model-error", (event) => {
-          const frame = document.getElementById("content-frame");
-          if (frame && frame.contentWindow) {
-            frame.contentWindow.postMessage({ type: "model-error", payload: event.payload }, "*");
-          }
-        });
-      } catch (_) {}
-      try {
-        listen("model-log", (event) => {
-          const frame = document.getElementById("content-frame");
-          if (frame && frame.contentWindow) {
-            frame.contentWindow.postMessage({ type: "model-log", payload: event.payload }, "*");
-          }
-        });
-      } catch (_) {}
-      try {
-        listen("download-error", (event) => {
-          const frame = document.getElementById("content-frame");
-          if (frame && frame.contentWindow) {
-            frame.contentWindow.postMessage({ type: "download-error", payload: event.payload }, "*");
-          }
-        });
-      } catch (_) {}
-      try {
-        listen("sd-download-progress", (event) => {
-          const frame = document.getElementById("content-frame");
-          if (frame && frame.contentWindow) {
-            frame.contentWindow.postMessage({ type: "sd-download-progress", payload: event.payload }, "*");
-          }
-        });
-      } catch (_) {}
-      try {
-        listen("sd-log", (event) => {
-          const frame = document.getElementById("content-frame");
-          if (frame && frame.contentWindow) {
-            frame.contentWindow.postMessage({ type: "sd-log", payload: event.payload }, "*");
-          }
-        });
-      } catch (_) {}
-      try {
-        listen("sd-started", (event) => {
-          const frame = document.getElementById("content-frame");
-          if (frame && frame.contentWindow) {
-            frame.contentWindow.postMessage({ type: "sd-started", payload: event.payload }, "*");
-          }
-        });
-      } catch (_) {}
-      try {
-        listen("sd-complete", (event) => {
-          const frame = document.getElementById("content-frame");
-          if (frame && frame.contentWindow) {
-            frame.contentWindow.postMessage({ type: "sd-complete", payload: event.payload }, "*");
-          }
-        });
-      } catch (_) {}
-      try {
-        listen("sd-error", (event) => {
-          const frame = document.getElementById("content-frame");
-          if (frame && frame.contentWindow) {
-            frame.contentWindow.postMessage({ type: "sd-error", payload: event.payload }, "*");
-          }
-        });
-      } catch (_) {}
-      try {
-        listen("sd-image-result", (event) => {
-          const frame = document.getElementById("content-frame");
-          if (frame && frame.contentWindow) {
-            frame.contentWindow.postMessage({ type: "sd-image-result", payload: event.payload }, "*");
-          }
-        });
-      } catch (_) {}
+      [
+        "download-progress",
+        "download-complete",
+        "download-error",
+        "model-started",
+        "model-stopped",
+        "model-error",
+        "model-log",
+        "sd-download-progress",
+        "sd-log",
+        "sd-started",
+        "sd-complete",
+        "sd-error",
+        "sd-image-result",
+      ].forEach(forwardEvent);
     }
 
     // ===== 自动更新相关 =====

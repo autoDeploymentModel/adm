@@ -54,19 +54,19 @@ impl AppState {
 
     #[allow(dead_code)]
     pub fn set_running_pid(&self, pid: u32) {
-        *self.running_process.lock().unwrap() = Some(pid);
+        *self.running_process.lock().unwrap_or_else(|e| e.into_inner()) = Some(pid);
     }
 
     #[allow(dead_code)]
     pub fn clear_running(&self) {
-        *self.running_process.lock().unwrap() = None;
-        *self.running_model_id.lock().unwrap() = None;
-        *self.running_port.lock().unwrap() = None;
-        *self.model_running.lock().unwrap() = false;
+        *self.running_process.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *self.running_model_id.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *self.running_port.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *self.model_running.lock().unwrap_or_else(|e| e.into_inner()) = false;
     }
 
     pub fn set_model_running(&self, running: bool) {
-        *self.model_running.lock().unwrap() = running;
+        *self.model_running.lock().unwrap_or_else(|e| e.into_inner()) = running;
     }
 
     pub fn is_model_running(&self) -> bool {
@@ -75,13 +75,13 @@ impl AppState {
 
     /// 模型成功启动一代：代次 +1（返回新代次）
     pub fn bump_model_generation(&self) -> u64 {
-        let mut g = self.model_generation.lock().unwrap();
+        let mut g = self.model_generation.lock().unwrap_or_else(|e| e.into_inner());
         *g += 1;
         *g
     }
 
     #[allow(dead_code)]
     pub fn get_model_generation(&self) -> u64 {
-        *self.model_generation.lock().unwrap()
+        *self.model_generation.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
