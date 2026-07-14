@@ -861,6 +861,7 @@
         pendingLlamacppResult = null;
         setTimeout(function() {
           if (!result.vc_redist_installed) {
+            pendingLlamacppResult = result.llamacpp_needs_update ? result : null;
             showVcRedistInstallDialog();
           } else if (result.llamacpp_needs_update) {
             startLlamacppUpdate(result);

@@ -43,18 +43,28 @@ fn extract_nvidia_series(gpu_name: &str) -> Option<u32> {
 #[cfg(target_os = "windows")]
 fn check_vc_redist_installed() -> bool {
     use std::path::Path;
-    
+
     // 方法一：DLL 文件检测
     let dll_path = r"C:\Windows\System32\vcruntime140_1.dll";
     let dll_exists = Path::new(dll_path).exists();
-    
-    // 方法二：注册表检测（辅助验证）
-    let reg_installed = std::process::Command::new("reg")
+
+    // 方法二：注册表检测（辅助验证，使用隐藏窗口避免控制台闪烁）
+    let reg_installed = platform::create_hidden_command("reg")
         .args(["query", "HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64", "/v", "Installed"])
         .output()
-        .map(|o| o.status.success())
+        .map(|o| {
+            if !o.status.success() {
+                return false;
+            }
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            // 验证 Installed 的值为 0x1（已安装），而非仅检查键是否存在
+            stdout.lines().any(|line| {
+                let line = line.trim();
+                line.starts_with("Installed") && line.contains("0x1")
+            })
+        })
         .unwrap_or(false);
-    
+
     dll_exists || reg_installed
 }
 
