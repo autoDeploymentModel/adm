@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+﻿﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
@@ -920,7 +920,7 @@
     }
 
     function goModel(modelId) {
-      const port = runningModelPort || 8080;
+      const port = runningModelPort || 1010;
       navigateTo("model_chat.html?model_id=" + encodeURIComponent(modelId) + "&port=" + port);
     }
 

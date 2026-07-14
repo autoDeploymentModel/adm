@@ -105,6 +105,9 @@ fn adm_agent_path(app: &tauri::AppHandle) -> Result<PathBuf, AppError> {
 /// 默认上下文大小（配置文件未显式配置 ctx_size 时使用，与示例一致）
 const DEFAULT_CONTEXT_WINDOW: u32 = 128000;
 
+/// 默认端口（配置文件未显式配置 port 时使用）
+const DEFAULT_PORT: u16 = 1010;
+
 /// admAgent.json 的存放目录：`$HOME/.config/admAgent`
 /// Windows 下 $HOME 即 C:\Users\{username}，最终路径为 C:\Users\{username}\.config\admAgent
 fn adm_agent_config_dir() -> Result<PathBuf, AppError> {
@@ -128,16 +131,26 @@ fn load_ctx_size(app: &tauri::AppHandle) -> Option<i32> {
     settings.launch_params.ctx_size
 }
 
-/// 根据上下文大小构造完整的 admAgent.json 配置结构体。
+/// 从 ADM 配置文件（config.json）读取端口 port。
+/// 读取失败或字段缺失时返回 None，由调用方决定是否回退到默认值。
+fn load_port(app: &tauri::AppHandle) -> Option<u16> {
+    let data_dir = config::get_data_dir(Some(app)).ok()?;
+    let config_path = data_dir.join("config.json");
+    let json = std::fs::read_to_string(&config_path).ok()?;
+    let settings: Settings = serde_json::from_str(&json).ok()?;
+    settings.launch_params.port
+}
+
+/// 根据上下文大小与端口构造完整的 admAgent.json 配置结构体。
 /// default_max_tokens 取 context_window 的 30%（四舍五入为整数）。
-fn build_adm_agent_config(context_window: u32) -> serde_json::Value {
+fn build_adm_agent_config(context_window: u32, port: u16) -> serde_json::Value {
     let default_max_tokens = (context_window as f64 * 0.3).round() as u32;
     serde_json::json!({
         "providers": {
             "local": {
                 "type": "openai-compat",
                 "name": "Local",
-                "base_url": "http://127.0.0.1:1010/v1",
+                "base_url": format!("http://127.0.0.1:{}/v1", port),
                 "models": [
                     {
                         "id": "localModel",
@@ -155,16 +168,19 @@ fn build_adm_agent_config(context_window: u32) -> serde_json::Value {
     })
 }
 
-/// 确保 admAgent.json 存在且 context_window / default_max_tokens 与当前配置一致。
+/// 确保 admAgent.json 存在且 context_window / default_max_tokens / base_url 与当前配置一致。
 ///
 /// - 目录不存在则创建。
-/// - 文件不存在：写入完整的默认结构（context_window 来自配置，default_max_tokens = 30%）。
+/// - 文件不存在：写入完整的默认结构（context_window、port 来自配置，default_max_tokens = 30%）。
 /// - 文件已存在：原地更新 providers.local.models[0] 的 context_window 与 default_max_tokens，
-///   尽量保留文件中其它字段；若结构异常无法原地更新，则回退写入完整默认结构。
+///   以及 providers.local.base_url 中的端口，尽量保留文件中其它字段；
+///   若结构异常无法原地更新，则回退写入完整默认结构。
 fn ensure_adm_agent_config(app: &tauri::AppHandle) -> Result<(), AppError> {
     let ctx = load_ctx_size(app)
         .filter(|v| *v > 0)
         .unwrap_or(DEFAULT_CONTEXT_WINDOW as i32) as u32;
+
+    let port = load_port(app).unwrap_or(DEFAULT_PORT);
 
     let dir = adm_agent_config_dir()?;
     std::fs::create_dir_all(&dir)
@@ -188,6 +204,15 @@ fn ensure_adm_agent_config(app: &tauri::AppHandle) -> Result<(), AppError> {
                         first["default_max_tokens"] = serde_json::json!(default_max_tokens);
                         updated = true;
                     }
+                    // 同步更新 base_url 中的端口
+                    if let Some(base_url) = v
+                        .get_mut("providers")
+                        .and_then(|p| p.get_mut("local"))
+                        .and_then(|l| l.get_mut("base_url"))
+                    {
+                        *base_url = serde_json::json!(format!("http://127.0.0.1:{}/v1", port));
+                        updated = true;
+                    }
                 }
                 if updated {
                     write_json_atomic(&path, &v)?;
@@ -198,7 +223,7 @@ fn ensure_adm_agent_config(app: &tauri::AppHandle) -> Result<(), AppError> {
     }
 
     // 文件不存在，或结构异常无法原地更新：写入完整默认结构
-    let config = build_adm_agent_config(ctx);
+    let config = build_adm_agent_config(ctx, port);
     write_json_atomic(&path, &config)
 }
 

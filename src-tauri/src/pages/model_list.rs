@@ -503,7 +503,7 @@ pub async fn start_model(
             .ok();
         }
 
-    let port = params.port.unwrap_or(8080);
+    let port = params.port.unwrap_or(1010);
     args.extend(["--port".to_string(), port.to_string()]);
 
     if let Some(host) = &params.host {

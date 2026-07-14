@@ -333,7 +333,7 @@
     function init() {
       const params = getQueryParams();
       currentModelId = params.model_id || "未知模型";
-      const port = params.port || 8080;
+      const port = params.port || 1010;
 
       document.getElementById("model-name").textContent = currentModelId + " - 交互界面";
       document.getElementById('log-model-id').textContent = currentModelId;
