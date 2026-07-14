@@ -593,6 +593,18 @@
       term.loadAddon(fitAddon);
       term.open(document.getElementById("terminal"));
 
+      // ===== 粘贴预处理：将换行符替换为空格 =====
+      // 多行文本粘贴时，换行符（\r\n / \n / \r）会被 PTY 当作 Enter 键，
+      // 导致 admAgent 输入被提前提交。覆写 term.paste 拦截所有粘贴路径
+      //（Ctrl+V、右键菜单、中键粘贴等），统一把换行替换为空格。
+      var _originalPaste = term.paste.bind(term);
+      term.paste = function (text) {
+        if (text) {
+          text = text.replace(/\r\n/g, ' ').replace(/\r/g, ' ').replace(/\n/g, ' ');
+        }
+        _originalPaste(text);
+      };
+
       // ===== Ctrl+C / Ctrl+V 复制粘贴（模拟真实终端体验）=====
       // - 有选区时 Ctrl+C 复制，无选区时放行（把 SIGINT 发给 agent，等价于终端中断）
       // - Ctrl+V 从系统剪贴板读取并粘贴到终端
