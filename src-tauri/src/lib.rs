@@ -78,8 +78,6 @@ pub fn run() {
             agent::set_agent_workdir,
             agent::get_agent_status,
             agent::start_agent_terminal,
-            agent::agent_terminal_input,
-            agent::agent_terminal_resize,
             agent::stop_agent_terminal,
         ])
         .run(tauri::generate_context!())

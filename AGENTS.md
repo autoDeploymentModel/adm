@@ -10,8 +10,9 @@
 - **Tauri 2.11.2** + Rust 后端 + **原生 HTML/CSS/JS**（无框架、无打包工具）。
   所有前端源码在 `src/` 目录下，作为 `frontendDist` 原样提供。
 - **单窗口** iframe 路由：
-  - `index.html`（外壳）内嵌 `model_list.html`、`settings.html`、`model_chat.html`、`model_image.html`
+  - `index.html`（外壳）内嵌 `model_list.html`、`settings.html`、`model_chat.html`、`model_image.html`、`agent.html`（Agent 管理面板）
 - CSS/JS **内联**在每个 HTML 文件中。
+- **Agent TUI**：admAgent 在独立的 Windows 控制台/Windows Terminal 窗口中运行（非 iframe 内嵌终端）。前端 `agent.html` 仅作为管理面板（状态显示、启动/停止）。
 - 未配置 linter、formatter、typechecker 或测试框架。
 
 ## IPC 注意事项（重要）
@@ -28,6 +29,7 @@
 | `settings.rs` | `save_settings`（原子写入：`.tmp` + `rename`）, `load_settings`, `get_app_version`, `get_llamacpp_version` |
 | `model_image.rs` | `check_sd_exists`, `download_and_extract_sd`, `start_sd_generation`, `stop_sd` |
 | `model_chat.rs` | **零命令** — 纯事件驱动 |
+| `agent.rs` | `start_agent_terminal`（启动独立控制台窗口运行 admAgent）, `stop_agent_terminal`, `get_agent_status`, `get/set_agent_workdir` +  admAgent 下载/更新等 |
 
 ## 关键注意事项
 - **MTP 自动检测**：如果模型文件名包含 "mtp"（不区分大小写），`start_model` 会自动追加 `--spec-draft-n-max 2 --spec-type draft-mtp`。设置 `params.spec_type = "none"` 可禁用。

@@ -414,12 +414,11 @@
       const af = document.getElementById("agent-frame");
       if (cf) cf.style.display = "none";
       if (af) {
-        // 必须用显式 block，否则会被样式表里的 #agent-frame{display:none} 覆盖导致黑屏
         af.style.display = "block";
         setActiveNav("agent-btn");
         try { af.focus(); } catch (_) {}
       }
-      // 显示后通知 agent 页面重新自适应尺寸
+      // 通知 agent 页面同步状态（agent.html 会自动尝试启动 Agent 终端）
       setTimeout(function () {
         if (af && af.contentWindow) af.contentWindow.postMessage({ type: "agent-resize" }, "*");
       }, 60);
@@ -569,31 +568,6 @@
       } catch (_) {}
     }
 
-    // 将 Agent 终端事件转发给常驻的 agent iframe
-    function setupAgentTerminalEventForwarding() {
-      if (typeof listen !== "function") return;
-      try {
-        listen("agent-terminal-data", function (event) {
-          const frame = document.getElementById("agent-frame");
-          if (frame && frame.contentWindow) {
-            frame.contentWindow.postMessage({ type: "agent-terminal-data", payload: event.payload }, "*");
-          }
-        });
-        listen("agent-terminal-exit", function (event) {
-          const frame = document.getElementById("agent-frame");
-          if (frame && frame.contentWindow) {
-            frame.contentWindow.postMessage({ type: "agent-terminal-exit", payload: event.payload }, "*");
-          }
-        });
-        listen("agent-terminal-ready", function (event) {
-          const frame = document.getElementById("agent-frame");
-          if (frame && frame.contentWindow) {
-            frame.contentWindow.postMessage({ type: "agent-terminal-ready", payload: event.payload }, "*");
-          }
-        });
-      } catch (_) {}
-    }
-
     function updateHardwareBar() {
       if (!systemInfo) return;
 
@@ -655,6 +629,7 @@
         `;
         showUpdateDialog(html);
       }
+
       // iframe IPC 调用代理：iframe 无法直接访问 Tauri IPC 时通过此通道调用
       if (event.data && event.data.type === "__invoke__") {
         const { cmd, args, id } = event.data;
@@ -663,31 +638,6 @@
         }).catch(function(err) {
           event.source.postMessage({ type: "__invoke_result__", id: id, result: null, error: String(err) }, "*");
         });
-      }
-      // Agent 页面请求父窗口把键盘焦点交给 iframe（内嵌终端需要焦点才能接收按键）
-      if (event.data && event.data.type === "agent-focus-me") {
-        const f = document.getElementById("agent-frame");
-        if (f) {
-          try { f.focus(); } catch (_) {}
-          try { if (f.contentWindow) f.contentWindow.focus(); } catch (_) {}
-        }
-      }
-      // Agent 页面（iframe）内剪贴板受限时，由父窗口代理读取系统剪贴板
-      if (event.data && event.data.type === "agent-read-clipboard") {
-        const id = event.data.id;
-        const frame = document.getElementById("agent-frame");
-        const send = function (text, error) {
-          if (frame && frame.contentWindow) {
-            frame.contentWindow.postMessage({ type: "agent-clipboard-result", id: id, text: text, error: error }, "*");
-          }
-        };
-        if (navigator.clipboard && navigator.clipboard.readText) {
-          navigator.clipboard.readText()
-            .then(function (t) { send(t, null); })
-            .catch(function (err) { send(null, String(err)); });
-        } else {
-          send(null, "剪贴板不可用");
-        }
       }
     });
 
@@ -1126,7 +1076,6 @@
         setupLlamacppProgressListener();
         setupAdmAgentUpdateProgressListener();
         setupAgentDownloadListener();
-        setupAgentTerminalEventForwarding();
         systemInfo = await invoke("get_system_info");
 
         try {

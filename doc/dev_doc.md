@@ -1320,9 +1320,12 @@ python scripts/generate-icons.py
 
 ---
 
-## 十三、Agent 终端
+## 十三、Agent 终端（独立控制台窗口）
 
-底部栏「设置」右侧新增「Agent」按钮，点击后进入内嵌命令终端并自动运行 `admAgent` 工具。
+底部栏「设置」右侧新增「Agent」按钮。admAgent 作为 TUI 工具，**在真正的 Windows 控制台/Windows Terminal 中运行**，不再通过 xterm.js + PTY 桥接。这样：
+- 原生滚轮/鼠标支持（完美兼容 TUI）
+- 零桥接延迟，性能最佳
+- TUI 渲染/输入由 Windows 控制台原生处理
 
 ### 13.1 交互流程
 
@@ -1330,42 +1333,37 @@ python scripts/generate-icons.py
 2. 调用 `check_adm_agent` 检查本地是否已下载 `admAgent`：
    - **Windows**：默认路径为软件所在根目录（`exe` 同级目录），文件名 `admAgent.exe`。
    - **macOS**：默认路径为应用用户目录（`app_data_dir`，如 `~/Library/Application Support/com.adm.admapp`），文件名 `admAgent`。
-3. 若已存在，直接打开 `agent.html` 终端页面。
-4. 若不存在，弹出下载进度弹窗（`#agent-download-overlay`），调用 `download_adm_agent` 下载：
-   - Windows：`http://adm.tuduoduo.top/admAgent.exe`
-   - macOS：`http://adm.tuduoduo.top/admAgent`
-   - 下载过程通过 `agent-download-progress` 事件向前端推送进度。
-5. 下载完成后自动进入 `agent.html` 终端页面。
+3. 若已存在，打开 `agent.html`（管理面板：状态显示 + 启动/停止按钮）。
+4. 若不存在，弹出下载进度弹窗（`#agent-download-overlay`），调用 `download_adm_agent` 下载并推送进度。
+5. 用户点击「启动 Agent」后，`start_agent_terminal` 在独立控制台窗口中运行 admAgent。
 
-### 13.2 内嵌终端实现
+### 13.2 独立控制台实现
 
-- `agent.html` 使用 `xterm.js`（已离线内置在 `src/vendor/xterm/`）作为终端界面。
-- `start_agent_terminal` 通过 `portable-pty` 创建 PTY：
-  - **Windows**：**直接启动 `admAgent.exe`**（不再经过 `powershell.exe`）。原因：release 版 `adm.exe` 带 `#![windows_subsystem = "windows"]`（无控制台），`portable-pty` 的 ConPTY 在「无控制台父进程」中拉起 `powershell.exe` 会触发 `0xc0000142` 初始化失败；直接以 admAgent 作为 PTY 子进程规避该问题。`--cwd` 作为参数传入。
-  - **macOS**：启动系统默认 shell（`$SHELL`，通常为 `/bin/zsh`，以 `-i` 交互模式运行），再写入启动命令运行 admAgent。
-- PTY 输出经后台线程读取后以 base64 通过 `agent-terminal-data` 事件推送到前端；前端按键经 `agent_terminal_input` 写回 PTY。
-- 终端就绪后自动向 shell 发送启动命令运行 `admAgent` 工具（同时启动终端与 `admAgent`）。
-- **启动前自动生成 `admAgent.json`**：`ensure_adm_agent_config` 读取 ADM 配置文件（`config.json`）中 `launch_params.ctx_size` 作为上下文大小，于用户目录 `<home>/.config/admAgent/admAgent.json` 生成（或更新）配置。`context_window` 取该值，`default_max_tokens` 取其 30%（四舍五入）；若文件已存在则仅就地更新这两个字段，尽量保留其它内容。`ctx_size` 缺失或非法时回退默认 `context_window = 128000`。
-  - **触发时机 1（更早）**：点击 Agent 按钮时，`goAgent()` 在平台判断通过后即调用 `prepare_adm_agent_config`（早于模型运行检查与 admAgent 下载）。
-  - **触发时机 2（兜底）**：`start_agent_terminal` 创建 PTY 之前也会再调用一次，保证最终一致。
-- 支持通过 `agent_terminal_resize` 调整终端大小、`stop_agent_terminal` 关闭会话；窗口关闭时 `lib.rs` 会调用 `kill_agent_session` 清理子进程。
-- **复制 / 粘贴（终端级体验）**：`agent.html` 通过 `term.attachCustomKeyEventHandler` 实现类似真实终端的 Ctrl+C / Ctrl+V：
-  - **Ctrl+C**：有文本选区时复制选区到系统剪贴板（优先 `navigator.clipboard.writeText`，失败回退 `textarea + document.execCommand('copy')`）；无选区时放行，xterm 把 `\x03`(SIGINT) 发给 admAgent，等价于终端中断。
-  - **Ctrl+V**：从系统剪贴板读取文本并经 `term.paste()` 写入 PTY。若 iframe 内 `navigator.clipboard.readText` 受限，则通过 `agent-read-clipboard` 事件委托父窗口 `index.html` 代理读取（回传 `agent-clipboard-result`）。读取失败时终端内提示「无法访问剪贴板」。
+- **前端**：`agent.html` 为管理面板，不再依赖 xterm.js；显示 Agent 运行状态、提供启动/停止和工作目录设置按钮。
+- **后端**（`agent.rs` 的 `start_agent_terminal`）：不再创建 PTY，而是：
+  - **Windows**：优先使用 **Windows Terminal**（`wt.exe -d <workdir> cmd /k "<agent_path>..."`，优先从 `where wt` 查找），不可见则回退到 `cmd.exe /k "<agent_path>..."` 加上 `CREATE_NEW_CONSOLE`(0x10) 标志 —— 这会创建一个独立的新控制台窗口。
+  - **macOS**：通过 `osascript` 在 Terminal.app 中执行启动脚本。
+  - 保存所创建控制台进程的 PID 到 `AppState.agent_process`。
+- **启动前自动生成 `admAgent.json`**：`ensure_adm_agent_config` 读取 `config.json` 中 `launch_params.ctx_size` 作为上下文大小，于 `<home>/.config/admAgent/admAgent.json` 生成（或更新）配置。`context_window` 取该值，`default_max_tokens` 取其 30%（四舍五入）；文件已存在则仅就地更新。`ctx_size` 缺失时回退默认 `128000`。
+  - **触发时机 1（更早）**：`goAgent()` 中调用 `prepare_adm_agent_config`。
+  - **触发时机 2（兜底）**：`start_agent_terminal` 内启动控制台之前也会再调用一次。
+- **`stop_agent_terminal`**：通过 PID 调用 `taskkill /PID <pid> /T /F`（Windows 进程树）或 `kill -9`（macOS）关闭控制台窗口。
+- **`get_agent_status`**：通过 `OpenProcess` + `GetExitCodeProcess`（检查 `STILL_ACTIVE`）判断进程是否仍运行。
+- 窗口关闭时 `lib.rs` 会调用 `kill_agent_session` 清理控制台进程。
 
 ### 13.3 相关命令（`src-tauri/src/pages/agent.rs`）
 
 | 命令 | 说明 |
 |------|------|
-| `prepare_adm_agent_config` | 点击 Agent 按钮时（平台判断通过后）提前调用：生成 / 更新 `admAgent.json`（早于模型检查与 admAgent 下载，不依赖两者） |
-| `check_adm_agent` | 检查本地 `admAgent` 是否存在，返回路径（Agent 按钮点击时优先级 2 判断本地是否已下载） |
-| `check_adm_agent_update` | 点击 Agent 按钮时触发（优先级 3）：拉取远程清单比对本地 `admAgent` 版本号，返回是否需要更新及下载地址（仅 Windows） |
-| `download_adm_agent` | 首次安装：下载 `admAgent` 工具并推送进度（Agent 按钮点击时优先级 2 调用） |
-| `download_adm_agent_update` | 版本更新用：从 `check_adm_agent_update` 下发的地址下载并替换 `admAgent`（仅 Windows，推送 `adm-agent-update-progress`）。**替换前会自动停掉仍在运行的 Agent 终端**以释放 Windows 文件锁，避免「Agent 页未关闭时回到首页再进入触发更新 → 升级失败」的问题 |
-| `start_agent_terminal` | 启动内嵌 PTY 终端并自动运行 `admAgent` |
-| `agent_terminal_input` | 向前端按键写入 PTY |
-| `agent_terminal_resize` | 调整终端行列 |
-| `stop_agent_terminal` | 关闭终端会话 |
+| `prepare_adm_agent_config` | 点击 Agent 按钮时提前调用：生成 / 更新 `admAgent.json` |
+| `check_adm_agent` | 检查本地 `admAgent` 是否存在，返回路径 |
+| `check_adm_agent_update` | 拉取远程清单比对本地版本号，返回是否需要更新（仅 Windows） |
+| `download_adm_agent` | 首次安装：下载 `admAgent` 工具并推送进度 |
+| `download_adm_agent_update` | 版本更新用：下载并替换 `admAgent`。**替换前自动停掉 Agent 控制台进程**释放 Windows 文件锁 |
+| `get_agent_workdir` / `set_agent_workdir` | 获取/设置 Agent 工作目录 |
+| `get_agent_status` | 返回 Agent 进程运行状态及模型代次 |
+| `start_agent_terminal` | 在独立控制台窗口启动 admAgent，保存 PID |
+| `stop_agent_terminal` | 关闭控制台窗口（按 PID 杀进程树） |
 
 ---
 

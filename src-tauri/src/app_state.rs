@@ -2,15 +2,6 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use sysinfo::System;
 
-use portable_pty::{Child, MasterPty};
-
-/// Agent 终端会话：保存一个 PTY 主端的句柄，用于收发数据、调整大小、关闭进程。
-pub struct AgentSession {
-    pub master: Box<dyn MasterPty + Send>,
-    pub writer: Box<dyn std::io::Write + Send>,
-    pub child: Box<dyn Child + Send>,
-}
-
 pub struct AppState {
     pub running_process: Mutex<Option<u32>>,
     pub running_model_id: Mutex<Option<String>>,
@@ -21,11 +12,11 @@ pub struct AppState {
     pub sd_download_progress: Mutex<u8>,
     pub sd_download_status: Mutex<String>,
     pub sys: Mutex<System>,
-    pub agent_session: Mutex<Option<AgentSession>>,
+    /// Agent 终端进程 PID（独立控制台窗口）
+    pub agent_process: Mutex<Option<u32>>,
     /// 全局标识：是否有模型成功启动（用于进入 Agent 页前的判断）
     pub model_running: Mutex<bool>,
     /// 模型启动代次：每次成功启动模型 +1，用于进入 Agent 页时判断模型是否已重启
-    /// （模型重启后，已运行的 admAgent 进程仍连着旧实例，需要重新拉起）
     pub model_generation: Mutex<u64>,
 }
 
@@ -41,7 +32,7 @@ impl AppState {
             sd_download_progress: Mutex::new(0),
             sd_download_status: Mutex::new("".to_string()),
             sys: Mutex::new(System::new_all()),
-            agent_session: Mutex::new(None),
+            agent_process: Mutex::new(None),
             model_running: Mutex::new(false),
             model_generation: Mutex::new(0),
         }
@@ -73,7 +64,6 @@ impl AppState {
         self.model_running.lock().map(|g| *g).unwrap_or(false)
     }
 
-    /// 模型成功启动一代：代次 +1（返回新代次）
     pub fn bump_model_generation(&self) -> u64 {
         let mut g = self.model_generation.lock().unwrap_or_else(|e| e.into_inner());
         *g += 1;

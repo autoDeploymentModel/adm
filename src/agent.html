@@ -3,8 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ADM · Agent 终端</title>
-  <link rel="stylesheet" href="vendor/xterm/xterm.css">
+  <title>ADM · Agent</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body {
@@ -53,52 +52,84 @@
     #top-bar button.primary { background: #6c63ff; border-color: #6c63ff; color: #fff; }
     #top-bar button.primary:hover { background: #5a52d5; }
 
-    #terminal-wrap {
+    #content {
       flex: 1;
-      position: relative;
-      background: #13131f;
-      padding: 8px 10px;
-      overflow: hidden;
-    }
-    #terminal { width: 100%; height: 100%; }
-
-    /* Agent 终端不需要纵向滚动条，并禁止鼠标滚动：viewport 改为 hidden，隐藏滚动条 */
-    .xterm .xterm-viewport {
-      overflow-y: hidden !important;
-      scrollbar-width: none;
-      -ms-overflow-style: none;
-    }
-    .xterm .xterm-viewport::-webkit-scrollbar {
-      width: 0;
-      height: 0;
-    }
-
-    #loading-overlay {
-      position: absolute;
-      inset: 0;
-      background: rgba(19,19,31,0.92);
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 14px;
-      z-index: 10;
+      padding: 40px;
+      gap: 24px;
     }
-    #loading-overlay.hidden { display: none !important; }
-    #loading-overlay .spinner {
-      width: 28px; height: 28px;
-      border: 3px solid #2a2a4e;
-      border-top-color: #6c63ff;
+
+    .status-card {
+      width: 100%;
+      max-width: 520px;
+      background: #1b1b2e;
+      border: 1px solid #2a2a4e;
+      border-radius: 12px;
+      padding: 32px;
+      text-align: center;
+    }
+    .status-icon {
+      width: 56px; height: 56px;
+      margin: 0 auto 16px;
       border-radius: 50%;
-      animation: spin 0.8s linear infinite;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 28px;
     }
-    #loading-overlay .loading-text { color: #a0a0c0; font-size: 14px; text-align: center; padding: 0 20px; }
-    #loading-overlay .error-text { color: #ff6b6b; font-size: 14px; text-align: center; padding: 0 20px; }
-    @keyframes spin { to { transform: rotate(360deg); } }
+    .status-icon.running { background: rgba(108,99,255,0.15); box-shadow: 0 0 20px rgba(108,99,255,0.3); }
+    .status-icon.stopped { background: rgba(100,100,140,0.15); }
+    .status-label {
+      font-size: 18px;
+      font-weight: 600;
+      color: #fff;
+      margin-bottom: 6px;
+    }
+    .status-desc {
+      font-size: 13px;
+      color: #9090b0;
+      line-height: 1.6;
+      white-space: pre-line;
+    }
+
+    .action-area {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .action-area button {
+      padding: 10px 22px;
+      border-radius: 8px;
+      font-size: 14px;
+      cursor: pointer;
+      border: 1px solid rgba(255,255,255,0.12);
+      transition: all 0.2s;
+    }
+    .action-area .btn-start {
+      background: #6c63ff;
+      border-color: #6c63ff;
+      color: #fff;
+    }
+    .action-area .btn-start:hover { background: #5a52d5; }
+    .action-area .btn-stop {
+      background: rgba(255,100,100,0.15);
+      border-color: rgba(255,100,100,0.3);
+      color: #ff8a8a;
+    }
+    .action-area .btn-stop:hover { background: rgba(255,100,100,0.25); }
+    .action-area .btn-secondary {
+      background: rgba(255,255,255,0.08);
+      color: #e0e0e0;
+    }
+    .action-area .btn-secondary:hover { background: rgba(255,255,255,0.18); }
 
     /* 工作目录选择弹窗 */
     #workdir-overlay {
-      position: absolute;
+      position: fixed;
       inset: 0;
       background: rgba(10,10,20,0.75);
       display: none;
@@ -116,83 +147,65 @@
       padding: 22px 24px;
       box-shadow: 0 12px 40px rgba(0,0,0,0.5);
     }
-    .workdir-dialog h3 {
-      margin-bottom: 6px;
-      font-size: 15px;
-      color: #fff;
-    }
-    .workdir-dialog .wd-desc {
-      font-size: 12px;
-      color: #9090b0;
-      margin-bottom: 16px;
-      line-height: 1.5;
-    }
-    .workdir-row {
-      display: flex;
-      gap: 8px;
-    }
+    .workdir-dialog h3 { margin-bottom: 6px; font-size: 15px; color: #fff; }
+    .workdir-dialog .wd-desc { font-size: 12px; color: #9090b0; margin-bottom: 16px; line-height: 1.5; }
+    .workdir-row { display: flex; gap: 8px; }
     .workdir-row input {
-      flex: 1;
-      background: #13131f;
-      border: 1px solid #2a2a4e;
-      color: #e0e0e0;
-      padding: 8px 10px;
-      border-radius: 6px;
-      font-size: 13px;
-      outline: none;
+      flex: 1; background: #13131f; border: 1px solid #2a2a4e;
+      color: #e0e0e0; padding: 8px 10px; border-radius: 6px; font-size: 13px; outline: none;
     }
     .workdir-row input:focus { border-color: #6c63ff; }
     .workdir-row button {
-      background: rgba(255,255,255,0.08);
-      color: #e0e0e0;
-      border: 1px solid rgba(255,255,255,0.12);
-      padding: 0 14px;
-      border-radius: 6px;
-      font-size: 13px;
-      cursor: pointer;
-      white-space: nowrap;
+      background: rgba(255,255,255,0.08); color: #e0e0e0;
+      border: 1px solid rgba(255,255,255,0.12); padding: 0 14px;
+      border-radius: 6px; font-size: 13px; cursor: pointer; white-space: nowrap;
     }
     .workdir-row button:hover { background: rgba(255,255,255,0.18); }
-    .workdir-actions {
-      display: flex;
-      justify-content: flex-end;
-      gap: 10px;
-      margin-top: 20px;
-    }
+    .workdir-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
     .workdir-actions button {
-      padding: 8px 18px;
-      border-radius: 6px;
-      font-size: 13px;
-      cursor: pointer;
+      padding: 8px 18px; border-radius: 6px; font-size: 13px; cursor: pointer;
       border: 1px solid rgba(255,255,255,0.12);
     }
-    .workdir-actions .btn-cancel {
-      background: transparent;
-      color: #b0b0c8;
-    }
-    .workdir-actions .btn-ok {
-      background: #6c63ff;
-      border-color: #6c63ff;
-      color: #fff;
-    }
+    .workdir-actions .btn-cancel { background: transparent; color: #b0b0c8; }
+    .workdir-actions .btn-ok { background: #6c63ff; border-color: #6c63ff; color: #fff; }
     .workdir-actions .btn-ok:hover { background: #5a52d5; }
     .workdir-actions .btn-cancel:hover { background: rgba(255,255,255,0.08); }
     .workdir-error { color: #ff6b6b; font-size: 12px; margin-top: 10px; min-height: 14px; }
+
+    /* 初始化 loading */
+    #loading-overlay {
+      position: fixed; inset: 0; background: rgba(19,19,31,0.92);
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; z-index: 30;
+    }
+    #loading-overlay.hidden { display: none !important; }
+    #loading-overlay .spinner {
+      width: 28px; height: 28px; border: 3px solid #2a2a4e; border-top-color: #6c63ff;
+      border-radius: 50%; animation: spin 0.8s linear infinite;
+    }
+    #loading-overlay .loading-text { color: #a0a0c0; font-size: 14px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
   <div id="app">
     <div id="top-bar">
-      <div class="title"><span class="dot"></span>Agent 终端</div>
+      <div class="title"><span class="dot"></span>Agent 管理</div>
       <div class="spacer"></div>
-      <button onclick="openWorkdirDialog()">设置工作目录</button>
-      <button class="primary" onclick="stopAndHome()">停止并返回</button>
     </div>
-    <div id="terminal-wrap">
-      <div id="terminal"></div>
-      <div id="loading-overlay">
-        <div class="spinner"></div>
-        <div class="loading-text">正在启动终端并加载 admAgent…</div>
+
+    <div id="content">
+      <div class="status-card">
+        <div id="status-icon" class="status-icon stopped">&#9632;</div>
+        <div id="status-label" class="status-label">Agent 未运行</div>
+        <div id="status-desc" class="status-desc">点击下方按钮启动 Agent 终端，将在独立的控制台窗口中运行。</div>
+      </div>
+
+      <div class="action-area">
+        <button id="btn-start" class="btn-start" onclick="startAgent()">启动 Agent</button>
+        <button id="btn-stop" class="btn-stop" onclick="stopAgent()" style="display:none">停止 Agent</button>
+        <button class="btn-secondary" onclick="openWorkdirDialog()">设置工作目录</button>
+        <button class="btn-secondary" onclick="goHome()">返回首页</button>
+        <button class="btn-stop" onclick="stopAndHome()">停止并返回</button>
       </div>
     </div>
 
@@ -200,22 +213,26 @@
     <div id="workdir-overlay">
       <div class="workdir-dialog">
         <h3>设置 Agent 工作目录</h3>
-        <div class="wd-desc">请设置您的工作目录</div>
+        <div class="wd-desc">请设置 Agent 的工作目录，admAgent 会在此目录下执行。</div>
         <div class="workdir-row">
           <input id="workdir-input" type="text" placeholder="例如：D:\projects 或 /Users/me/workspace" autocomplete="off" />
           <button onclick="browseWorkdir()">浏览…</button>
         </div>
         <div class="workdir-error" id="workdir-error"></div>
         <div class="workdir-actions">
-          <button class="btn-cancel" id="workdir-cancel" onclick="closeWorkdirDialog(true)">取消</button>
+          <button class="btn-cancel" onclick="closeWorkdirDialog()">取消</button>
           <button class="btn-ok" onclick="confirmWorkdir()">确定</button>
         </div>
       </div>
     </div>
+
+    <!-- Loading -->
+    <div id="loading-overlay">
+      <div class="spinner"></div>
+      <div class="loading-text" id="loading-text">正在启动 Agent…</div>
+    </div>
   </div>
 
-  <script src="vendor/xterm/xterm.js"></script>
-  <script src="vendor/xterm/addon-fit.js"></script>
   <script>
     // ===== Tauri IPC（iframe 兼容 macOS 回退到父窗口）=====
     var invoke = (function () {
@@ -252,143 +269,11 @@
       };
     })();
 
-    // ===== 编解码工具 =====
-    function base64ToBytes(b64) {
-      var bin = atob(b64);
-      var bytes = new Uint8Array(bin.length);
-      for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      return bytes;
-    }
-    function bytesToBase64(bytes) {
-      var bin = "";
-      var chunk = 0x8000;
-      for (var i = 0; i < bytes.length; i += chunk) {
-        bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
-      }
-      return btoa(bin);
-    }
-    var encoder = new TextEncoder();
-
-    // ===== 剪贴板：复制 / 粘贴（让 agent 终端像真实终端一样支持 Ctrl+C / Ctrl+V）=====
-    var clipboardReqId = 0;
-    var clipboardPending = {};
-
-    // 复制文本到系统剪贴板：优先 navigator.clipboard，失败回退到 textarea + execCommand（iframe 内更稳）
-    function copyToClipboard(text) {
-      return new Promise(function (resolve) {
-        function fallback() {
-          try {
-            var ta = document.createElement("textarea");
-            ta.value = text;
-            ta.setAttribute("readonly", "");
-            ta.style.position = "fixed";
-            ta.style.top = "-1000px";
-            ta.style.opacity = "0";
-            document.body.appendChild(ta);
-            ta.focus();
-            ta.select();
-            ta.setSelectionRange(0, ta.value.length);
-            var ok = document.execCommand("copy");
-            document.body.removeChild(ta);
-            resolve(!!ok);
-          } catch (e) {
-            resolve(false);
-          }
-        }
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(text)
-            .then(function () { resolve(true); })
-            .catch(function () { fallback(); });
-        } else {
-          fallback();
-        }
-      });
-    }
-
-    // 从系统剪贴板读取文本：优先 navigator.clipboard.readText，
-    // 失败（iframe 内剪贴板被限制）则通过父窗口代理读取。
-    function readClipboard() {
-      if (navigator.clipboard && navigator.clipboard.readText) {
-        return navigator.clipboard.readText();
-      }
-      return new Promise(function (resolve, reject) {
-        var id = ++clipboardReqId;
-        clipboardPending[id] = { resolve: resolve, reject: reject };
-        window.parent.postMessage({ type: "agent-read-clipboard", id: id }, "*");
-        setTimeout(function () {
-          if (clipboardPending[id]) {
-            delete clipboardPending[id];
-            reject(new Error("读取剪贴板超时"));
-          }
-        }, 5000);
-      });
-    }
-
-    // ===== 终端实例 =====
-    var term, fitAddon;
-    var terminalStarted = false;
-    var startRequested = false;
-    // 上次启动 admAgent 时记录到的模型代次；只有模型被重启（代次变化）或进程退出时，
-    // 再次进入 Agent 页才会重启 admAgent。上下文配置变化但模型未重启 → 不重启。
     var currentModelGen = null;
+    var _starting = false; // 防止并发启动
 
     function goHome() {
       window.parent.postMessage({ type: "navigate", page: "model_list.html" }, "*");
-    }
-
-    // ===== 通过 postMessage 接收主窗口转发的 Tauri 事件（与 model_list.html 相同模式）=====
-    function setupMessageListener() {
-      window.addEventListener("message", function (event) {
-        var data = event.data;
-        if (!data || !data.type) return;
-
-        switch (data.type) {
-          case "agent-terminal-data":
-            if (data.payload && data.payload.data && term) {
-              term.write(base64ToBytes(data.payload.data));
-            }
-            break;
-          case "agent-terminal-exit":
-            if (term) {
-              term.write("\r\n\x1b[33m[admAgent 进程已退出，可重新进入 Agent 页面启动]\x1b[0m\r\n");
-            }
-            break;
-          case "agent-terminal-ready":
-            hideLoading();
-            if (term) {
-              // PTY 已就绪：重新 fit 并把实际列/行同步给后端（后端初始固定 120×30，需在此纠正为真实宽度）
-              try { fitAddon.fit(); } catch (_) {}
-              if (term.rows > 0 && term.cols > 0) {
-                invoke("agent_terminal_resize", { rows: term.rows, cols: term.cols }).catch(function () {});
-              }
-              term.focus();
-            }
-            window.parent.postMessage({ type: "agent-focus-me" }, "*");
-            break;
-          case "agent-clipboard-result": {
-            // 父窗口代理读取剪贴板后回填结果
-            var cp = clipboardPending[data.id];
-            if (cp) {
-              if (data.error) cp.reject(new Error(data.error));
-              else cp.resolve(data.text);
-              delete clipboardPending[data.id];
-            }
-            break;
-          }
-          case "agent-resize":
-            // 父窗口切换显示 Agent 页面后，重新自适应尺寸并聚焦
-            if (term) {
-              try { fitAddon.fit(); } catch (_) {}
-              if (term.rows > 0 && term.cols > 0) {
-                invoke("agent_terminal_resize", { rows: term.rows, cols: term.cols }).catch(function () {});
-              }
-              term.focus();
-            }
-            // 每次显示页面时：检测模型上下文是否变化，变化则先停旧终端再重启 admAgent；否则仅在尚未运行时启动
-            handleEnterAgent();
-            break;
-        }
-      });
     }
 
     function hideLoading() {
@@ -396,136 +281,88 @@
       if (ov) ov.classList.add("hidden");
     }
 
-    function showError(msg) {
-      var ov = document.getElementById("loading-overlay");
-      if (ov) {
-        ov.innerHTML = '<div class="error-text">' + msg + '</div>';
-      }
-    }
-
-    // ===== 启动终端（先检查工作目录）=====
-    async function startTerminal() {
-      if (startRequested) return;
-      startRequested = true;
-      // 进入页面先检查工作目录是否已配置
-      try {
-        var wd = await invoke("get_agent_workdir");
-        if (!wd || !wd.trim()) {
-          // 工作目录为空：必须先设置（不启动终端，允许下次重新触发）
-          startRequested = false;
-          hideLoading();
-          openWorkdirDialog(true);
-          return;
-        }
-      } catch (e) {
-        startRequested = false;
-        hideLoading();
-        openWorkdirDialog(true);
-        return;
-      }
-      startAgentNow();
-    }
-
-    // 每次进入 Agent 页面时调用：综合判断是否需要 (重)启动 admAgent。
-    // 判据（后端 get_agent_status 为权威来源，不依赖前端可能过期的标记）：
-    //   - 进程已退出（running=false，含崩溃）：需要重启
-    //   - 模型代次变化（模型被重启过）：需要重启
-    //   - 二者都没变（哪怕只是切换页面，或仅改了上下文配置但没重启模型）：保持原状，不重启
-    async function handleEnterAgent() {
-      try {
-        var st = await invoke("get_agent_status");
-        var alive = !!(st && st.running);
-        var gen = st ? st.model_generation : null;
-
-        var keep =
-          alive &&
-          terminalStarted &&
-          gen === currentModelGen;
-        if (keep) {
-          // 进程存活且模型代次未变 → 不触碰原终端（上下文配置变化但模型未重启也不重启）
-          return;
-        }
-
-        // 其余情形（进程已退出 / 模型重启过 / 从未启动）一律重新启动。
-        // start_agent_terminal 内部会先清理旧会话（若存在）再拉起新 admAgent，无需手动 stop。
-        terminalStarted = false;
-        startRequested = false;
-        startTerminal();
-      } catch (e) {
-        // 查询失败则兜底：若当前未运行则尝试启动
-        if (!terminalStarted && !startRequested) {
-          terminalStarted = false;
-          startRequested = false;
-          startTerminal();
-        }
-      }
-    }
-
-    // 真正启动终端（工作目录已确认）
-    async function startAgentNow() {
+    function showLoading(text) {
       var ov = document.getElementById("loading-overlay");
       if (ov) {
         ov.classList.remove("hidden");
-        ov.innerHTML = '<div class="spinner"></div><div class="loading-text">正在启动终端并加载 admAgent…</div>';
+        var t = document.getElementById("loading-text");
+        if (t && text) t.textContent = text;
       }
-      // 每次 (重)启动前清空终端旧内容（含上次的「进程已退出」提示）
-      if (term) { try { term.reset(); } catch (_) {} }
-      try {
-        // 关键：先按当前容器真实尺寸 fit，拿到真实 rows/cols，在「创建 PTY」时就传给后端。
-        // 这样 admAgent 启动时读到的 PTY 宽度就是真实显示宽度，其 TUI（右边栏上下文实时统计）
-        // 才不会按默认 120 列错位。（之前 PTY 写死 120 列，admAgent 按 120 布局，而实际显示更宽，
-        // 且事后 agent_terminal_resize 于启动后才调用，admAent 已按旧宽度布局，故显示异常。）
-        try { fitAddon.fit(); } catch (_) {}
-        var initRows = term.rows > 0 ? term.rows : 30;
-        var initCols = term.cols > 0 ? term.cols : 120;
+    }
 
-        // 15 秒超时：防止后端 PTY 创建或进程 spawn 卡死
-        await Promise.race([
-          invoke("start_agent_terminal", { rows: initRows, cols: initCols }),
-          new Promise(function (_, reject) {
-            setTimeout(function () { reject(new Error("终端启动超时（15秒）")); }, 15000);
-          })
-        ]);
-        hideLoading();
-        terminalStarted = true;
-        // 记录本次启动时的模型代次，模型重启后代次变化将触发 admAgent 重启
-        invoke("get_agent_status")
-          .then(function (st) { if (st) currentModelGen = st.model_generation; })
-          .catch(function () {});
-        // 兜底：再 fit + resize 一次（布局可能又变化），确保 PTY 与显示一致
-        try { fitAddon.fit(); } catch (_) {}
-        if (term.rows > 0 && term.cols > 0) {
-          invoke("agent_terminal_resize", { rows: term.rows, cols: term.cols }).catch(function () {});
-        }
-      } catch (err) {
-        showError("终端启动失败：" + err);
+    function setUIState(running) {
+      var iconEl = document.getElementById("status-icon");
+      var labelEl = document.getElementById("status-label");
+      var descEl = document.getElementById("status-desc");
+      var btnStart = document.getElementById("btn-start");
+      var btnStop = document.getElementById("btn-stop");
+
+      if (running) {
+        iconEl.className = "status-icon running";
+        iconEl.textContent = "▶";
+        labelEl.textContent = "Agent 运行中";
+        descEl.textContent = "Agent 终端已在独立的控制台窗口中打开。\n在终端窗口中进行交互，关闭窗口后此处状态将更新。";
+        btnStart.style.display = "none";
+        btnStop.style.display = "";
+      } else {
+        iconEl.className = "status-icon stopped";
+        iconEl.textContent = "■";
+        labelEl.textContent = "Agent 未运行";
+        descEl.textContent = "点击下方按钮启动 Agent 终端，将在独立的控制台窗口中运行。";
+        btnStart.style.display = "";
+        btnStop.style.display = "none";
       }
+    }
+
+    async function startAgent() {
+      if (_starting) return; // 防并发
+      _starting = true;
+      try {
+        // 先检查工作目录
+        var wd = await invoke("get_agent_workdir");
+        if (!wd || !wd.trim()) {
+          openWorkdirDialog(true);
+          return;
+        }
+
+        showLoading("正在启动 Agent…");
+        await invoke("start_agent_terminal", {});
+        // 记录模型代次
+        var st = await invoke("get_agent_status");
+        if (st) currentModelGen = st.model_generation;
+        setUIState(true);
+        hideLoading();
+      } catch (err) {
+        hideLoading();
+        var descEl = document.getElementById("status-desc");
+        if (descEl) descEl.textContent = "启动失败：" + err;
+      } finally {
+        _starting = false;
+      }
+    }
+
+    async function stopAgent() {
+      try { await invoke("stop_agent_terminal", {}); } catch (_) {}
+      setUIState(false);
     }
 
     async function stopAndHome() {
       try { await invoke("stop_agent_terminal", {}); } catch (_) {}
-      terminalStarted = false;
-      startRequested = false;
       goHome();
     }
 
     // ===== 工作目录选择弹窗 =====
-    var workdirRequired = false;
 
     function openWorkdirDialog(required) {
-      workdirRequired = !!required;
       var overlay = document.getElementById("workdir-overlay");
       var input = document.getElementById("workdir-input");
-      var cancelBtn = document.getElementById("workdir-cancel");
       var err = document.getElementById("workdir-error");
       if (err) err.textContent = "";
-      // 预填当前已配置的值
       try {
         invoke("get_agent_workdir").then(function (wd) {
           if (input && wd) input.value = wd;
         }).catch(function () {});
       } catch (_) {}
-      if (cancelBtn) cancelBtn.style.display = workdirRequired ? "none" : "";
       if (overlay) overlay.classList.add("show");
       if (input) setTimeout(function () { input.focus(); }, 50);
     }
@@ -538,11 +375,7 @@
     async function browseWorkdir() {
       try {
         var result = await invoke("plugin:dialog|open", {
-          options: {
-            directory: true,
-            multiple: false,
-            title: "选择 Agent 工作目录"
-          }
+          options: { directory: true, multiple: false, title: "选择 Agent 工作目录" }
         });
         if (result && typeof result === "string") {
           var input = document.getElementById("workdir-input");
@@ -563,143 +396,98 @@
         return;
       }
       try {
+        var wasRunning = false;
+        try {
+          var st = await invoke("get_agent_status");
+          wasRunning = !!(st && st.running);
+        } catch (_) {}
+        // 先停掉旧终端
+        if (wasRunning) {
+          try { await invoke("stop_agent_terminal", {}); } catch (_) {}
+        }
+        // 保存新工作目录
         await invoke("set_agent_workdir", { workdir: val });
         closeWorkdirDialog();
-        // 重启终端以应用新的工作目录（stop 在尚未启动时为 no-op）
-        try { await invoke("stop_agent_terminal", {}); } catch (_) {}
-        terminalStarted = false;
-        startAgentNow();
+        // 自动重启
+        if (wasRunning) {
+          await startAgent();
+        } else {
+          setUIState(false);
+        }
       } catch (e) {
         if (err) err.textContent = "保存失败：" + e;
       }
     }
 
     // ===== 初始化 =====
-    function initTerminal() {
-      term = new Terminal({
-        fontFamily: 'Menlo, Consolas, "DejaVu Sans Mono", monospace',
-        fontSize: 13,
-        cursorBlink: true,
-        theme: {
-          background: "#13131f",
-          foreground: "#e0e0e0",
-          cursor: "#6c63ff",
-          selectionBackground: "rgba(108,99,255,0.3)",
-          black: "#13131f",
-          brightBlack: "#555",
-        },
-      });
-      fitAddon = new FitAddon.FitAddon();
-      term.loadAddon(fitAddon);
-      term.open(document.getElementById("terminal"));
-
-      // ===== 粘贴预处理：将换行符替换为空格 =====
-      // 多行文本粘贴时，换行符（\r\n / \n / \r）会被 PTY 当作 Enter 键，
-      // 导致 admAgent 输入被提前提交。覆写 term.paste 拦截所有粘贴路径
-      //（Ctrl+V、右键菜单、中键粘贴等），统一把换行替换为空格。
-      var _originalPaste = term.paste.bind(term);
-      term.paste = function (text) {
-        if (text) {
-          text = text.replace(/\r\n/g, ' ').replace(/\r/g, ' ').replace(/\n/g, ' ');
-        }
-        _originalPaste(text);
-      };
-
-      // ===== Ctrl+C / Ctrl+V 复制粘贴（模拟真实终端体验）=====
-      // - 有选区时 Ctrl+C 复制，无选区时放行（把 SIGINT 发给 agent，等价于终端中断）
-      // - Ctrl+V 从系统剪贴板读取并粘贴到终端
-      term.attachCustomKeyEventHandler(function (e) {
-        if (e.type !== "keydown") return true;
-        var mod = e.ctrlKey || e.metaKey;
-        if (!mod) return true;
-
-        var k = (e.key || "").toLowerCase();
-        // 复制：仅在有选区时拦截；无选区则交还给 xterm（Ctrl+C 作为中断信号，Cmd+C 在 Mac 上不发送）
-        if (k === "c" && (e.ctrlKey || e.metaKey)) {
-          var sel = term.getSelection();
-          if (sel && sel.length > 0) {
-            copyToClipboard(sel);
-            e.preventDefault();
-            return false; // 已处理，阻止默认（否则会触发 SIGINT）
-          }
-          return true; // 无选区：放行
-        }
-        // 粘贴
-        if (k === "v" && (e.ctrlKey || e.metaKey)) {
-          e.preventDefault();
-          readClipboard()
-            .then(function (text) {
-              if (text) term.paste(text);
-            })
-            .catch(function () {
-              try { term.write("\r\n\x1b[31m[粘贴失败：无法访问剪贴板]\x1b[0m\r\n"); } catch (_) {}
-            });
-          return false; // 已处理
-        }
-        return true;
-      });
-
-      // 禁止鼠标滚动：xterm 自身监听 wheel 事件滚动缓冲区，仅靠 CSS overflow:hidden 不够，
-      // 需在捕获阶段拦截 wheel 事件并阻止默认/冒泡，使终端始终停在最新输出。
-      var termEl = document.getElementById("terminal");
-      if (termEl) {
-        termEl.addEventListener("wheel", function (e) {
-          e.preventDefault();
-          e.stopPropagation();
-        }, { capture: true, passive: false });
+    // 仅检查状态并更新 UI，不自动启动
+    async function checkStatus() {
+      try {
+        var st = await invoke("get_agent_status");
+        var alive = !!(st && st.running);
+        if (alive && st) currentModelGen = st.model_generation;
+        setUIState(alive);
+      } catch (e) {
+        setUIState(false);
       }
-
-      // 用 ResizeObserver 兜底尺寸适配：容器（首次显示、窗口缩放、布局变化）任意尺寸变化都重新 fit。
-      // observe 后会立即回调一次当前尺寸 —— 首次进入时本页面已加载、容器已可见，可拿到正确宽度，
-      // 不依赖任何可能被错过的一次性事件。PTY 未建时 resize 为 no-op，建好后再由 startAgentNow 补一次。
-      var roWrap = document.getElementById("terminal-wrap");
-      if (roWrap && typeof ResizeObserver !== "undefined") {
-        var roTimer = null;
-        var ro = new ResizeObserver(function () {
-          if (roTimer) clearTimeout(roTimer);
-          roTimer = setTimeout(function () {
-            try { fitAddon.fit(); } catch (_) {}
-            if (term.rows > 0 && term.cols > 0) {
-              invoke("agent_terminal_resize", { rows: term.rows, cols: term.cols }).catch(function () {});
-            }
-          }, 120);
-        });
-        ro.observe(roWrap);
-      }
-
-      // iframe 内嵌时键盘焦点容易丢失，主动聚焦 + 点击聚焦
-      term.focus();
-      window.parent.postMessage({ type: "agent-focus-me" }, "*");
-      var termWrap = document.getElementById("terminal-wrap");
-      if (termWrap) {
-        termWrap.addEventListener("mousedown", function () { term.focus(); window.parent.postMessage({ type: "agent-focus-me" }, "*"); });
-        termWrap.tabIndex = -1;
-      }
-
-      term.onData(function (data) {
-        invoke("agent_terminal_input", { data: bytesToBase64(encoder.encode(data)) })
-          .catch(function (e) {
-            // 输入失败时在终端内短暂提示，便于排查
-            try { term.write("\r\n\x1b[31m[输入发送失败: " + e + "]\x1b[0m\r\n"); } catch (_) {}
-          });
-      });
-
-      // 监听主窗口通过 postMessage 转发的 Tauri 事件
-      setupMessageListener();
-
-      window.addEventListener("resize", function () {
-        try {
-          fitAddon.fit();
-          if (term.rows > 0 && term.cols > 0) {
-            invoke("agent_terminal_resize", { rows: term.rows, cols: term.cols }).catch(function () {});
-          }
-        } catch (_) {}
-      });
-
-      startTerminal();
     }
 
-    window.addEventListener("DOMContentLoaded", initTerminal);
+    // 每 2 秒轮询一次 Agent 进程状态，用于检测手动关闭终端等外部事件
+    var _statusTimer = null;
+    function startStatusPolling() {
+      if (_statusTimer) return; // 已启动
+      _statusTimer = setInterval(function () {
+        checkStatus();
+      }, 2000);
+    }
+
+    // 首次进入且未运行时尝试自动启动
+    async function checkStatusAndMaybeStart() {
+      if (_starting) return; // 与其他启动路径互斥
+      try {
+        var st = await invoke("get_agent_status");
+        var alive = !!(st && st.running);
+        var gen = st ? st.model_generation : null;
+
+        if (alive && gen === currentModelGen) {
+          setUIState(true);
+          return;
+        }
+
+        // 需要启动（首次进入 / 进程已退出 / 模型已重启）
+        if (!alive && gen !== null) {
+          currentModelGen = gen;
+          var wd = await invoke("get_agent_workdir");
+          if (!wd || !wd.trim()) {
+            setUIState(false);
+            openWorkdirDialog(true);
+            return;
+          }
+          await startAgent();
+        } else {
+          setUIState(false);
+        }
+      } catch (e) {
+        setUIState(false);
+      }
+    }
+
+    window.addEventListener("message", function (event) {
+      var data = event.data;
+      if (!data || !data.type) return;
+      // 主窗口通知切换到 agent 页面时，仅同步状态（不重复触发启动）
+      if (data.type === "agent-resize") {
+        checkStatus();
+      }
+    });
+
+    window.addEventListener("DOMContentLoaded", function () {
+      // 默认隐藏 loading 遮罩层（CSS 中默认为 display:flex）
+      hideLoading();
+      checkStatusAndMaybeStart().catch(function () { setUIState(false); });
+      // 启动定时轮询：每 2 秒检测 Agent 是否仍在运行
+      startStatusPolling();
+    });
   </script>
 </body>
 </html>
