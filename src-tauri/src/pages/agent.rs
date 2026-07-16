@@ -713,30 +713,48 @@ pub async fn start_agent_terminal(
     #[cfg(target_os = "macos")]
     {
         let agent_path_str = agent_path.to_string_lossy().to_string();
-        let script = if workdir.is_empty() {
-            format!(
-                "tell application \"Terminal\" to do script \"{}\"",
-                agent_path_str.replace('"', "\\\"")
-            )
+        let ps_cmd = if workdir.is_empty() {
+            agent_path_str.clone()
         } else {
-            format!(
-                "tell application \"Terminal\" to do script \"cd \\\"{}\\\" && {}\"",
-                workdir.replace('"', "\\\""),
-                agent_path_str.replace('"', "\\\"")
-            )
+            format!("cd \"{}\" && {}", workdir, agent_path_str)
         };
 
-        let child = std::process::Command::new("osascript")
-            .args(["-e", &script])
-            .spawn()
-            .map_err(|e| format!("启动终端失败: {}", e))?;
+        // osascript 会在 Terminal 中执行 ps_cmd；osascript 自身随即退出
+        let script = format!(
+            "tell application \"Terminal\" to do script \"{}\"",
+            ps_cmd.replace('\\', "\\\\").replace('"', "\\\"")
+        );
 
-        let pid = child.id();
-        if pid > 0 {
+        let _ = std::process::Command::new("osascript")
+            .args(["-e", &script])
+            .output();
+
+        // 等待并定位实际的 admAgent 进程 PID（osascript 已退出，不能再用它的 PID）
+        let mut found_pid = 0u32;
+        for _ in 0..40 {
+            // 最多等 4 秒
+            std::thread::sleep(Duration::from_millis(100));
+            if let Ok(output) = create_hidden_command("pgrep")
+                .args(["-n", "-f", "admAgent"])
+                .output()
+            {
+                if output.status.success() && !output.stdout.is_empty() {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    if let Some(line) = stdout.lines().next() {
+                        if let Ok(pid) = line.trim().parse::<u32>() {
+                            found_pid = pid;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if found_pid > 0 {
             let mut s = state.agent_process.lock().map_err(|e| e.to_string())?;
-            *s = Some(pid);
+            *s = Some(found_pid);
         } else {
-            bail!("启动终端失败：无法获取 PID");
+            bail!("启动终端失败：无法定位 admAgent 进程（请确认 admAgent 已在 Terminal 中启动）");
         }
     }
 
@@ -968,6 +986,13 @@ fn kill_process_tree(pid: u32) {
     let _ = create_hidden_command("kill")
         .args(["-9", &pid.to_string()])
         .output(); // 阻塞等待
+    // macOS 兜底：同时按名称杀死 admAgent（防止 PID 已失效的情况）
+    #[cfg(target_os = "macos")]
+    {
+        let _ = create_hidden_command("pkill")
+            .args(["-9", "-f", "admAgent"])
+            .output();
+    }
 }
 
 
