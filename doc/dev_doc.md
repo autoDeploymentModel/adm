@@ -1366,6 +1366,12 @@ python scripts/generate-icons.py
 | `agent_terminal_input` | 向前端按键写入 PTY |
 | `agent_terminal_resize` | 调整终端行列 |
 | `stop_agent_terminal` | 关闭终端会话 |
+| `add_cloud_provider` | 新增云端模型 Provider：写入 `admAgent.json` 的 `providers` 分支（`type=openai-compat`，含 `models` 数组）。写入前先 `ensure_adm_agent_config` 保证文件含合法 `providers.local`，避免后续启动 Agent 时被默认结构覆盖。provider key 与 model id 由模型名称派生（slugify），原子写入。上下文大小 `256K=256000`（K×1000、M×1000000） |
+| `list_cloud_providers` | 列出 `admAgent.json` 中已添加的云端模型 Provider（排除自动管理的 `local`），返回每项 `key/name/base_url/api_key/context_window`，供「模型管理」弹窗列表展示与编辑回填 |
+| `update_cloud_provider` | 按 `key` 定位并更新指定 Provider 的全部参数；模型名称变更时同步重派生 model id，保留同一 key 以免产生孤儿条目 |
+
+- **云端模型管理（前端 `agent.html`）**：顶部栏「添加云端模型」弹出表单（模型名称 / Base URL / API Key / 上下文大小，默认 256000），「模型管理」弹出已添加模型列表，每项带「编辑」按钮，编辑复用同一表单并回填参数。
+- **云端 provider 不被覆盖**：`add_cloud_provider` / `update_cloud_provider` 均保持 `providers.local` 存在；由于 `ensure_adm_agent_config` 仅原地更新 `providers.local`，用户新增 / 编辑的云端 provider 在改上下文大小、重进 Agent 页等场景下均被保留。
 
 ---
 

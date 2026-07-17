@@ -11,7 +11,7 @@ use crate::pages::index::fetch_update_info;
 
 use base64::Engine;
 use portable_pty::{native_pty_system, Child, CommandBuilder, PtySize};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -244,6 +244,241 @@ fn write_json_atomic(path: &std::path::Path, value: &serde_json::Value) -> Resul
 #[tauri::command]
 pub async fn prepare_adm_agent_config(app: tauri::AppHandle) -> Result<(), AppError> {
     ensure_adm_agent_config(&app)
+}
+
+// ===== 添加云端模型 Provider =====
+
+/// 把一个云端模型名称转成 admAgent.json providers 下的 JSON key（仅保留 ASCII 字母数字，转小写）。
+/// 例如 "Xiaomi MiMo" -> "xiaomimimo"。空名称回退为 "cloud"。
+fn slugify_provider_key(name: &str) -> String {
+    let mut s: String = name
+        .chars()
+        .filter_map(|c| {
+            if c.is_ascii_alphanumeric() {
+                Some(c.to_ascii_lowercase())
+            } else {
+                None
+            }
+        })
+        .collect();
+    if s.is_empty() {
+        s = "cloud".to_string();
+    }
+    s
+}
+
+/// 把一个云端模型名称转成 model id：转小写，空格/下划线/连字符替换为 '-'，
+/// 保留点号（'.'）以与名称保持一致（例如 "MiMo v2.5" -> "mimo-v2.5"），
+/// 去掉其它标点，去重首尾连字符。空名称回退为 "model"。
+fn slugify_model_id(name: &str) -> String {
+    let mut out = String::new();
+    let mut prev_dash = false;
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() || c == '.' {
+            out.push(c.to_ascii_lowercase());
+            prev_dash = false;
+        } else if c.is_whitespace() || c == '-' || c == '_' {
+            if !out.is_empty() && !prev_dash {
+                out.push('-');
+                prev_dash = true;
+            }
+        }
+        // 其它标点（如中文、括号等）直接忽略
+    }
+    while out.ends_with('-') || out.ends_with('.') {
+        out.pop();
+    }
+    if out.is_empty() {
+        out = "model".to_string();
+    }
+    out
+}
+
+/// 前端提交的新增云端模型参数
+#[derive(Deserialize)]
+pub struct CloudProviderInput {
+    /// 模型名称（同时作为 provider 的展示名与 model 的 name）
+    pub name: String,
+    /// API base_url，例如 https://api.xiaomimimo.com/v1
+    pub base_url: String,
+    /// API Key
+    pub api_key: String,
+    /// 上下文大小（tokens）。例如 256000（即 256K）
+    pub context_window: u32,
+}
+
+/// 新增一个云端模型 Provider 到 admAgent.json 的 `providers` 分支下。
+///
+/// - 先调用 `ensure_adm_agent_config` 保证文件存在且含合法的 `providers.local` 结构，
+///   这样后续 admAgent 启动/改上下文时 `ensure_adm_agent_config` 走「原地更新」分支，
+///   不会重写默认结构从而覆盖掉本次新增的云端 provider。
+/// - 文件已存在则解析并尽量保留其它字段；不存在则用完整默认结构。
+/// - 以模型名称派生 provider key 与 model id，插入（或覆盖同名）`providers[key]`。
+/// - 写入采用原子方式（临时文件 + rename）。
+///
+/// 返回新增的 provider key，供前端提示。
+#[tauri::command]
+pub async fn add_cloud_provider(
+    app: tauri::AppHandle,
+    input: CloudProviderInput,
+) -> Result<serde_json::Value, AppError> {
+    // 1) 保证基础结构存在（含 local provider），避免后续被覆盖
+    ensure_adm_agent_config(&app)?;
+
+    let dir = adm_agent_config_dir()?;
+    let path = dir.join("admAgent.json");
+
+    // 2) 读取现有配置（此时文件一定已存在）
+    let mut config: serde_json::Value = if path.exists() {
+        let s = std::fs::read_to_string(&path)
+            .map_err(|e| format!("读取 admAgent.json 失败: {}", e))?;
+        serde_json::from_str(&s).map_err(|e| format!("解析 admAgent.json 失败: {}", e))?
+    } else {
+        build_adm_agent_config(DEFAULT_CONTEXT_WINDOW, DEFAULT_PORT)
+    };
+
+    if !config.get("providers").map_or(false, |v| v.is_object()) {
+        config["providers"] = serde_json::json!({});
+    }
+
+    // 3) 派生 key / model id 并构造 provider
+    let key = slugify_provider_key(&input.name);
+    let model_id = slugify_model_id(&input.name);
+
+    let provider = serde_json::json!({
+        "name": input.name,
+        "base_url": input.base_url,
+        "type": "openai-compat",
+        "api_key": input.api_key,
+        "models": [
+            {
+                "id": model_id,
+                "name": input.name,
+                "context_window": input.context_window
+            }
+        ]
+    });
+
+    config["providers"][&key] = provider;
+
+    // 4) 原子写入
+    write_json_atomic(&path, &config)?;
+
+    Ok(serde_json::json!({ "key": key, "success": true }))
+}
+
+/// 模型管理弹窗中展示的 provider 视图（脱敏无关，api_key 一并返回以便编辑回填）
+#[derive(Serialize)]
+pub struct CloudProviderView {
+    pub key: String,
+    pub name: String,
+    pub base_url: String,
+    pub api_key: String,
+    pub context_window: u32,
+}
+
+/// 列出 admAgent.json 中已添加的全部云端模型 Provider（排除自动管理的 `local`）。
+/// 返回每项的关键信息，供前端列表展示与编辑回填。
+#[tauri::command]
+pub async fn list_cloud_providers(
+    _app: tauri::AppHandle,
+) -> Result<Vec<CloudProviderView>, AppError> {
+    let dir = adm_agent_config_dir()?;
+    let path = dir.join("admAgent.json");
+    if !path.exists() {
+        return Ok(vec![]);
+    }
+    let s = std::fs::read_to_string(&path)
+        .map_err(|e| format!("读取 admAgent.json 失败: {}", e))?;
+    let v: serde_json::Value = serde_json::from_str(&s)
+        .map_err(|e| format!("解析 admAgent.json 失败: {}", e))?;
+
+    let mut out: Vec<CloudProviderView> = vec![];
+    if let Some(providers) = v.get("providers").and_then(|p| p.as_object()) {
+        for (key, prov) in providers {
+            // 跳过自动生成的本地 provider（非用户添加）
+            if key == "local" {
+                continue;
+            }
+            let name = prov
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or(key.as_str())
+                .to_string();
+            let base_url = prov
+                .get("base_url")
+                .and_then(|b| b.as_str())
+                .unwrap_or("")
+                .to_string();
+            let api_key = prov
+                .get("api_key")
+                .and_then(|a| a.as_str())
+                .unwrap_or("")
+                .to_string();
+            let context_window = prov
+                .get("models")
+                .and_then(|m| m.get(0))
+                .and_then(|m0| m0.get("context_window"))
+                .and_then(|c| c.as_u64())
+                .unwrap_or(0) as u32;
+            out.push(CloudProviderView {
+                key: key.clone(),
+                name,
+                base_url,
+                api_key,
+                context_window,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// 更新指定 key 的云端模型 Provider（按 key 定位，替换其全部参数）。
+/// 模型名称变更时同步重派生 model id；保留同一 key 以免产生孤儿条目。
+#[tauri::command]
+pub async fn update_cloud_provider(
+    _app: tauri::AppHandle,
+    key: String,
+    input: CloudProviderInput,
+) -> Result<serde_json::Value, AppError> {
+    let dir = adm_agent_config_dir()?;
+    let path = dir.join("admAgent.json");
+    if !path.exists() {
+        bail!("未找到 admAgent.json，请先添加云端模型");
+    }
+    let s = std::fs::read_to_string(&path)
+        .map_err(|e| format!("读取 admAgent.json 失败: {}", e))?;
+    let mut config: serde_json::Value = serde_json::from_str(&s)
+        .map_err(|e| format!("解析 admAgent.json 失败: {}", e))?;
+
+    let providers = config
+        .get_mut("providers")
+        .and_then(|p| p.as_object_mut())
+        .ok_or_else(|| "admAgent.json 结构异常：缺少 providers".to_string())?;
+
+    if providers.get(&key).is_none() {
+        bail!("未找到 provider: {}", key);
+    }
+
+    let model_id = slugify_model_id(&input.name);
+    let new_provider = serde_json::json!({
+        "name": input.name,
+        "base_url": input.base_url,
+        "type": "openai-compat",
+        "api_key": input.api_key,
+        "models": [
+            {
+                "id": model_id,
+                "name": input.name,
+                "context_window": input.context_window
+            }
+        ]
+    });
+
+    providers.insert(key.clone(), new_provider);
+    write_json_atomic(&path, &config)?;
+
+    Ok(serde_json::json!({ "key": key, "success": true }))
 }
 
 // ===== 数据结构 =====

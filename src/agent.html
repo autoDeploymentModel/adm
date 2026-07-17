@@ -62,9 +62,10 @@
     }
     #terminal { width: 100%; height: 100%; }
 
-    /* Agent 终端不需要纵向滚动条，并禁止鼠标滚动：viewport 改为 hidden，隐藏滚动条 */
+    /* Agent 终端允许鼠标滚轮：TUI 已启用鼠标追踪，滚轮会由 xterm 转发给应用；
+       应用未启用追踪时则滚动 xterm 回滚缓冲区。滚动条宽度置 0 以保持简洁外观。 */
     .xterm .xterm-viewport {
-      overflow-y: hidden !important;
+      overflow-y: auto;
       scrollbar-width: none;
       -ms-overflow-style: none;
     }
@@ -178,6 +179,192 @@
     .workdir-actions .btn-ok:hover { background: #5a52d5; }
     .workdir-actions .btn-cancel:hover { background: rgba(255,255,255,0.08); }
     .workdir-error { color: #ff6b6b; font-size: 12px; margin-top: 10px; min-height: 14px; }
+
+    /* 添加云端模型弹窗 */
+    #cloud-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(10,10,20,0.75);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 20;
+    }
+    #cloud-overlay.show { display: flex; }
+    .cloud-dialog {
+      width: 480px;
+      max-width: 92%;
+      max-height: 90%;
+      overflow-y: auto;
+      background: #1b1b2e;
+      border: 1px solid #2a2a4e;
+      border-radius: 10px;
+      padding: 22px 24px;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+    }
+    .cloud-dialog h3 {
+      margin-bottom: 4px;
+      font-size: 15px;
+      color: #fff;
+    }
+    .cloud-dialog .cloud-desc {
+      font-size: 12px;
+      color: #9090b0;
+      margin-bottom: 18px;
+      line-height: 1.5;
+    }
+    .cloud-field { margin-bottom: 14px; }
+    .cloud-field label {
+      display: block;
+      font-size: 12px;
+      color: #c0c0d8;
+      margin-bottom: 6px;
+    }
+    .cloud-field label .hint { color: #6a6a8a; font-size: 11px; margin-left: 4px; }
+    .cloud-field input {
+      width: 100%;
+      background: #13131f;
+      border: 1px solid #2a2a4e;
+      color: #e0e0e0;
+      padding: 9px 11px;
+      border-radius: 6px;
+      font-size: 13px;
+      outline: none;
+      box-sizing: border-box;
+    }
+    .cloud-field input:focus { border-color: #6c63ff; }
+    .cloud-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 22px;
+    }
+    .cloud-actions button {
+      padding: 8px 18px;
+      border-radius: 6px;
+      font-size: 13px;
+      cursor: pointer;
+      border: 1px solid rgba(255,255,255,0.12);
+    }
+    .cloud-actions .btn-cancel {
+      background: transparent;
+      color: #b0b0c8;
+    }
+    .cloud-actions .btn-ok {
+      background: #6c63ff;
+      border-color: #6c63ff;
+      color: #fff;
+    }
+    .cloud-actions .btn-ok:hover { background: #5a52d5; }
+    .cloud-actions .btn-cancel:hover { background: rgba(255,255,255,0.08); }
+    .cloud-actions button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+    .cloud-msg { font-size: 12px; margin-top: 12px; min-height: 15px; }
+    .cloud-msg.error { color: #ff6b6b; }
+    .cloud-msg.success { color: #5ad17a; }
+
+    /* 模型管理弹窗 */
+    #manage-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(10,10,20,0.75);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 25;
+    }
+    #manage-overlay.show { display: flex; }
+    .manage-dialog {
+      width: 480px;
+      max-width: 92%;
+      max-height: 80%;
+      display: flex;
+      flex-direction: column;
+      background: #1b1b2e;
+      border: 1px solid #2a2a4e;
+      border-radius: 10px;
+      padding: 22px 24px;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+    }
+    .manage-dialog h3 {
+      margin-bottom: 4px;
+      font-size: 15px;
+      color: #fff;
+    }
+    .manage-dialog .manage-desc {
+      font-size: 12px;
+      color: #9090b0;
+      margin-bottom: 14px;
+      line-height: 1.5;
+    }
+    .manage-list {
+      flex: 1;
+      overflow-y: auto;
+      margin: 0 -6px;
+      padding: 0 6px;
+    }
+    .manage-empty {
+      color: #9090b0;
+      font-size: 13px;
+      text-align: center;
+      padding: 24px 0;
+    }
+    .manage-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 11px 12px;
+      background: #13131f;
+      border: 1px solid #2a2a4e;
+      border-radius: 8px;
+      margin-bottom: 9px;
+    }
+    .manage-item .mi-name {
+      flex: 1;
+      font-size: 13px;
+      color: #e0e0e0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .manage-item .mi-meta {
+      font-size: 11px;
+      color: #6a6a8a;
+      margin-right: 4px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 200px;
+    }
+    .manage-item button {
+      background: rgba(255,255,255,0.08);
+      color: #e0e0e0;
+      border: 1px solid rgba(255,255,255,0.12);
+      padding: 5px 14px;
+      border-radius: 6px;
+      font-size: 12px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .manage-item button:hover { background: rgba(255,255,255,0.18); }
+    .manage-actions {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 16px;
+    }
+    .manage-actions button {
+      padding: 8px 18px;
+      border-radius: 6px;
+      font-size: 13px;
+      cursor: pointer;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: transparent;
+      color: #b0b0c8;
+    }
+    .manage-actions button:hover { background: rgba(255,255,255,0.08); }
   </style>
 </head>
 <body>
@@ -185,6 +372,8 @@
     <div id="top-bar">
       <div class="title"><span class="dot"></span>Agent 终端</div>
       <div class="spacer"></div>
+      <button onclick="openCloudDialog()">添加云端模型</button>
+      <button onclick="openManageDialog()">模型管理</button>
       <button onclick="openWorkdirDialog()">设置工作目录</button>
       <button class="primary" onclick="stopAndHome()">停止并返回</button>
     </div>
@@ -209,6 +398,47 @@
         <div class="workdir-actions">
           <button class="btn-cancel" id="workdir-cancel" onclick="closeWorkdirDialog(true)">取消</button>
           <button class="btn-ok" onclick="confirmWorkdir()">确定</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 添加云端模型弹窗 -->
+    <div id="cloud-overlay">
+      <div class="cloud-dialog">
+        <h3 id="cloud-title">添加云端模型</h3>
+        <div class="cloud-desc">添加一个兼容 OpenAI 的云端模型 Provider，配置将写入 admAgent.json 的 providers 分支。</div>
+        <div class="cloud-field">
+          <label>模型名称<span class="hint">（作为 Provider 与模型展示名，例如 Xiaomi MiMo）</span></label>
+          <input id="cloud-name" type="text" placeholder="例如：Xiaomi MiMo" autocomplete="off" />
+        </div>
+        <div class="cloud-field">
+          <label>Base URL<span class="hint">（API 地址，例如 https://api.xiaomimimo.com/v1）</span></label>
+          <input id="cloud-base-url" type="text" placeholder="https://your-endpoint/v1" autocomplete="off" />
+        </div>
+        <div class="cloud-field">
+          <label>API Key</label>
+          <input id="cloud-api-key" type="text" placeholder="sk-..." autocomplete="off" />
+        </div>
+        <div class="cloud-field">
+          <label>上下文大小<span class="hint">（tokens，默认 256K = 256000，支持 256K / 1M 写法）</span></label>
+          <input id="cloud-ctx" type="text" value="256000" autocomplete="off" />
+        </div>
+        <div class="cloud-msg" id="cloud-msg"></div>
+        <div class="cloud-actions">
+          <button class="btn-cancel" onclick="closeCloudDialog()">取消</button>
+          <button id="cloud-ok-btn" class="btn-ok" onclick="confirmCloudModel()">确认添加</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 模型管理弹窗 -->
+    <div id="manage-overlay">
+      <div class="manage-dialog">
+        <h3>模型管理</h3>
+        <div class="manage-desc">已添加的云端模型列表，点击「编辑」可修改其全部参数。</div>
+        <div id="manage-list" class="manage-list"></div>
+        <div class="manage-actions">
+          <button onclick="closeManageDialog()">关闭</button>
         </div>
       </div>
     </div>
@@ -509,6 +739,21 @@
       goHome();
     }
 
+    // 重启 Agent 终端：先停旧会话再重新拉起 admAgent，使其重新加载 admAgent.json 的最新配置
+    // （新增 / 修改云端模型后必须重启才能生效）。若终端当前未运行则跳过（下次启动自然加载新配置）。
+    async function restartAgentTerminal() {
+      try {
+        var st = await invoke("get_agent_status");
+        if (!(st && st.running)) return; // 未在运行：无需重启
+      } catch (_) {
+        return;
+      }
+      try { await invoke("stop_agent_terminal", {}); } catch (_) {}
+      terminalStarted = false;
+      startRequested = false;
+      startAgentNow();
+    }
+
     // ===== 工作目录选择弹窗 =====
     var workdirRequired = false;
 
@@ -572,6 +817,222 @@
       } catch (e) {
         if (err) err.textContent = "保存失败：" + e;
       }
+    }
+
+    // ===== 添加 / 编辑云端模型弹窗 =====
+    // editingKey 为 null 表示「新增」模式；非 null 表示正在编辑该 key 的 provider
+    var editingKey = null;
+    // 缓存最近一次拉取的 provider 列表，供编辑回填使用
+    var cloudProviderCache = [];
+    // 提交中标记：防止确认按钮在异步保存期间被重复点击
+    var cloudSubmitting = false;
+
+    function openCloudDialog() {
+      editingKey = null;
+      var title = document.getElementById("cloud-title");
+      var okBtn = document.getElementById("cloud-ok-btn");
+      if (title) title.textContent = "添加云端模型";
+      if (okBtn) okBtn.textContent = "确认添加";
+
+      // 重置提交态：允许重新提交并恢复按钮可用
+      cloudSubmitting = false;
+      setCloudButtonsDisabled(false);
+
+      var overlay = document.getElementById("cloud-overlay");
+      var msg = document.getElementById("cloud-msg");
+      if (msg) { msg.textContent = ""; msg.className = "cloud-msg"; }
+      // 清空输入并预填默认值（上下文大小 256K = 256000）
+      document.getElementById("cloud-name").value = "";
+      document.getElementById("cloud-base-url").value = "";
+      document.getElementById("cloud-api-key").value = "";
+      var ctx = document.getElementById("cloud-ctx");
+      if (ctx) ctx.value = "256000";
+      if (overlay) overlay.classList.add("show");
+      var nameInput = document.getElementById("cloud-name");
+      if (nameInput) setTimeout(function () { nameInput.focus(); }, 50);
+    }
+
+    function closeCloudDialog() {
+      var overlay = document.getElementById("cloud-overlay");
+      if (overlay) overlay.classList.remove("show");
+    }
+
+    // 解析上下文大小：支持纯数字、以及带 K（×1000）/ M（×1000000）后缀。
+    // 默认 256K = 256000，与 admAgent.json 示例一致。
+    function parseContextSize(raw) {
+      if (raw === null || raw === undefined) return null;
+      var s = String(raw).trim().toLowerCase().replace(/\s+/g, "");
+      if (!s) return null;
+      var mult = 1;
+      if (s.endsWith("k")) { mult = 1000; s = s.slice(0, -1); }
+      else if (s.endsWith("m")) { mult = 1000000; s = s.slice(0, -1); }
+      var n = Number(s);
+      if (!isFinite(n) || n <= 0) return null;
+      return Math.round(n * mult);
+    }
+
+    // 设置/恢复添加/编辑弹窗底部按钮的禁用态（提交期间禁用，避免重复点击）
+    function setCloudButtonsDisabled(disabled) {
+      var okBtn = document.getElementById("cloud-ok-btn");
+      var cancelBtn = document.querySelector("#cloud-overlay .btn-cancel");
+      if (okBtn) okBtn.disabled = disabled;
+      if (cancelBtn) cancelBtn.disabled = disabled;
+    }
+    // 结束一次提交：恢复标记与按钮（用于校验失败 / 保存失败时允许用户重试）
+    function finishCloudSubmit() {
+      cloudSubmitting = false;
+      setCloudButtonsDisabled(false);
+    }
+
+    async function confirmCloudModel() {
+      var msg = document.getElementById("cloud-msg");
+      function setMsg(text, kind) {
+        if (msg) { msg.textContent = text; msg.className = "cloud-msg" + (kind ? " " + kind : ""); }
+      }
+
+      // 防重复点击：若已在提交中，直接忽略本次点击
+      if (cloudSubmitting) return;
+      cloudSubmitting = true;
+      setCloudButtonsDisabled(true);
+
+      var name = (document.getElementById("cloud-name").value || "").trim();
+      var baseUrl = (document.getElementById("cloud-base-url").value || "").trim();
+      var apiKey = (document.getElementById("cloud-api-key").value || "").trim();
+      var ctxRaw = (document.getElementById("cloud-ctx").value || "").trim();
+
+      if (!name) { setMsg("请填写模型名称", "error"); finishCloudSubmit(); return; }
+      if (!baseUrl) { setMsg("请填写 Base URL", "error"); finishCloudSubmit(); return; }
+      if (!/^https?:\/\//i.test(baseUrl)) { setMsg("Base URL 需以 http:// 或 https:// 开头", "error"); finishCloudSubmit(); return; }
+      if (!apiKey) { setMsg("请填写 API Key", "error"); finishCloudSubmit(); return; }
+      var ctx = parseContextSize(ctxRaw);
+      if (ctx === null) { setMsg("上下文大小无效（例如 256000 或 256K）", "error"); finishCloudSubmit(); return; }
+
+      setMsg("正在保存…", "");
+      try {
+        var res;
+        if (editingKey) {
+          res = await invoke("update_cloud_provider", {
+            key: editingKey,
+            input: {
+              name: name,
+              base_url: baseUrl,
+              api_key: apiKey,
+              context_window: ctx
+            }
+          });
+        } else {
+          res = await invoke("add_cloud_provider", {
+            input: {
+              name: name,
+              base_url: baseUrl,
+              api_key: apiKey,
+              context_window: ctx
+            }
+          });
+        }
+        var key = res && res.key ? res.key : name;
+        setMsg((editingKey ? "已更新云端模型：" : "已添加云端模型：") + key + "（新配置将在 Agent 终端重启后生效）", "success");
+        // 清空输入，短暂展示成功提示后（0.6s）立即关闭弹窗并重启 Agent 终端
+        document.getElementById("cloud-name").value = "";
+        document.getElementById("cloud-base-url").value = "";
+        document.getElementById("cloud-api-key").value = "";
+        setTimeout(function () {
+          closeCloudDialog();
+          closeManageDialog();
+          restartAgentTerminal();
+        }, 600);
+        // 成功后按钮保持禁用（窗口即将关闭并重启），无需 finishCloudSubmit 恢复
+      } catch (e) {
+        setMsg((editingKey ? "更新失败：" : "添加失败：") + (e && e.message ? e.message : e), "error");
+        finishCloudSubmit(); // 恢复按钮，允许用户修正后重试
+      }
+    }
+
+    // ===== 模型管理弹窗 =====
+    function closeManageDialog() {
+      var overlay = document.getElementById("manage-overlay");
+      if (overlay) overlay.classList.remove("show");
+    }
+
+    async function openManageDialog() {
+      editingKey = null;
+      var overlay = document.getElementById("manage-overlay");
+      var list = document.getElementById("manage-list");
+      if (list) list.innerHTML = '<div class="manage-empty">加载中…</div>';
+      if (overlay) overlay.classList.add("show");
+      try {
+        cloudProviderCache = await invoke("list_cloud_providers", {});
+      } catch (e) {
+        cloudProviderCache = [];
+        if (list) list.innerHTML = '<div class="manage-empty">加载失败：' + (e && e.message ? e.message : e) + '</div>';
+        return;
+      }
+      renderManageList();
+    }
+
+    function renderManageList() {
+      var list = document.getElementById("manage-list");
+      if (!list) return;
+      list.innerHTML = "";
+      if (!cloudProviderCache || cloudProviderCache.length === 0) {
+        list.innerHTML = '<div class="manage-empty">暂无已添加的云端模型</div>';
+        return;
+      }
+      cloudProviderCache.forEach(function (p) {
+        var item = document.createElement("div");
+        item.className = "manage-item";
+
+        var name = document.createElement("span");
+        name.className = "mi-name";
+        name.textContent = p.name || p.key;
+        item.appendChild(name);
+
+        var meta = document.createElement("span");
+        meta.className = "mi-meta";
+        meta.textContent = (p.context_window ? p.context_window + " tokens" : "") +
+          (p.base_url ? " · " + p.base_url : "");
+        item.appendChild(meta);
+
+        var editBtn = document.createElement("button");
+        editBtn.textContent = "编辑";
+        editBtn.addEventListener("click", function () { openCloudEdit(p.key); });
+        item.appendChild(editBtn);
+
+        list.appendChild(item);
+      });
+    }
+
+    // 以指定 key 的 provider 数据回填表单，进入「编辑」模式
+    function openCloudEdit(key) {
+      var prov = null;
+      for (var i = 0; i < cloudProviderCache.length; i++) {
+        if (cloudProviderCache[i].key === key) { prov = cloudProviderCache[i]; break; }
+      }
+      if (!prov) return;
+
+      editingKey = key;
+      var title = document.getElementById("cloud-title");
+      var okBtn = document.getElementById("cloud-ok-btn");
+      if (title) title.textContent = "编辑云端模型";
+      if (okBtn) okBtn.textContent = "保存修改";
+
+      // 重置提交态：允许重新提交并恢复按钮可用
+      cloudSubmitting = false;
+      setCloudButtonsDisabled(false);
+
+      document.getElementById("cloud-name").value = prov.name || "";
+      document.getElementById("cloud-base-url").value = prov.base_url || "";
+      document.getElementById("cloud-api-key").value = prov.api_key || "";
+      document.getElementById("cloud-ctx").value = prov.context_window ? String(prov.context_window) : "256000";
+
+      var msg = document.getElementById("cloud-msg");
+      if (msg) { msg.textContent = ""; msg.className = "cloud-msg"; }
+
+      // 关闭管理弹窗，打开编辑表单
+      closeManageDialog();
+      var overlay = document.getElementById("cloud-overlay");
+      if (overlay) overlay.classList.add("show");
+      setTimeout(function () { document.getElementById("cloud-name").focus(); }, 50);
     }
 
     // ===== 初始化 =====
@@ -639,13 +1100,53 @@
         return true;
       });
 
-      // 禁止鼠标滚动：xterm 自身监听 wheel 事件滚动缓冲区，仅靠 CSS overflow:hidden 不够，
-      // 需在捕获阶段拦截 wheel 事件并阻止默认/冒泡，使终端始终停在最新输出。
-      var termEl = document.getElementById("terminal");
-      if (termEl) {
-        termEl.addEventListener("wheel", function (e) {
+      // ===== 鼠标滚轮 → PTY 转发（兜底方案）=====
+      // xterm.js 只有在「鼠标追踪协议带 wheel 位（DECSET 1000/1002/1003）」时才会把滚轮
+      // 编码成鼠标报文转发给 PTY；若 admAgent 的 TUI 实际未走标准鼠标追踪（或该路未生效），
+      // 滚轮就到不了应用。因此这里在捕获阶段自行把滚轮转成 SGR 鼠标报文（crossterm/ratatui
+      // 等 Rust TUI 默认采用此编码）直接写入 PTY，保证 admAgent 一定收到滚动。
+      // 仅对 wheel 事件 stopPropagation，不影响点击 / 拖选等其它鼠标事件（那些走 xterm 自身逻辑）。
+      var _wheelAccum = 0;
+      var termElWheel = document.getElementById("terminal");
+      if (termElWheel) {
+        termElWheel.addEventListener("wheel", function (e) {
+          if (!term) return;
           e.preventDefault();
           e.stopPropagation();
+
+          // 把鼠标坐标换算成终端单元格坐标（1-based）。位置对滚轮通常只影响「在哪滚动」，
+          // TUIs 大多只关心方向，这里做近似换算即可。
+          var rect = termElWheel.getBoundingClientRect();
+          var col = 0, row = 0;
+          if (term.cols > 0 && rect.width > 0) {
+            col = Math.floor((e.clientX - rect.left) / (rect.width / term.cols));
+          }
+          if (term.rows > 0 && rect.height > 0) {
+            row = Math.floor((e.clientY - rect.top) / (rect.height / term.rows));
+          }
+          col = Math.max(0, Math.min(term.cols - 1, col));
+          row = Math.max(0, Math.min(term.rows - 1, row));
+
+          // 累加滚动量，跨过一行阈值才发一次，避免触控板产生的大量微事件刷屏 PTY。
+          // 统一把 deltaY 换算成「像素」，兼容 deltaMode 为行(1)/页(2) 的鼠标。
+          var dy = e.deltaY;
+          if (e.deltaMode === 1) dy *= 16;           // 行 -> 约 16px
+          else if (e.deltaMode === 2) dy *= rect.height || 480; // 页 -> 整屏高
+          _wheelAccum += dy;
+          var STEP = 24; // 约一行像素高度
+          while (Math.abs(_wheelAccum) >= STEP) {
+            var down = _wheelAccum > 0;
+            _wheelAccum -= down ? STEP : -STEP;
+            var action = down ? 1 : 0; // 1=下滚, 0=上滚
+            // SGR wheel: button = 64 + action + 修饰键位
+            var btn = 64 + action
+              + (e.ctrlKey ? 16 : 0)
+              + (e.shiftKey ? 4 : 0)
+              + (e.altKey ? 8 : 0);
+            var sgr = "\x1b[<" + btn + ";" + (col + 1) + ";" + (row + 1) + "M";
+            invoke("agent_terminal_input", { data: bytesToBase64(encoder.encode(sgr)) })
+              .catch(function () {});
+          }
         }, { capture: true, passive: false });
       }
 
