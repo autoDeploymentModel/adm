@@ -9,16 +9,20 @@
 ## 架构
 - **Tauri 2.11.2** + Rust 后端 + **原生 HTML/CSS/JS**（无框架、无打包工具）。
   所有前端源码在 `src/` 目录下，作为 `frontendDist` 原样提供。
-- **单窗口** iframe 路由：
-  - `index.html`（外壳）内嵌 `model_list.html`、`settings.html`、`model_chat.html`、`model_image.html`
-- CSS/JS **内联**在每个 HTML 文件中。
+- **单窗口 SPA（单页应用）** + hash 路由：
+  - `index.html`（外壳）含 `#view-root` 容器、`#agent-frame`（Agent 终端，方案 A 保留 iframe）、底部硬件栏与导航。
+  - 4 个视图（`model_list` / `model_chat` / `model_image` / `settings`）各自为独立 **ES 模块**（`src/views/*.js`），默认导出 `{ template, mount(root, params), unmount() }`。
+  - `index.html` 通过动态 `import()` 异步加载视图模块，把 `template`（含 `<style>` 的 HTML 字符串）注入 `#view-root`，调用 `mount`/`unmount` 管理生命周期。
+- CSS/JS **内联**在每个视图模块的 `template` 字符串或模块函数内，保持零依赖。
 - 未配置 linter、formatter、typechecker 或测试框架。
 
 ## IPC 注意事项（重要）
-- `index.html` 监听 Tauri 事件，通过 `postMessage` 转发给 iframe。
-- **macOS WKWebView 不会将 Tauri IPC 注入 iframe。** 子页面必须通过 `window.parent.__TAURI__?.core?.invoke` 回退。
-- 子页面 → 父窗口导航：`postMessage({ type: "navigate", page: "..." }, "*")`。
-- 子页面 → 父窗口 IPC 代理：`postMessage({ type: "__invoke__", cmd, args, id }, "*")`。
+- SPA 运行在 Tauri 主窗口内，**直接**调用 `window.__TAURI__.core.invoke` / `.event.listen`，无需 `postMessage` 代理。
+- `index.html` 初始化时把 `window.__adm_invoke` / `window.__adm_listen` 暴露给所有视图模块；视图模块通过这两个全局引用调用 IPC。
+- **共享状态** `window.__adm_state`（systemInfo / runningModelId / modelList 等）跨视图共享，切换不丢。
+- 视图 `mount` 时 `listen()` 保存 unlisten 句柄，`unmount` 时统一调用以防事件重复绑定（泄漏）。
+- **Agent 终端**（`agent.html`）仍按方案 A 保留为独立 iframe（`#agent-frame`），由路由 `#/agent` 控制显隐；其内部仍保留 `window.parent` IPC 回退兼容 macOS。
+- 子页面 → 父窗口导航：改为 `location.hash = "#/list"` 等 hash 路由，不再使用 `postMessage({type:"navigate"})`。
 
 ## Rust 后端（`src-tauri/src/`）
 | 模块 | 关键命令 |

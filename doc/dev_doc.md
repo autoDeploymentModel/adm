@@ -58,21 +58,22 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                   Tauri 单窗口                                │
+│                   Tauri 单窗口 (SPA)                          │
 │  ┌────────────────────────────────────────────────────────┐  │
-│  │              index.html (主框架)                         │  │
+│  │              index.html (SPA 外壳)                       │  │
 │  │  ┌──────────────────────────────────────────────────┐  │  │
-│  │  │       iframe #content-frame                       │  │  │
+│  │  │   #view-root (hash 路由异步挂载视图模块)          │  │  │
 │  │  │  ┌────────────────┐ ┌─────────────────────────┐  │  │  │
-│  │  │  │ model_list     │ │ settings.html           │  │  │  │
-│  │  │  │ .html          │ │ (设置页面)              │  │  │  │
+│  │  │  │ views/        │ │ views/                  │  │  │  │
+│  │  │  │ model_list.js │ │ settings.js             │  │  │  │
+│  │  │  │ (模型列表)     │ │ (设置页)               │  │  │  │
 │  │  │  └────────────────┘ └─────────────────────────┘  │  │  │
 │  │  │  ┌──────────────────────────────────────────┐   │  │  │
-│  │  │  │ model_chat.html (模型对话交互页)          │   │  │  │
+│  │  │  │ views/model_chat.js / model_image.js     │   │  │  │
 │  │  │  └──────────────────────────────────────────┘   │  │  │
 │  │  └────────────────────────────────────────────────┘  │  │
-│  │         ↕ postMessage 父子通信                         │  │
-│  │         ↕ IPC (invoke / event / emit)                 │  │
+│  │  #agent-frame (方案 A：独立 iframe，仅路由 #/agent)   │  │
+│  │         ↕ 直接 IPC (window.__adm_invoke / listen)     │  │
 │  └────────────────────────────────────────────────────────┘  │
 │  ┌────────────────────────────────────────────────────────┐  │
 │  │         Rust 后端 (多模块架构，见 §3)                    │  │
@@ -109,8 +110,8 @@
 | 职责                                  | 前端 (JS) | 后端 (Rust) |
 | ----------------------------------- | ------- | --------- |
 | UI 渲染与交互                            | ✅       | ❌         |
-| iframe 页面路由与导航                      | ✅       | ❌         |
-| 事件转发 (Tauri → postMessage → iframe) | ✅       | ❌         |
+| SPA 路由与视图生命周期 (mount/unmount)    | ✅       | ❌         |
+| 视图模块加载 (动态 import())              | ✅       | ❌         |
 | 模型列表渲染与状态列                          | ✅       | ❌         |
 | 系统信息采集                              | ❌       | ✅         |
 | 文件下载（含断点续传）                         | ❌       | ✅         |
@@ -125,30 +126,20 @@
 
 ### 2.3 IPC 通信设计
 
-#### Invoke 调用
+#### Invoke / Listen 调用
 
-前端通过 `window.__TAURI_INTERNALS__.invoke()` 或 `window.__TAURI__?.core?.invoke()` 调用 Rust Command。采用双兼容模式：
+SPA 运行在 Tauri 主窗口内，**直接**调用 `window.__TAURI__.core.invoke` / `.event.listen`，无需 `postMessage` 代理。`index.html` 初始化时把这两个引用暴露为全局：
 
 ```javascript
-// Tauri 2.x 通用获取方式 (带 parent 回退兼容 iframe)
-const getInvoke = () =>
-  window.__TAURI_INTERNALS__?.invoke ||
-  window.__TAURI__?.core?.invoke ||
-  window.__TAURI__?.invoke ||
-  window.parent?.__TAURI_INTERNALS__?.invoke ||
-  window.parent?.__TAURI__?.core?.invoke ||
-  window.parent?.__TAURI__?.invoke;
-
-const getListen = () =>
-  window.__TAURI_INTERNALS__?.listen ||
-  window.__TAURI__?.event?.listen ||
-  window.__TAURI__?.listen ||
-  window.parent?.__TAURI_INTERNALS__?.listen ||
-  window.parent?.__TAURI__?.event?.listen ||
-  window.parent?.__TAURI__?.listen;
+// index.html 初始化
+window.__adm_invoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
+window.__adm_listen = window.__TAURI__?.event?.listen || window.__TAURI_INTERNALS__?.listen;
+window.__adm_state = { systemInfo, runningModelId, runningModelPort, modelList, ... }; // 跨视图共享
 ```
 
-> **重要**：macOS WKWebView 不会将 Tauri IPC 桥接到 iframe，因此 iframe 子页面必须通过 `window.parent` 回退获取 IPC。
+各视图模块统一通过 `window.__adm_invoke(...)` / `window.__adm_listen(...)` 调用 IPC，不再有 `window.parent` 回退与 `__invoke__` 代理。
+
+> **注意**：macOS WKWebView 不会将 Tauri IPC 注入 iframe，因此 **Agent 终端（`agent.html`）仍保留为独立 iframe 并自带 `window.parent` 回退**（方案 A）；其余 4 个视图已 SPA 化，直接调用主窗口 IPC。
 
 #### Event 通信流
 
@@ -156,6 +147,8 @@ const getListen = () =>
 前端 JS ──invoke────▶  Rust Command  ──return──▶  前端 JS
 前端 JS ◀──listen────  Rust Event    ──emit────▶  前端 JS
 ```
+
+视图 `mount` 时 `listen(event, handler)` 并保存 unlisten 句柄，`unmount` 时统一调用以防事件重复绑定（泄漏）。
 
 | 事件名                          | 触发方                                    | 载荷                                          | 说明               |
 | ---------------------------- | -------------------------------------- | ------------------------------------------- | ---------------- |
@@ -170,21 +163,21 @@ const getListen = () =>
 | `sd-started`                 | Rust `start_sd_generation()`           | `{ model_id }`                              | sd-cli 进程启动         |
 | `sd-complete`                | Rust (stdout/stderr 线程)               | `{ model_id }`                              | sd-cli 进程结束         |
 
-#### 主窗口 ↔ iframe 通信
+#### 主窗口 ↔ Agent iframe 通信（仅 agent.html，方案 A）
 
 ```
 Tauri Event (Rust → JS)
        │
        ▼
-index.html 监听 Tauri 事件
+index.html 监听 Tauri 事件 (agent-terminal-data / exit / ready / download-progress)
        │
        ▼
-iframe.contentWindow.postMessage({ type, payload }, "*")
+#agent-frame.contentWindow.postMessage({ type, payload }, "*")
        │
        ▼
-子页面监听 window.message 事件
+agent.html 监听 window.message 事件
 
-子页面 → 主窗口：postMessage({ type: "navigate", page: "..." })
+agent.html → 主窗口：postMessage({ type: "agent-focus-me" / "agent-read-clipboard" / "navigate", ... })
 ```
 
 ***
@@ -203,11 +196,14 @@ adm/
 │   ├── sign-macos.sh                 # macOS 代码签名
 │   └── sign-windows.ps1              # Windows 代码签名
 ├── src/                              # 前端资源 (Tauri frontendDist)
-│   ├── index.html                    # 主框架页（外壳容器 + iframe + 底部硬件信息栏）
-│   ├── model_list.html               # 模型列表页（表格展示/下载/启动/停止）
-│   ├── model_chat.html               # 模型对话交互页（内嵌 WebUI + 启动遮罩 + 日志面板）
-│   ├── model_image.html              # 文生图页（文本输入/宽高设置/图片生成/日志）
-│   └── settings.html                 # 设置页面（导航分栏 + 参数表单 + 版本/关于）
+│   ├── index.html                    # SPA 外壳（#view-root 容器 + #agent-frame + 底部硬件栏/导航 + 全局 IPC/状态 + 路由器）
+│   ├── views/                        # 4 个 ES 模块视图（CSS+JS 内联在模板字符串里）
+│   │   ├── model_list.js             # 模型列表视图（表格展示/下载/启动/停止）
+│   │   ├── model_chat.js             # 模型对话交互视图（内嵌 WebUI + 启动遮罩 + 日志面板）
+│   │   ├── model_image.js            # 文生图视图（文本输入/宽高设置/图片生成/日志）
+│   │   └── settings.js               # 设置视图（导航分栏 + 参数表单 + 版本/关于）
+│   ├── agent.html                    # Agent 终端页（方案 A：独立 iframe，#agent-frame 加载）
+│   └── model_types.json              # 模型类型筛选数据（fetch 读取）
 ├── src-tauri/                        # Tauri 后端 (Rust)
 │   ├── Cargo.toml                    # Rust 依赖配置
 │   ├── Cargo.lock
@@ -232,10 +228,10 @@ adm/
 │       └── pages/                    # 按前端页面划分的业务模块
 │           ├── mod.rs
 │           ├── index.rs              # index.html 逻辑：硬件信息、更新检查、llamacpp 下载
-│           ├── model_list.rs         # model_list.html 逻辑：模型扫描/下载/启停/状态
-│           ├── model_chat.rs         # model_chat.html 逻辑（无独立 command，事件驱动）
-│           ├── model_image.rs        # model_image.html 逻辑：sd-cli 下载/检测/生成/停止
-│           └── settings.rs           # settings.html 逻辑：配置持久化、版本查询
+│           ├── model_list.rs         # views/model_list.js 逻辑：模型扫描/下载/启停/状态
+│           ├── model_chat.rs         # views/model_chat.js 逻辑（无独立 command，事件驱动）
+│           ├── model_image.rs        # views/model_image.js 逻辑：sd-cli 下载/检测/生成/停止
+│           └── settings.rs           # views/settings.js 逻辑：配置持久化、版本查询
 ├── website/                          # 项目官网资源
 │   ├── index.html                    # 官网首页（含 SEO: OG/Twitter Card/JSON-LD/Canonical）
 │   ├── robots.txt                    # 搜索引擎爬虫规则
@@ -456,7 +452,7 @@ AppState {
 
 ### 4.9 `pages/model_list.rs` — 模型列表页面
 
-**对应前端**：`model_list.html`（模型表格、下载/启动/停止按钮）
+**对应前端**：`views/model_list.js`（模型表格、下载/启动/停止按钮）
 
 **Commands**：
 
@@ -521,7 +517,7 @@ start_model(model_id, params)
 
 ### 4.10 `pages/model_chat.rs` — 模型交互页面
 
-**对应前端**：`model_chat.html`
+**对应前端**：`views/model_chat.js`
 
 **特点**：此页面**没有独立的 Tauri Command**，完全通过事件驱动 + 前端 JS 实现功能：
 
@@ -533,7 +529,7 @@ start_model(model_id, params)
 
 ### 4.11 `pages/model_image.rs` — 文生图页面
 
-**对应前端**：`model_image.html`
+**对应前端**：`views/model_image.js`
 
 **Commands**：
 
@@ -558,7 +554,7 @@ start_model(model_id, params)
 
 ### 4.12 `pages/settings.rs` — 设置页面
 
-**对应前端**：`settings.html`
+**对应前端**：`views/settings.js`
 
 **Commands**：
 
@@ -605,8 +601,8 @@ start_model(model_id, params)
 │                                                              │
 │  ┌────────────────────────────────────────────────────────┐  │
 │  │                                                        │  │
-│  │           iframe 内容区域 (model_list.html /            │  │
-│  │            settings.html / model_chat.html)             │  │
+│  │           #view-root 内容区域 (动态 import 视图模块)    │  │
+│  │            model_list / settings / model_chat / image  │  │
 │  │                                                        │  │
 │  └────────────────────────────────────────────────────────┘  │
 │                                                              │
@@ -621,7 +617,7 @@ start_model(model_id, params)
 ```
 页面加载
   │
-  ├── 1. 获取 IPC 桥接（兼容多版本 + parent 回退）
+  ├── 1. 初始化全局 IPC（window.__adm_invoke / __adm_listen）与共享状态（window.__adm_state）
   │
   ├── 2. invoke("get_system_info") → 获取系统硬件信息
   │
@@ -631,9 +627,9 @@ start_model(model_id, params)
   │
   ├── 4. 更新底部硬件信息栏
   │
-  ├── 5. 设置 Tauri 事件监听，转发给 iframe（download-progress/model-started 等）
+  ├── 5. 设置 Tauri 事件监听（llamacpp / adm-agent / agent 终端，保留转发给 #agent-frame）
   │
-  ├── 6. 监听 message 事件，接收 iframe 子页面的 navigate 请求
+  ├── 6. renderRoute() 解析 location.hash → 动态 import 视图模块，mount 进 #view-root
   │
   └── 7. 延迟 3 秒后静默 check_update → 有新版本才弹窗（不含 admAgent；admAgent 版本检查在点击底部栏 Agent 按钮时触发）
       ① 先检查系统版本更新 → 有更新则弹窗提示
@@ -656,23 +652,27 @@ start_model(model_id, params)
 
 **数据优先级**：`hwinfo 插件 > sysinfo`
 
-#### 导航处理
+#### 导航处理（SPA hash 路由）
+
+`index.html` 用 `<script type="module">` 内的 `renderRoute()` 解析 `location.hash` 并动态 `import()` 视图模块，挂载进 `#view-root`：
 
 ```javascript
-// 主窗口接收子页面导航请求
-window.addEventListener("message", function (event) {
-  if (event.data && event.data.type === "navigate") {
-    document.getElementById("content-frame").src = event.data.page;
-  }
-});
+// 路由表
+const routes = {
+  "/list":     { load: () => import("./views/model_list.js"),     nav: "home-btn" },
+  "/chat":     { load: () => import("./views/model_chat.js"),     nav: "home-btn" },
+  "/image":    { load: () => import("./views/model_image.js"),    nav: "home-btn" },
+  "/settings": { load: () => import("./views/settings.js"),       nav: "settings-btn" },
+  // "/agent" 不加载视图模块，由 showAgentFrame() 显隐 #agent-frame (方案 A)
+};
 
-// 子页面发起导航请求
-function navigateTo(page) {
-  window.parent.postMessage({ type: "navigate", page }, "*");
-}
+// 子页面发起导航请求（替代原 postMessage({type:"navigate"})）
+function navigateTo(hash) { location.hash = hash; }  // 如 "#/chat?model_id=xxx&port=1010"
 ```
 
-### 5.2 模型列表页 (`model_list.html`)
+视图切换时调用上一个视图的 `unmount()`（解绑 `listen` 句柄、`clearInterval`），再注入新模板并 `mount()`，共享 `window.__adm_state` 跨视图不丢状态。
+
+### 5.2 模型列表页 (`views/model_list.js`)
 
 #### 页面布局
 
@@ -752,7 +752,7 @@ function navigateTo(page) {
                                             └─────────────────┘
 ```
 
-### 5.3 模型交互页 (`model_chat.html`)
+### 5.3 模型交互页 (`views/model_chat.js`)
 
 #### 页面布局
 
@@ -786,7 +786,7 @@ function navigateTo(page) {
 
 ***
 
-### 5.4 设置页 (`settings.html`)
+### 5.4 设置页 (`views/settings.js`)
 
 #### 页面布局
 
@@ -873,7 +873,7 @@ function navigateTo(page) {
 
 ***
 
-### 5.5 文生图页 (`model_image.html`)
+### 5.5 文生图页 (`views/model_image.js`)
 
 #### 页面布局
 
@@ -966,9 +966,9 @@ src-tauri/src/
 └── pages/
     ├── mod.rs               # 模块声明
     ├── index.rs             # index.html → 硬件信息、更新检查、llamacpp 下载
-    ├── model_list.rs        # model_list.html → 模型扫描/下载/启动/停止
-    ├── model_chat.rs        # model_chat.html → 无独立 command（声明占位）
-    └── settings.rs          # settings.html → 配置保存/加载、版本查询
+    ├── model_list.rs        # views/model_list.js → 模型扫描/下载/启动/停止
+    ├── model_chat.rs        # views/model_chat.js → 无独立 command（声明占位）
+    └── settings.rs          # views/settings.js → 配置保存/加载、版本查询
 ```
 
 ### 6.2 核心数据结构 (`common/types.rs`)
@@ -1199,17 +1199,19 @@ pnpm sign:macos
 
 ### 8.1 Invoke 调用
 
-前端通过 `window.__TAURI_INTERNALS__.invoke()` 调用 Rust Command。兼容多版本写法：
+SPA 运行在 Tauri 主窗口内，**直接**调用 `window.__TAURI__.core.invoke`。`index.html` 初始化时把引用暴露到全局，所有视图模块通过 `window.__adm_invoke` 调用：
 
 ```javascript
-const invoke = window.__TAURI_INTERNALS__?.invoke ||
-               window.__TAURI__?.core?.invoke ||
-               window.__TAURI__?.invoke;
+// index.html 初始化
+window.__adm_invoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
+window.__adm_listen = window.__TAURI__?.event?.listen || window.__TAURI_INTERNALS__?.listen;
 ```
 
-### 8.2 iframe 子页面 IPC（关键⚠️）
+各视图模块内统一使用 `window.__adm_invoke("cmd", args)` / `window.__adm_listen("event", handler)`，**不再有 `window.parent` 回退与 `__invoke__` 代理**。
 
-macOS WKWebView 不会将 Tauri IPC 注入到 iframe 中，因此子页面必须通过 `window.parent` 回退获取：
+### 8.2 Agent iframe 子页面 IPC（仅 agent.html，方案 A）
+
+macOS WKWebView 不会将 Tauri IPC 注入到 iframe 中，因此 **`agent.html` 作为独立 iframe 仍保留 `window.parent` 回退**：
 
 ```javascript
 const getInvoke = () =>
@@ -1222,15 +1224,13 @@ const getInvoke = () =>
 ### 8.3 Event 收发架构
 
 ```
-Rust (emit) ──→ 前端 JS (listen) ──postMessage──→ iframe/contentWindow
-                                                        │
-                                                        ▼
-                                              子页面监听 window.message
+Rust (emit) ──→ 前端 JS (window.__adm_listen) ──→ 视图模块 handler（mount 时绑定，unmount 时解绑）
+                                          └──→ #agent-frame.contentWindow（仅 agent 相关事件，postMessage 转发）
 ```
 
-**主框架转发逻辑**：`index.html` 监听所有 Tauri 事件，通过 `frame.contentWindow.postMessage()` 转发给 iframe 子页面。
+**主框架转发逻辑**：`index.html` 仅把 Agent 相关 Tauri 事件（`agent-terminal-data` / `agent-terminal-exit` / `agent-terminal-ready` / `agent-download-progress`）通过 `postMessage` 转发给 `#agent-frame`；其余 4 个 SPA 视图**直接** `listen`，无需转发。
 
-**子页面导航**：子页面发送 `{ type: "navigate", page: "..." }` 给 `window.parent`，主框架据此切换 iframe 的 `src`。
+**SPA 导航**：视图内通过 `location.hash = "#/chat?model_id=..."` 切换路由，不再使用 `postMessage({type:"navigate"})`。
 
 ***
 

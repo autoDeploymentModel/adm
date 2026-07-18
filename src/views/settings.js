@@ -1,0 +1,730 @@
+const template = `
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  #app { display: flex; flex-direction: column; height: 100%; }
+
+  #settings-header {
+    display: flex;
+    align-items: center;
+    padding: 10px 16px;
+    background: #0f3460;
+    border-bottom: 1px solid #1a1a3e;
+    flex-shrink: 0;
+    gap: 12px;
+  }
+
+  .back-btn {
+    background: rgba(255, 255, 255, 0.1);
+    border: none;
+    color: #e0e0e0;
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: background 0.2s;
+  }
+  .back-btn:hover { background: rgba(255, 255, 255, 0.2); }
+
+  #settings-header .title { font-size: 16px; font-weight: 600; color: #ffffff; }
+
+  #settings-layout { display: flex; flex: 1; overflow: hidden; }
+
+  #settings-nav {
+    width: 180px;
+    background: #16213e;
+    border-right: 1px solid #1a1a3e;
+    padding: 12px 0;
+    flex-shrink: 0;
+    overflow-y: auto;
+  }
+
+  .nav-item {
+    padding: 10px 20px;
+    cursor: pointer;
+    font-size: 14px;
+    color: #a0a0c0;
+    transition: all 0.2s;
+    border-left: 3px solid transparent;
+  }
+  .nav-item:hover { background: rgba(108, 99, 255, 0.08); color: #e0e0e0; }
+  .nav-item.active {
+    background: rgba(108, 99, 255, 0.12);
+    color: #6c63ff;
+    border-left-color: #6c63ff;
+    font-weight: 500;
+  }
+
+  #settings-content { flex: 1; overflow-y: auto; padding: 20px 24px; }
+
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  .panel-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: #ffffff;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .panel-title::before {
+    content: "";
+    display: inline-block;
+    width: 4px;
+    height: 16px;
+    background: #6c63ff;
+    border-radius: 2px;
+  }
+
+  .param-group { margin-bottom: 24px; }
+
+  .param-group-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #6c63ff;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 12px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid #2a2a4e;
+  }
+
+  .param-row { display: flex; align-items: center; margin-bottom: 10px; gap: 12px; }
+
+  .param-label { width: 160px; font-size: 13px; color: #a0a0c0; flex-shrink: 0; }
+  .param-label .param-key { font-size: 11px; color: #606080; margin-top: 2px; }
+
+  .param-input { flex: 1; max-width: 300px; }
+  .param-input input, .param-input select {
+    width: 100%;
+    padding: 7px 12px;
+    background: #0f3460;
+    border: 1px solid #2a2a4e;
+    border-radius: 6px;
+    color: #e0e0e0;
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .param-input input:focus, .param-input select:focus { border-color: #6c63ff; }
+  .param-input select { cursor: pointer; }
+  .param-input select option { background: #0f3460; color: #e0e0e0; }
+  .param-input .checkbox-wrap { display: flex; align-items: center; gap: 8px; }
+  .param-input input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: #6c63ff; }
+
+  .param-desc { font-size: 11px; color: #606080; margin-top: 2px; }
+
+  .btn-reset {
+    background: rgba(255, 255, 255, 0.1);
+    color: #e0e0e0;
+    border: none;
+    padding: 10px 28px;
+    border-radius: 8px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.2s;
+    margin-top: 16px;
+    margin-left: 12px;
+  }
+  .btn-reset:hover { background: rgba(255, 255, 255, 0.2); }
+
+  .btn-delete-llamacpp {
+    background: #d32f2f;
+    color: #fff;
+    border: none;
+    padding: 3px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.2s;
+    vertical-align: middle;
+  }
+  .btn-delete-llamacpp:hover { background: #b71c1c; }
+
+  .version-table { width: 100%; max-width: 500px; }
+  .version-table tr { border-bottom: 1px solid #1a1a3e; }
+  .version-table td { padding: 12px 0; font-size: 14px; }
+  .version-table td:first-child { color: #a0a0c0; width: 140px; }
+  .version-table td:last-child { color: #e0e0e0; font-weight: 500; }
+
+  .about-content { max-width: 500px; }
+  .about-content h3 { font-size: 20px; color: #ffffff; margin-bottom: 8px; }
+  .about-content .about-subtitle { font-size: 13px; color: #6c63ff; margin-bottom: 20px; }
+  .about-content p { font-size: 14px; color: #a0a0c0; line-height: 1.8; margin-bottom: 12px; }
+  .about-content a { color: #6c63ff; text-decoration: none; }
+  .about-content a:hover { text-decoration: underline; }
+
+  .save-toast {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background: #2e7d32;
+    color: #fff;
+    padding: 12px 20px;
+    border-radius: 8px;
+    font-size: 13px;
+    z-index: 1000;
+    animation: slideIn 0.3s ease;
+  }
+
+  .error-toast {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background: #c62828;
+    color: #fff;
+    padding: 12px 20px;
+    border-radius: 8px;
+    font-size: 13px;
+    z-index: 1000;
+    animation: slideIn 0.3s ease;
+  }
+
+  @keyframes slideIn {
+    from { transform: translateX(100%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+  }
+
+  .confirm-overlay {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 9999;
+    justify-content: center;
+    align-items: center;
+  }
+  .confirm-overlay.show { display: flex; }
+  .confirm-dialog {
+    background: #16213e;
+    border: 1px solid #2a2a4e;
+    border-radius: 12px;
+    padding: 28px 32px;
+    max-width: 400px;
+    width: 90%;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    text-align: center;
+  }
+  .confirm-dialog .confirm-title { font-size: 18px; font-weight: 600; color: #ffffff; margin-bottom: 12px; }
+  .confirm-dialog .confirm-message { font-size: 14px; color: #c0c0e0; line-height: 1.6; margin-bottom: 24px; white-space: pre-line; }
+  .confirm-dialog .confirm-buttons { display: flex; gap: 12px; justify-content: center; }
+  .confirm-dialog .btn-confirm { background: #d32f2f; color: #fff; border: none; padding: 8px 28px; border-radius: 8px; font-size: 14px; cursor: pointer; transition: background 0.2s; }
+  .confirm-dialog .btn-confirm:hover { background: #b71c1c; }
+  .confirm-dialog .btn-cancel { background: rgba(255, 255, 255, 0.1); color: #e0e0e0; border: none; padding: 8px 28px; border-radius: 8px; font-size: 14px; cursor: pointer; transition: background 0.2s; }
+  .confirm-dialog .btn-cancel:hover { background: rgba(255, 255, 255, 0.2); }
+</style>
+<div id="app">
+  <div id="settings-header">
+    <button class="back-btn" id="back-btn">&#8592; 返回</button>
+    <span class="title">设置</span>
+  </div>
+  <div id="settings-layout">
+    <nav id="settings-nav">
+      <div class="nav-item active" data-panel="launch-params" id="nav-launch-params">模型启动参数</div>
+      <div class="nav-item" data-panel="version" id="nav-version">系统版本号</div>
+      <div class="nav-item" data-panel="about" id="nav-about">关于</div>
+    </nav>
+    <div id="settings-content">
+      <div id="panel-launch-params" class="panel active">
+        <div class="panel-title">模型启动参数</div>
+
+        <div class="param-group" style="margin-bottom: 28px;">
+          <div class="param-group-title">推荐模式</div>
+          <div class="param-row">
+            <div class="param-label">选择模式<div class="param-key">快速配置</div></div>
+            <div class="param-input">
+              <select id="preset_mode">
+                <option value="default">默认（日常聊天）</option>
+                <option value="creative">创意写作</option>
+                <option value="code">写代码 / 编程（推荐）</option>
+              </select>
+              <div class="param-desc">选择后自动填充并保存采样参数，可手动微调后自动保存</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="param-group">
+          <div class="param-group-title">基础参数</div>
+          <div class="param-row">
+            <div class="param-label">上下文大小<div class="param-key">-c, --ctx-size</div></div>
+            <div class="param-input"><input type="number" id="ctx_size" value="4096" min="0"><div class="param-desc" id="ctx-floor-hint"></div></div>
+          </div>
+          <div class="param-row">
+            <div class="param-label">预测 token 数<div class="param-key">-n, --n-predict</div></div>
+            <div class="param-input"><input type="number" id="n_predict" value="-1"><div class="param-desc">-1 表示无限</div></div>
+          </div>
+          <div class="param-row">
+            <div class="param-label">批处理大小<div class="param-key">-b, --batch-size</div></div>
+            <div class="param-input"><input type="number" id="batch_size" value="2048" min="1"></div>
+          </div>
+          <div class="param-row">
+            <div class="param-label">微批次大小<div class="param-key">-ub, --ubatch-size</div></div>
+            <div class="param-input"><input type="number" id="ubatch_size" value="512" min="1"></div>
+          </div>
+        </div>
+
+        <div class="param-group">
+          <div class="param-group-title">GPU 参数</div>
+          <div class="param-row">
+            <div class="param-label">GPU 层数<div class="param-key">-ngl, --n-gpu-layers</div></div>
+            <div class="param-input">
+              <select id="n_gpu_layers">
+                <option value="auto">auto (自动)</option>
+                <option value="all">all (全部)</option>
+                <option value="0">0 (仅 CPU)</option>
+                <option value="1">1</option>
+                <option value="10">10</option>
+                <option value="20">20</option>
+                <option value="30">30</option>
+                <option value="40">40</option>
+                <option value="50">50</option>
+                <option value="custom">自定义</option>
+              </select>
+            </div>
+          </div>
+          <div class="param-row" id="custom_ngl_row" style="display:none;">
+            <div class="param-label">自定义 GPU 层数</div>
+            <div class="param-input"><input type="number" id="n_gpu_layers_custom" value="0" min="0"></div>
+          </div>
+        </div>
+
+        <div class="param-group">
+          <div class="param-group-title">性能参数</div>
+          <div class="param-row">
+            <div class="param-label">线程数<div class="param-key">-t, --threads</div></div>
+            <div class="param-input"><input type="number" id="threads" value="" placeholder="自动"><div class="param-desc">留空为自动</div></div>
+          </div>
+          <div class="param-row">
+            <div class="param-label">批处理线程数<div class="param-key">-tb, --threads-batch</div></div>
+            <div class="param-input"><input type="number" id="threads_batch" value="" placeholder="同线程数"></div>
+          </div>
+          <div class="param-row">
+            <div class="param-label">Flash Attention<div class="param-key">-fa, --flash-attn</div></div>
+            <div class="param-input">
+              <select id="flash_attn"><option value="auto">auto</option><option value="on">on</option><option value="off">off</option></select>
+            </div>
+          </div>
+          <div class="param-row">
+            <div class="param-label">KV 缓存类型 K<div class="param-key">-ctk, --cache-type-k</div></div>
+            <div class="param-input">
+              <select id="cache_type_k"><option value="f16">f16</option><option value="f32">f32</option><option value="q8_0">q8_0</option><option value="q4_0">q4_0</option><option value="q4_1">q4_1</option><option value="q5_0">q5_0</option><option value="q5_1">q5_1</option></select>
+            </div>
+          </div>
+          <div class="param-row">
+            <div class="param-label">KV 缓存类型 V<div class="param-key">-ctv, --cache-type-v</div></div>
+            <div class="param-input">
+              <select id="cache_type_v"><option value="f16">f16</option><option value="f32">f32</option><option value="q8_0">q8_0</option><option value="q4_0">q4_0</option><option value="q4_1">q4_1</option><option value="q5_0">q5_0</option><option value="q5_1">q5_1</option></select>
+            </div>
+          </div>
+          <div class="param-row">
+            <div class="param-label">内存锁定<div class="param-key">--mlock</div></div>
+            <div class="param-input"><div class="checkbox-wrap"><input type="checkbox" id="mlock"><span>强制模型驻留 RAM</span></div></div>
+          </div>
+          <div class="param-row">
+            <div class="param-label">内存映射<div class="param-key">--mmap</div></div>
+            <div class="param-input"><div class="checkbox-wrap"><input type="checkbox" id="mmap" checked><span>启用内存映射</span></div></div>
+          </div>
+        </div>
+
+        <div class="param-group">
+          <div class="param-group-title">采样参数</div>
+          <div class="param-row"><div class="param-label">温度<div class="param-key">--temp</div></div><div class="param-input"><input type="number" id="temperature" value="0.8" step="0.05" min="0"></div></div>
+          <div class="param-row"><div class="param-label">Top-K<div class="param-key">--top-k</div></div><div class="param-input"><input type="number" id="top_k" value="40" min="0"></div></div>
+          <div class="param-row"><div class="param-label">Top-P<div class="param-key">--top-p</div></div><div class="param-input"><input type="number" id="top_p" value="0.95" step="0.01" min="0" max="1"></div></div>
+          <div class="param-row"><div class="param-label">Min-P<div class="param-key">--min-p</div></div><div class="param-input"><input type="number" id="min_p" value="0.05" step="0.01" min="0" max="1"></div></div>
+          <div class="param-row"><div class="param-label">重复惩罚<div class="param-key">--repeat-penalty</div></div><div class="param-input"><input type="number" id="repeat_penalty" value="1.1" step="0.05" min="0"></div></div>
+          <div class="param-row"><div class="param-label">重复窗口<div class="param-key">--repeat-last-n</div></div><div class="param-input"><input type="number" id="repeat_last_n" value="-1" step="1"><div class="param-desc">重复惩罚的上下文窗口大小，-1 表示使用 ctx_size</div></div></div>
+          <div class="param-row"><div class="param-label">DRY 乘数<div class="param-key">--dry-multiplier</div></div><div class="param-input"><input type="number" id="dry_multiplier" value="0.8" step="0.05" min="0"><div class="param-desc">DRY 采样乘数，0.0 表示禁用</div></div></div>
+          <div class="param-row"><div class="param-label">DRY 允许长度<div class="param-key">--dry-allowed-length</div></div><div class="param-input"><input type="number" id="dry_allowed_length" value="2" step="1" min="1"><div class="param-desc">DRY 采样允许的重复长度，代码模式建议设为 1</div></div></div>
+          <div class="param-row"><div class="param-label">DRY 惩罚窗口<div class="param-key">--dry-penalty-last-n</div></div><div class="param-input"><input type="number" id="dry_penalty_last_n" value="-1" step="1"><div class="param-desc">DRY 惩罚的最后 n 个 token，-1 表示使用上下文大小</div></div></div>
+          <div class="param-row"><div class="param-label">存在惩罚<div class="param-key">--presence-penalty</div></div><div class="param-input"><input type="number" id="presence_penalty" value="0.0" step="0.05" min="0"><div class="param-desc">重复 alpha 存在惩罚，0.0 表示禁用</div></div></div>
+          <div class="param-row"><div class="param-label">频率惩罚<div class="param-key">--frequency-penalty</div></div><div class="param-input"><input type="number" id="frequency_penalty" value="0.0" step="0.05" min="0"><div class="param-desc">重复 alpha 频率惩罚，0.0 表示禁用</div></div></div>
+          <div class="param-row"><div class="param-label">推理/思考<div class="param-key">--reasoning</div></div><div class="param-input"><select id="reasoning"><option value="auto">auto (自动检测)</option><option value="on">on (开启)</option><option value="off">off (关闭)</option></select><div class="param-desc">控制模型是否启用推理/思考模式</div></div></div>
+        </div>
+
+        <div class="param-group">
+          <div class="param-group-title">服务参数</div>
+          <div class="param-row"><div class="param-label">监听端口<div class="param-key">--port</div></div><div class="param-input"><input type="number" id="port" value="1010" min="1" max="65535"></div></div>
+          <div class="param-row"><div class="param-label">监听地址<div class="param-key">--host</div></div><div class="param-input"><select id="host"><option value="127.0.0.1">127.0.0.1 (本地)</option><option value="0.0.0.0">0.0.0.0 (所有接口)</option></select></div></div>
+        </div>
+
+        <button class="btn-reset" id="reset-btn">恢复默认</button>
+      </div>
+
+      <div id="panel-version" class="panel">
+        <div class="panel-title">系统版本号</div>
+        <table class="version-table">
+          <tr><td>ADM 版本</td><td id="v-adm">检测中... <span id="update-badge" style="display:none;color:#4caf50;font-size:12px;margin-left:6px;">✓ 最新</span></td></tr>
+          <tr>
+            <td style="padding-top:20px;" colspan="2">
+              <button class="btn-save" id="check-update-btn" style="margin-top:0;font-size:13px;padding:8px 20px;">检查新版本</button>
+              <span id="update-status" style="font-size:12px;color:#8080a0;margin-left:12px;"></span>
+            </td>
+          </tr>
+          <tr><td>Tauri 版本</td><td>2.11.2</td></tr>
+          <tr>
+            <td>llama.cpp 版本</td>
+            <td><span id="v-llamacpp" style="margin-right:8px;">检测中...</span><button class="btn-delete-llamacpp" id="delete-llamacpp-btn">删除</button></td>
+          </tr>
+          <tr><td>操作系统</td><td id="v-os">检测中...</td></tr>
+        </table>
+      </div>
+
+      <div id="panel-about" class="panel">
+        <div class="panel-title">关于</div>
+        <div class="about-content">
+          <h3>ADM</h3>
+          <div class="about-subtitle">Automatic Deployment Model</div>
+          <p>ADM 是一个大模型部署图形化管理工具，让用户能够便捷地在本地部署和运行大语言模型。</p>
+          <p>如需定制服务 联系方式：微信: litai686</p>
+          <p>项目官网：<a href="https://adm.tuduoduo.top/" target="_blank">https://adm.tuduoduo.top/</a></p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="confirm-overlay" id="confirm-overlay">
+  <div class="confirm-dialog">
+    <div class="confirm-title" id="confirm-title">删除提示</div>
+    <div class="confirm-message" id="confirm-message"></div>
+    <div class="confirm-buttons">
+      <button class="btn-cancel" id="confirm-cancel-btn">取消</button>
+      <button class="btn-confirm" id="confirm-ok-btn">确定</button>
+    </div>
+  </div>
+</div>
+`;
+
+const PRESET_MODES = {
+  default: { ctx_size: 65536, temperature: 1.0, top_k: 20, top_p: 0.95, min_p: 0.0, repeat_penalty: 1.0, repeat_last_n: -1, dry_multiplier: 0.0, dry_allowed_length: 2, dry_penalty_last_n: -1, presence_penalty: 1.5, frequency_penalty: 0.0, reasoning: "auto" },
+  creative: { ctx_size: 65536, temperature: 1.0, top_k: 20, top_p: 0.95, min_p: 0.0, repeat_penalty: 1.0, repeat_last_n: -1, dry_multiplier: 0.0, dry_allowed_length: 2, dry_penalty_last_n: -1, presence_penalty: 1.5, frequency_penalty: 0.0, reasoning: "auto" },
+  code: { ctx_size: 128000, temperature: 0.6, top_k: 20, top_p: 0.95, min_p: 0.0, repeat_penalty: 1.0, repeat_last_n: -1, dry_multiplier: 0.0, dry_allowed_length: 2, dry_penalty_last_n: -1, presence_penalty: 0.0, frequency_penalty: 0.0, reasoning: "off" },
+};
+
+const MODE_MIN_CTX = { default: 65536, creative: 65536, code: 1 };
+
+const invoke = () => window.__adm_invoke;
+
+function switchPanel(panelId) {
+  document.querySelectorAll(".nav-item").forEach((el) => el.classList.remove("active"));
+  document.querySelectorAll(".panel").forEach((el) => el.classList.remove("active"));
+  document.querySelector('[data-panel="' + panelId + '"]').classList.add("active");
+  document.getElementById("panel-" + panelId).classList.add("active");
+}
+
+function showToast(message, isError) {
+  const existing = document.querySelector(".save-toast, .error-toast");
+  if (existing) existing.remove();
+  const toast = document.createElement("div");
+  toast.className = isError ? "error-toast" : "save-toast";
+  toast.textContent = message;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 3000);
+}
+
+function fillSamplingFromPreset(preset) {
+  document.getElementById("ctx_size").value = preset.ctx_size;
+  applyCtxFloor();
+  document.getElementById("temperature").value = preset.temperature;
+  document.getElementById("top_k").value = preset.top_k;
+  document.getElementById("top_p").value = preset.top_p;
+  document.getElementById("min_p").value = preset.min_p;
+  document.getElementById("repeat_penalty").value = preset.repeat_penalty;
+  document.getElementById("repeat_last_n").value = preset.repeat_last_n;
+  document.getElementById("dry_multiplier").value = preset.dry_multiplier;
+  document.getElementById("dry_allowed_length").value = preset.dry_allowed_length;
+  document.getElementById("dry_penalty_last_n").value = preset.dry_penalty_last_n;
+  document.getElementById("presence_penalty").value = preset.presence_penalty;
+  document.getElementById("frequency_penalty").value = preset.frequency_penalty;
+  document.getElementById("reasoning").value = preset.reasoning;
+}
+
+function applyCtxFloor() {
+  const mode = document.getElementById("preset_mode").value;
+  const floor = MODE_MIN_CTX[mode] || 1;
+  const ctxEl = document.getElementById("ctx_size");
+  ctxEl.min = floor;
+  const v = parseInt(ctxEl.value) || 0;
+  if (v < floor) {
+    ctxEl.value = floor;
+    showToast("当前模式上下文大小不能低于 " + floor, false);
+  }
+  const hint = document.getElementById("ctx-floor-hint");
+  if (hint) hint.textContent = floor > 1 ? ("当前模式最小 " + floor) : "";
+}
+
+async function onPresetModeChange() {
+  const mode = document.getElementById("preset_mode").value;
+  const preset = PRESET_MODES[mode];
+  if (!preset) return;
+  fillSamplingFromPreset(preset);
+  await saveParams();
+}
+
+function getParamsFromForm() {
+  const nglSelect = document.getElementById("n_gpu_layers").value;
+  let nglValue = nglSelect;
+  if (nglSelect === "custom") nglValue = document.getElementById("n_gpu_layers_custom").value;
+  const threadsVal = document.getElementById("threads").value;
+  const threadsBatchVal = document.getElementById("threads_batch").value;
+  let ctxSize = parseInt(document.getElementById("ctx_size").value) || 0;
+  const ctxFloor = MODE_MIN_CTX[document.getElementById("preset_mode").value] || 1;
+  if (ctxSize < ctxFloor) ctxSize = ctxFloor;
+  return {
+    ctx_size: ctxSize,
+    n_predict: parseInt(document.getElementById("n_predict").value) || -1,
+    batch_size: parseInt(document.getElementById("batch_size").value) || 2048,
+    ubatch_size: parseInt(document.getElementById("ubatch_size").value) || 512,
+    n_gpu_layers: nglValue,
+    threads: threadsVal ? parseInt(threadsVal) : null,
+    threads_batch: threadsBatchVal ? parseInt(threadsBatchVal) : null,
+    flash_attn: document.getElementById("flash_attn").value,
+    cache_type_k: document.getElementById("cache_type_k").value,
+    cache_type_v: document.getElementById("cache_type_v").value,
+    mlock: document.getElementById("mlock").checked,
+    mmap: document.getElementById("mmap").checked,
+    temperature: parseFloat(document.getElementById("temperature").value) || 1.0,
+    top_k: parseInt(document.getElementById("top_k").value) || 20,
+    top_p: parseFloat(document.getElementById("top_p").value) || 0.95,
+    min_p: parseFloat(document.getElementById("min_p").value) || 0.0,
+    repeat_penalty: parseFloat(document.getElementById("repeat_penalty").value) || 1.0,
+    repeat_last_n: parseInt(document.getElementById("repeat_last_n").value) || -1,
+    dry_multiplier: parseFloat(document.getElementById("dry_multiplier").value) || 0.0,
+    dry_allowed_length: parseInt(document.getElementById("dry_allowed_length").value) || 2,
+    dry_penalty_last_n: parseInt(document.getElementById("dry_penalty_last_n").value) || -1,
+    presence_penalty: parseFloat(document.getElementById("presence_penalty").value) || 1.5,
+    frequency_penalty: parseFloat(document.getElementById("frequency_penalty").value) || 0.0,
+    reasoning: document.getElementById("reasoning").value,
+    port: parseInt(document.getElementById("port").value) || 1010,
+    host: document.getElementById("host").value,
+    preset_mode: document.getElementById("preset_mode").value,
+  };
+}
+
+function fillFormFromParams(params) {
+  function getParam(key) { return params[key] ?? params[camelCase(key)]; }
+  function camelCase(snake) { return snake.replace(/_([a-z])/g, (_, c) => c.toUpperCase()); }
+  document.getElementById("ctx_size").value = getParam("ctx_size") ?? 4096;
+  document.getElementById("n_predict").value = getParam("n_predict") ?? -1;
+  document.getElementById("batch_size").value = getParam("batch_size") ?? 2048;
+  document.getElementById("ubatch_size").value = getParam("ubatch_size") ?? 512;
+  const nglValue = getParam("n_gpu_layers") ?? "auto";
+  const nglSelect = document.getElementById("n_gpu_layers");
+  const options = Array.from(nglSelect.options).map((o) => o.value);
+  if (options.includes(nglValue)) {
+    nglSelect.value = nglValue;
+    document.getElementById("custom_ngl_row").style.display = "none";
+  } else {
+    nglSelect.value = "custom";
+    document.getElementById("n_gpu_layers_custom").value = nglValue;
+    document.getElementById("custom_ngl_row").style.display = "flex";
+  }
+  document.getElementById("threads").value = getParam("threads") ?? "";
+  document.getElementById("threads_batch").value = getParam("threads_batch") ?? "";
+  document.getElementById("flash_attn").value = getParam("flash_attn") ?? "auto";
+  document.getElementById("cache_type_k").value = getParam("cache_type_k") ?? "f16";
+  document.getElementById("cache_type_v").value = getParam("cache_type_v") ?? "f16";
+  document.getElementById("mlock").checked = getParam("mlock") ?? false;
+  document.getElementById("mmap").checked = getParam("mmap") !== false;
+  document.getElementById("temperature").value = getParam("temperature") ?? 1.0;
+  document.getElementById("top_k").value = getParam("top_k") ?? 20;
+  document.getElementById("top_p").value = getParam("top_p") ?? 0.95;
+  document.getElementById("min_p").value = getParam("min_p") ?? 0.0;
+  document.getElementById("repeat_penalty").value = getParam("repeat_penalty") ?? 1.0;
+  document.getElementById("repeat_last_n").value = getParam("repeat_last_n") ?? -1;
+  document.getElementById("dry_multiplier").value = getParam("dry_multiplier") ?? 0.0;
+  document.getElementById("dry_allowed_length").value = getParam("dry_allowed_length") ?? 2;
+  document.getElementById("dry_penalty_last_n").value = getParam("dry_penalty_last_n") ?? -1;
+  document.getElementById("presence_penalty").value = getParam("presence_penalty") ?? 1.5;
+  document.getElementById("frequency_penalty").value = getParam("frequency_penalty") ?? 0.0;
+  document.getElementById("reasoning").value = getParam("reasoning") ?? "auto";
+  document.getElementById("port").value = getParam("port") ?? 1010;
+  document.getElementById("host").value = getParam("host") ?? "127.0.0.1";
+  const presetMode = getParam("preset_mode") ?? "default";
+  document.getElementById("preset_mode").value = PRESET_MODES[presetMode] ? presetMode : "default";
+}
+
+async function saveParams() {
+  const params = getParamsFromForm();
+  const settings = { launch_params: params };
+  try {
+    await invoke()("save_settings", { settings: settings });
+    showToast("设置已保存，重启模型后生效");
+  } catch (e) {
+    console.error("[DEBUG] Failed to save settings:", e);
+    showToast("保存失败: " + e, true);
+  }
+}
+
+function resetParams() {
+  const defaults = {
+    ctx_size: 4096, n_predict: -1, batch_size: 2048, ubatch_size: 512,
+    n_gpu_layers: "auto", threads: null, threads_batch: null,
+    flash_attn: "auto", cache_type_k: "f16", cache_type_v: "f16",
+    mlock: true, mmap: true, temperature: 1.0, top_k: 20, top_p: 0.95, min_p: 0.0,
+    repeat_penalty: 1.0, repeat_last_n: -1, dry_multiplier: 0.0, dry_allowed_length: 2,
+    dry_penalty_last_n: -1, presence_penalty: 1.5, frequency_penalty: 0.0, reasoning: "auto",
+    port: 1010, host: "127.0.0.1",
+  };
+  fillFormFromParams(defaults);
+  applyCtxFloor();
+  autoSave();
+}
+
+function autoSave() { saveParams(); }
+
+function setupAutoSave() {
+  var paramIds = [
+    "ctx_size", "n_predict", "batch_size", "ubatch_size",
+    "n_gpu_layers_custom", "threads", "threads_batch",
+    "flash_attn", "cache_type_k", "cache_type_v",
+    "mlock", "mmap",
+    "temperature", "top_k", "top_p", "min_p",
+    "repeat_penalty", "repeat_last_n",
+    "dry_multiplier", "dry_allowed_length", "dry_penalty_last_n",
+    "presence_penalty", "frequency_penalty",
+    "reasoning", "port", "host"
+  ];
+  for (var i = 0; i < paramIds.length; i++) {
+    var el = document.getElementById(paramIds[i]);
+    if (el) el.addEventListener("change", autoSave);
+  }
+}
+
+async function loadVersionInfo() {
+  try {
+    const admVersion = await invoke()("get_app_version");
+    document.getElementById("v-adm").innerHTML = admVersion + ' <span id="update-badge" style="display:none;color:#4caf50;font-size:12px;margin-left:6px;">✓ 最新</span>';
+  } catch (e) {
+    document.getElementById("v-adm").textContent = "未知";
+  }
+  try {
+    const version = await invoke()("get_llamacpp_version");
+    document.getElementById("v-llamacpp").textContent = version || "未知";
+  } catch (e) {
+    document.getElementById("v-llamacpp").textContent = "未安装或无法检测";
+  }
+  const platform = navigator.platform || navigator.userAgent;
+  let osName = "未知";
+  if (platform.includes("Win")) osName = "Windows";
+  else if (platform.includes("Mac")) osName = "macOS";
+  else if (platform.includes("Linux")) osName = "Linux";
+  document.getElementById("v-os").textContent = osName;
+}
+
+let _confirmResolve = null;
+
+function showConfirmDialog(message) {
+  const overlay = document.getElementById("confirm-overlay");
+  document.getElementById("confirm-message").textContent = message;
+  overlay.classList.add("show");
+  return new Promise((resolve) => { _confirmResolve = resolve; });
+}
+
+function closeConfirmDialog(result) {
+  document.getElementById("confirm-overlay").classList.remove("show");
+  if (_confirmResolve) { _confirmResolve(result); _confirmResolve = null; }
+}
+
+async function deleteLlamacpp() {
+  const confirmed = await showConfirmDialog("确定要删除 llamacpp 文件夹吗？\n删除后需要重新下载才能使用 llama.cpp 相关功能。");
+  if (!confirmed) return;
+  try {
+    await invoke()("delete_llamacpp");
+    document.getElementById("v-llamacpp").textContent = "未安装";
+    showToast("llamacpp 文件夹已删除", false);
+  } catch (e) {
+    showToast("删除失败: " + e, true);
+  }
+}
+
+async function checkUpdateNow() {
+  const statusEl = document.getElementById("update-status");
+  const badgeEl = document.getElementById("update-badge");
+  statusEl.textContent = "检查中...";
+  badgeEl.style.display = "none";
+  try {
+    const result = await invoke()("check_update");
+    if (result.has_update) {
+      statusEl.textContent = `发现新版本 v${result.remote_version}`;
+      statusEl.style.color = "#ff9800";
+      const html = `
+        <div class="update-icon" style="font-size:40px;text-align:center;margin-bottom:12px;">📥</div>
+        <div class="update-title" style="font-size:20px;font-weight:600;color:#fff;text-align:center;margin-bottom:8px;">发现新版本</div>
+        <div class="update-desc" style="font-size:14px;color:#a0a0c0;text-align:center;margin-bottom:20px;line-height:1.6;">有新版本可用，是否前往下载？</div>
+        <div class="update-info-row" style="display:flex;justify-content:center;gap:24px;margin-bottom:20px;font-size:13px;">
+          <div class="info-item" style="text-align:center;"><div class="info-label" style="color:#8080a0;font-size:11px;">当前版本</div><div class="info-value" style="color:#e0e0e0;font-weight:500;margin-top:2px;">v${result.current_version}</div></div>
+          <div class="info-item" style="text-align:center;"><div class="info-label" style="color:#8080a0;font-size:11px;">最新版本</div><div class="info-value" style="color:#e0e0e0;font-weight:500;margin-top:2px;">v${result.remote_version}</div></div>
+        </div>
+        <div class="update-buttons" style="display:flex;gap:12px;justify-content:center;">
+          <button class="update-btn-primary" style="background:#6c63ff;color:#fff;border:none;padding:10px 28px;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer;" onclick="window.ADM.hideUpdateDialog();window.openUrl('${result.download_url}')">下载更新</button>
+          <button class="update-btn-secondary" style="background:rgba(255,255,255,0.1);color:#e0e0e0;border:none;padding:10px 28px;border-radius:8px;font-size:14px;cursor:pointer;" onclick="window.ADM.hideUpdateDialog()">稍后再说</button>
+        </div>`;
+      window.ADM.showUpdateDialog(html);
+    } else {
+      statusEl.textContent = "已是最新版本";
+      statusEl.style.color = "#4caf50";
+      badgeEl.style.display = "inline";
+    }
+  } catch (e) {
+    statusEl.textContent = "检查失败: " + e;
+    statusEl.style.color = "#f44336";
+  }
+  setTimeout(() => { statusEl.textContent = ""; statusEl.style.color = "#8080a0"; }, 5000);
+}
+
+function goBack() { location.hash = "#/list"; }
+
+export default {
+  template,
+  mount(root) {
+    root.innerHTML = template;
+
+    document.getElementById("back-btn").addEventListener("click", goBack);
+    document.querySelectorAll(".nav-item").forEach(function(el) {
+      el.addEventListener("click", function() { switchPanel(el.dataset.panel); });
+    });
+    document.getElementById("preset_mode").addEventListener("change", onPresetModeChange);
+    document.getElementById("n_gpu_layers").addEventListener("change", function() {
+      const customRow = document.getElementById("custom_ngl_row");
+      if (this.value === "custom") customRow.style.display = "flex";
+      else customRow.style.display = "none";
+      autoSave();
+    });
+    document.getElementById("ctx_size").addEventListener("change", function() { applyCtxFloor(); autoSave(); });
+    document.getElementById("reset-btn").addEventListener("click", resetParams);
+    document.getElementById("check-update-btn").addEventListener("click", checkUpdateNow);
+    document.getElementById("delete-llamacpp-btn").addEventListener("click", deleteLlamacpp);
+    document.getElementById("confirm-cancel-btn").addEventListener("click", function() { closeConfirmDialog(false); });
+    document.getElementById("confirm-ok-btn").addEventListener("click", function() { closeConfirmDialog(true); });
+
+    setupAutoSave();
+
+    (async function() {
+      try {
+        const settings = await invoke()("load_settings");
+        const params = settings.launch_params || settings.launchParams;
+        if (settings && params) fillFormFromParams(params);
+        applyCtxFloor();
+      } catch (e) {
+        console.error("加载设置失败:", e);
+      }
+      loadVersionInfo();
+    })();
+  },
+  unmount() {}
+};
