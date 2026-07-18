@@ -531,11 +531,16 @@ pub async fn start_model(
             cmd.env("DYLD_LIBRARY_PATH", llamacpp_dir.to_string_lossy().to_string());
         }
     }
+    #[cfg(target_os = "windows")]
     let mut child = cmd
         .args(&args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
+        .map_err(|e| format!("启动 llama-server 失败: {}", e))?;
+
+    #[cfg(not(target_os = "windows"))]
+    let mut child = crate::common::utils::platform::spawn_detached(cmd.args(&args).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()))
         .map_err(|e| format!("启动 llama-server 失败: {}", e))?;
 
     let pid = child.id();
@@ -644,23 +649,7 @@ pub async fn stop_model(state: tauri::State<'_, AppState>) -> Result<(), AppErro
         pid_lock.ok_or("没有正在运行的模型")?
     };
 
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        std::process::Command::new("taskkill")
-            .creation_flags(0x08000000)
-            .args(["/PID", &pid.to_string(), "/F"])
-            .spawn()
-            .map_err(|e| format!("停止进程失败: {}", e))?;
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        std::process::Command::new("kill")
-            .args(["-9", &pid.to_string()])
-            .spawn()
-            .map_err(|e| format!("停止进程失败: {}", e))?;
-    }
+    crate::common::utils::platform::kill_process_tree(pid);
 
     {
         let mut pid_lock = state.running_process.lock().map_err(|e| e.to_string())?;

@@ -18,21 +18,23 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 let app = window.app_handle();
                 let state = app.state::<AppState>();
+
+                // 强杀记录中的模型/SD 进程（整棵进程树）
                 let pid_opt = state.running_process.lock().ok().and_then(|l| *l);
                 if let Some(pid) = pid_opt {
-                    #[cfg(target_os = "windows")]
-                    {
-                        let pid_str: String = pid.to_string();
-                        let _ = crate::common::utils::platform::create_hidden_command("taskkill")
-                            .args(["/PID", &pid_str, "/F"])
-                            .spawn();
-                    }
-                    #[cfg(not(target_os = "windows"))]
-                    {
-                        let _ = crate::common::utils::platform::create_hidden_command("kill")
-                            .args(["-9", &pid.to_string()])
-                            .spawn();
-                    }
+                    crate::common::utils::platform::kill_process_tree(pid);
+                }
+                // 兜底：按进程名清理任何残留的 llama-server / SD 子进程，
+                // 防止进程树记录丢失（崩溃、竞态、PID 复用）导致残留。
+                #[cfg(target_os = "windows")]
+                {
+                    crate::common::utils::platform::kill_process_by_name("llama-server.exe");
+                    crate::common::utils::platform::kill_process_by_name("sd-cli.exe");
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    crate::common::utils::platform::kill_process_by_name("llama-server");
+                    crate::common::utils::platform::kill_process_by_name("sd-cli");
                 }
 
                 // 关闭 Agent 终端会话

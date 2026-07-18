@@ -320,7 +320,9 @@ pub fn run() {
         .plugin(tauri_plugin_hwinfo::init())
         .manage(AppState::new())
         .on_window_event(|window, event| {
-            // 窗口关闭时清理 llama-server 进程
+            // 窗口关闭时清理 llama-server / sd-cli 进程：
+            // 1. 按记录的 PID 杀整棵进程树（kill_process_tree）
+            // 2. 兜底按进程名强杀残留（kill_process_by_name），防止 PID 记录丢失/复用导致孤儿进程残留
         })
         .invoke_handler(tauri::generate_handler![
             // pages/index.rs
@@ -465,7 +467,7 @@ AppState {
 | `fetch_model_list()`                        | 远程获取模型列表                | `GET https://adm.tuduoduo.top/model.json`      |
 | `download_model(app, model_id, model_url, model_diffusion, model_vae)`  | 下载模型                    | 断点续传 + HuggingFace 镜像替换 + 进度事件 + AppState 进度同步。文本生成图片模型自动连续下载主模型、diffusion、vae 三个文件 |
 | `start_model(app, state, model_id, params)` | 启动 llama-server         | 参数拼装 + 进程 spawn + stdout/stderr 线程 + PID 记录    |
-| `stop_model(state)`                         | 停止 llama-server         | taskkill(SIGKILL) / kill -9 + 状态清空             |
+| `stop_model(state)`                         | 停止 llama-server         | `kill_process_tree`（taskkill /PID /T /F 或 kill -9 -<pgid>）+ 状态清空 |
 | `get_model_status(state)`                   | 查询运行状态                  | 校验 PID 是否存活，僵尸进程自动清理                           |
 | `get_downloading_models(state)`             | 获取所有下载中模型进度             | 用于页面切换后恢复进度显示                                  |
 
@@ -1272,7 +1274,8 @@ Rust (emit) ──→ 前端 JS (listen) ──postMessage──→ iframe/conte
 ### 10.2 Windows 相关
 
 - 所有子进程通过 `CREATE_NO_WINDOW` 标志启动，避免弹出命令行窗口
-- 停止模型使用 `taskkill /PID /F` 强制终止
+- 停止模型/SD 使用 `taskkill /PID /T /F` 强杀整棵进程树；窗口关闭时还会按进程名（`llama-server.exe` / `sd-cli.exe`）兜底清理残留，避免子进程沦为孤儿
+- Unix 下 llama-server / sd-cli 以独立进程组（`process_group(0)` + setsid）启动，关闭时用 `kill -9 -<pgid>` 一次性杀掉整棵树
 
 ### 10.3 下载相关
 
@@ -1399,8 +1402,8 @@ python scripts/generate-icons.py
 
 ***
 
-*文档版本: 3.9*\
-*最后更新: 2026-06-21*\
+*文档版本: 3.11*\
+*最后更新: 2026-07-18*\
 *维护者: ADM 开发团队*
 
 ***
@@ -1409,6 +1412,7 @@ python scripts/generate-icons.py
 
 | 日期 | 版本 | 变更内容 |
 |------|------|----------|
+| 2026-07-18 | **3.11** | 修复主程序关闭后 llama-server / sd-cli 进程残留问题：<br>1. 新增 `platform::kill_process_tree`（taskkill /PID /T /F 或 kill -9 -<pgid>）和 `platform::kill_process_by_name` 兜底清理<br>2. 窗口关闭事件改为先按 PID 杀整棵进程树，再按进程名兜底强杀残留，避免 PID 记录丢失/复用导致孤儿进程<br>3. Unix 下 llama-server / sd-cli 以独立进程组（process_group(0) + setsid）启动，`kill -9 -<pgid>` 可一次杀掉整棵树<br>4. `stop_model` / `stop_sd` 改用 `kill_process_tree`，与窗口关闭逻辑一致 |
 | 2026-06-21 | **3.9** | 官网 SEO 优化：<br>1. 添加 Open Graph / Twitter Card 元标签<br>2. 添加 canonical URL 和 JSON-LD 结构化数据<br>3. 创建 robots.txt 和 sitemap.xml<br>4. 图片添加 loading="lazy"，emoji 图标添加 role="img" + aria-label<br>5. 修复"文生图"特性图标损坏的 emoji |
 | 2026-07-11 | **3.10** | 修复 admAgent 升级失败：<br>1. `download_adm_agent_update` 在替换 `admAgent.exe` 前，先停掉仍在运行的 Agent 终端进程树，释放 Windows 文件锁<br>2. 对删除旧文件的 `remove_file` 增加重试（最多 15 次、间隔 200ms），容忍进程退出延迟<br>3. 修复场景：Agent 页已打开 → 回首页 → 再次进入并弹出升级提示时，因旧进程占用二进制导致 rename 失败报「升级失败」，现无需手动关闭 Agent 进程即可完成更新 |
 | 2026-06-21 | **3.8** | MTP 模型自动检测：<br>1. `LaunchParams` 新增 `spec_draft_n_max`、`spec_type` 字段<br>2. `start_model` 自动检测模型文件名是否包含 MTP，追加 `--spec-draft-n-max 3 --spec-type draft-mtp` 参数<br>3. 支持用户通过 `params.spec_type` 手动覆盖（设为 `"none"` 可禁用自动检测） |
