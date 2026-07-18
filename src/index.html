@@ -418,8 +418,24 @@
         af.style.display = "block";
         setActiveNav("agent-btn");
         try { af.focus(); } catch (_) {}
+
+        // 首次进入时懒加载 agent 页面：必须等 iframe 显示后再设置 src，否则 agent 内的
+        // xterm 在 display:none 中取不到真实尺寸，会导致 PTY 宽度错误，admAgent 的 TUI
+        // 右边栏布局错位、重复显示上下文。
+        if (!agentFrameLoaded) {
+          af.src = "agent.html";
+          agentFrameLoaded = true;
+          // 等页面加载完成后再通知它自适应尺寸，避免消息在文档就绪前丢失
+          af.onload = function () {
+            af.onload = null;
+            setTimeout(function () {
+              if (af && af.contentWindow) af.contentWindow.postMessage({ type: "agent-resize" }, "*");
+            }, 60);
+          };
+          return;
+        }
       }
-      // 显示后通知 agent 页面重新自适应尺寸
+      // 已加载过，直接通知 agent 页面重新 fit 尺寸
       setTimeout(function () {
         if (af && af.contentWindow) af.contentWindow.postMessage({ type: "agent-resize" }, "*");
       }, 60);
@@ -428,8 +444,9 @@
     // 首次进入时懒加载 agent 页面（之后常驻，不再重新加载）
     var agentFrameLoaded = false;
     function ensureAgentFrame() {
+      // 保留此函数供外部兼容，但 src 的实际设置已放在 showAgentFrame 中，确保可见后再加载。
       const af = document.getElementById("agent-frame");
-      if (af && !agentFrameLoaded) {
+      if (af && !agentFrameLoaded && af.style.display !== "none") {
         af.src = "agent.html";
         agentFrameLoaded = true;
       }
@@ -481,7 +498,6 @@
           // 下载完成，隐藏弹窗并进入 Agent 页面（常驻，不重复加载）
           setTimeout(function () {
             hideAgentDownloadDialog();
-            ensureAgentFrame();
             showAgentFrame();
           }, 700);
           return;
@@ -492,14 +508,12 @@
         if (upd.needs_update && upd.download_url) {
           // 弹出更新进度框，下载完成后进入 Agent 页面
           startAdmAgentUpdate(upd, function () {
-            ensureAgentFrame();
             showAgentFrame();
           });
           return;
         }
 
         // 已是最新，直接进入 Agent 页面
-        ensureAgentFrame();
         showAgentFrame();
       } catch (e) {
         hideAgentDownloadDialog();

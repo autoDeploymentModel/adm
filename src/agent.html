@@ -677,7 +677,8 @@
         }
 
         // 其余情形（进程已退出 / 模型重启过 / 从未启动）一律重新启动。
-        // start_agent_terminal 内部会先清理旧会话（若存在）再拉起新 admAgent，无需手动 stop。
+        // 但若前端已经请求启动但尚未完成（startRequested），避免 reset 导致并发启动两次。
+        if (startRequested) return;
         terminalStarted = false;
         startRequested = false;
         startTerminal();
@@ -728,7 +729,26 @@
           invoke("agent_terminal_resize", { rows: term.rows, cols: term.cols }).catch(function () {});
         }
       } catch (err) {
+        startRequested = false;
         showError("终端启动失败：" + err);
+      }
+    }
+
+    // 判断终端容器是否已有可见尺寸（用于在 iframe 初始隐藏时延迟启动）
+    function isTerminalWrapVisible() {
+      var wrap = document.getElementById("terminal-wrap");
+      if (!wrap) return false;
+      var rect = wrap.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    }
+
+    // 若终端尚未启动且容器已可见，则触发启动；否则保持等待，直到 ResizeObserver 或父窗口
+    // 的 agent-resize 消息在真正显示时通知我们。这是为了避免在 iframe 还是 display:none 时
+    // 就创建 PTY，导致 xterm 取不到真实尺寸，admAgent 按错误宽度布局 TUI 右边栏。
+    function maybeStartTerminal() {
+      if (terminalStarted || startRequested) return;
+      if (isTerminalWrapVisible()) {
+        startTerminal();
       }
     }
 
@@ -1054,6 +1074,31 @@
       term.loadAddon(fitAddon);
       term.open(document.getElementById("terminal"));
 
+      // ===== 修复 xterm.js 在 Windows WebView2 + 中文 IME 下的偶发重复输入 =====
+      // 现象：中文输入法偶发把合成结果发两次（"你好"→"你好你好"），且时有时无。
+      // 根因：xterm 在 IME 合成结束时存在两条可能同时触发的发送路径——
+      //   (A) compositionend → _finalizeComposition 用 setTimeout(0) 异步 triggerDataEvent；
+      //   (B) 紧跟 compositionend 的 input(insertText) 事件，_inputEvent 在纯 IME 选词
+      //       （_keyDownSeen=false）时绕过保护，同步 triggerDataEvent。
+      //   两条路径发出同一段合成文本 → onData 被触发两次。混入普通 keydown 时不复现 → 偶发。
+      // 方案：与 xterm 内部路径无关——在 onData 出口做「合成去重」。只在紧邻一次 IME 合成
+      //   活动（compositionstart/update/end）的极短时间窗内，若本次待发文本与刚发出的完全
+      //   相同，则判定为重复并丢弃。相比之前「捕获阶段拦 input 事件」，本方案不依赖捕获时序 /
+      //   target 判断（某些 IME 与调度下拦不住），也绝不会丢字（重复才丢，唯一发送必放行）。
+      //   门槛设计：① 60ms 内两次完全相同的发送才算重复——远短于人类再次合成并选词的时间，
+      //   不误伤两次真实相同短语；② 仅当刚发生过 IME 合成活动（350ms 内）才启用，普通英文
+      //   连打 / 长按重复字符不受影响。
+      var _imeLastActivity = 0;  // 最近一次 IME 合成活动时间戳（仅 xterm 辅助 textarea）
+      (function trackImeComposition() {
+        var isHelperTA = function (t) {
+          return !!(t && t.classList && t.classList.contains("xterm-helper-textarea"));
+        };
+        var mark = function (e) { if (isHelperTA(e.target)) _imeLastActivity = Date.now(); };
+        document.addEventListener("compositionstart", mark, true);
+        document.addEventListener("compositionupdate", mark, true);
+        document.addEventListener("compositionend", mark, true);
+      })();
+
       // ===== 粘贴预处理：将换行符替换为空格 =====
       // 多行文本粘贴时，换行符（\r\n / \n / \r）会被 PTY 当作 Enter 键，
       // 导致 admAgent 输入被提前提交。覆写 term.paste 拦截所有粘贴路径
@@ -1100,59 +1145,38 @@
         return true;
       });
 
-      // ===== 鼠标滚轮 → PTY 转发（兜底方案）=====
-      // xterm.js 只有在「鼠标追踪协议带 wheel 位（DECSET 1000/1002/1003）」时才会把滚轮
-      // 编码成鼠标报文转发给 PTY；若 admAgent 的 TUI 实际未走标准鼠标追踪（或该路未生效），
-      // 滚轮就到不了应用。因此这里在捕获阶段自行把滚轮转成 SGR 鼠标报文（crossterm/ratatui
-      // 等 Rust TUI 默认采用此编码）直接写入 PTY，保证 admAgent 一定收到滚动。
-      // 仅对 wheel 事件 stopPropagation，不影响点击 / 拖选等其它鼠标事件（那些走 xterm 自身逻辑）。
+      // ===== 鼠标滚轮 → PTY 转发 =====
+      // admAgent 是 Rust TUI（crossterm/ratatui）。实测其滚动逻辑不接收 SGR 鼠标报文，
+      // 但方向键（↑/↓）可以正常滚动；故把滚轮翻译成方向键序列写入 PTY：
+      //   滚轮上 → \x1b[A（上），滚轮下 → \x1b[B（下）。
+      // window 捕获阶段拦截 wheel 并 stopPropagation，阻止 xterm 自身处理；
+      // 仅对 wheel 生效，不影响点击 / 拖选等其它鼠标事件。
       var _wheelAccum = 0;
-      var termElWheel = document.getElementById("terminal");
-      if (termElWheel) {
-        termElWheel.addEventListener("wheel", function (e) {
-          if (!term) return;
-          e.preventDefault();
-          e.stopPropagation();
+      window.addEventListener("wheel", function (e) {
+        if (!term) return;
+        e.preventDefault();
+        e.stopPropagation();
 
-          // 把鼠标坐标换算成终端单元格坐标（1-based）。位置对滚轮通常只影响「在哪滚动」，
-          // TUIs 大多只关心方向，这里做近似换算即可。
-          var rect = termElWheel.getBoundingClientRect();
-          var col = 0, row = 0;
-          if (term.cols > 0 && rect.width > 0) {
-            col = Math.floor((e.clientX - rect.left) / (rect.width / term.cols));
-          }
-          if (term.rows > 0 && rect.height > 0) {
-            row = Math.floor((e.clientY - rect.top) / (rect.height / term.rows));
-          }
-          col = Math.max(0, Math.min(term.cols - 1, col));
-          row = Math.max(0, Math.min(term.rows - 1, row));
-
-          // 累加滚动量，跨过一行阈值才发一次，避免触控板产生的大量微事件刷屏 PTY。
-          // 统一把 deltaY 换算成「像素」，兼容 deltaMode 为行(1)/页(2) 的鼠标。
-          var dy = e.deltaY;
-          if (e.deltaMode === 1) dy *= 16;           // 行 -> 约 16px
-          else if (e.deltaMode === 2) dy *= rect.height || 480; // 页 -> 整屏高
-          _wheelAccum += dy;
-          var STEP = 24; // 约一行像素高度
-          while (Math.abs(_wheelAccum) >= STEP) {
-            var down = _wheelAccum > 0;
-            _wheelAccum -= down ? STEP : -STEP;
-            var action = down ? 1 : 0; // 1=下滚, 0=上滚
-            // SGR wheel: button = 64 + action + 修饰键位
-            var btn = 64 + action
-              + (e.ctrlKey ? 16 : 0)
-              + (e.shiftKey ? 4 : 0)
-              + (e.altKey ? 8 : 0);
-            var sgr = "\x1b[<" + btn + ";" + (col + 1) + ";" + (row + 1) + "M";
-            invoke("agent_terminal_input", { data: bytesToBase64(encoder.encode(sgr)) })
-              .catch(function () {});
-          }
-        }, { capture: true, passive: false });
-      }
+        // 统一把 deltaY 换算成像素，兼容行(1)/页(2) deltaMode；
+        // 跨过一行阈值（≈24px）才发一次，避免触控板产生的大量微事件刷屏 PTY。
+        var dy = e.deltaY;
+        if (e.deltaMode === 1) dy *= 16;
+        else if (e.deltaMode === 2) dy *= 480;
+        _wheelAccum += dy;
+        var STEP = 24;
+        while (Math.abs(_wheelAccum) >= STEP) {
+          var down = _wheelAccum > 0;
+          _wheelAccum -= down ? STEP : -STEP;
+          var keySeq = down ? "\x1b[B" : "\x1b[A"; // ↓ CursorDown : ↑ CursorUp
+          invoke("agent_terminal_input", { data: bytesToBase64(encoder.encode(keySeq)) })
+            .catch(function () {});
+        }
+      }, { capture: true, passive: false });
 
       // 用 ResizeObserver 兜底尺寸适配：容器（首次显示、窗口缩放、布局变化）任意尺寸变化都重新 fit。
-      // observe 后会立即回调一次当前尺寸 —— 首次进入时本页面已加载、容器已可见，可拿到正确宽度，
-      // 不依赖任何可能被错过的一次性事件。PTY 未建时 resize 为 no-op，建好后再由 startAgentNow 补一次。
+      // 关键：当终端尚未启动时，ResizeObserver 检测到容器从无尺寸变为有尺寸，说明 iframe 已经
+      // 真正显示，此时应立即启动终端。这样可保证 PTY 创建时 xterm 已拿到真实尺寸，避免 admAgent
+      // 在 iframe 还是 display:none 时按错误宽度布局 TUI 右边栏。
       var roWrap = document.getElementById("terminal-wrap");
       if (roWrap && typeof ResizeObserver !== "undefined") {
         var roTimer = null;
@@ -1163,6 +1187,8 @@
             if (term.rows > 0 && term.cols > 0) {
               invoke("agent_terminal_resize", { rows: term.rows, cols: term.cols }).catch(function () {});
             }
+            // 如果终端还没启动，且容器现在已有可见尺寸，说明 iframe 已显示，可以安全启动。
+            maybeStartTerminal();
           }, 120);
         });
         ro.observe(roWrap);
@@ -1177,7 +1203,22 @@
         termWrap.tabIndex = -1;
       }
 
+      // 记录上一次实际转发给后端的数据与时间，用于 IME 合成去重（见上方 trackImeComposition）
+      var _lastSentData = "";
+      var _lastSentAt = 0;
       term.onData(function (data) {
+        var now = Date.now();
+        // IME 合成去重：仅在刚发生 IME 合成活动（350ms 内）且 60ms 内出现完全相同的重复
+        // 发送时判定为重复并丢弃；刷新时间戳使连续多次重复也一并丢弃。
+        if (data &&
+            data === _lastSentData &&
+            now - _lastSentAt < 60 &&
+            now - _imeLastActivity < 350) {
+          _lastSentAt = now;
+          return;
+        }
+        _lastSentData = data;
+        _lastSentAt = now;
         invoke("agent_terminal_input", { data: bytesToBase64(encoder.encode(data)) })
           .catch(function (e) {
             // 输入失败时在终端内短暂提示，便于排查
@@ -1194,10 +1235,14 @@
           if (term.rows > 0 && term.cols > 0) {
             invoke("agent_terminal_resize", { rows: term.rows, cols: term.cols }).catch(function () {});
           }
+          // 若窗口缩放导致 iframe 首次具备可见尺寸，也尝试启动终端
+          maybeStartTerminal();
         } catch (_) {}
       });
 
-      startTerminal();
+      // 初始化时：若 iframe 已可见（如用户刷新后仍停留在 Agent 页），直接启动；
+      // 若仍在 display:none 中（最常见情况），交给 ResizeObserver / agent-resize 消息触发。
+      maybeStartTerminal();
     }
 
     window.addEventListener("DOMContentLoaded", initTerminal);

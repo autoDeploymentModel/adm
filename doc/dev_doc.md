@@ -1349,6 +1349,7 @@ python scripts/generate-icons.py
   - **触发时机 1（更早）**：点击 Agent 按钮时，`goAgent()` 在平台判断通过后即调用 `prepare_adm_agent_config`（早于模型运行检查与 admAgent 下载）。
   - **触发时机 2（兜底）**：`start_agent_terminal` 创建 PTY 之前也会再调用一次，保证最终一致。
 - 支持通过 `agent_terminal_resize` 调整终端大小、`stop_agent_terminal` 关闭会话；窗口关闭时 `lib.rs` 会调用 `kill_agent_session` 清理子进程。
+- **避免在 iframe 隐藏时创建 PTY（防止 TUI 右边栏错位 / 重复）**：`index.html` 在把 `agent-frame` 显示为 `block` 后再设置 `src`；`agent.html` 初始化时若容器尺寸为 0（仍不可见），则通过 `ResizeObserver` 与父窗口 `agent-resize` 消息延迟到真正显示后再启动终端。这样可保证 `xterm` 的 `fitAddon` 取到真实尺寸，`start_agent_terminal` 创建 PTY 时行列数正确，避免 admAgent 的 TUI 右边栏上下文按错误宽度布局，从而出现错位或重复显示。
 - **复制 / 粘贴（终端级体验）**：`agent.html` 通过 `term.attachCustomKeyEventHandler` 实现类似真实终端的 Ctrl+C / Ctrl+V：
   - **Ctrl+C**：有文本选区时复制选区到系统剪贴板（优先 `navigator.clipboard.writeText`，失败回退 `textarea + document.execCommand('copy')`）；无选区时放行，xterm 把 `\x03`(SIGINT) 发给 admAgent，等价于终端中断。
   - **Ctrl+V**：从系统剪贴板读取文本并经 `term.paste()` 写入 PTY。若 iframe 内 `navigator.clipboard.readText` 受限，则通过 `agent-read-clipboard` 事件委托父窗口 `index.html` 代理读取（回传 `agent-clipboard-result`）。读取失败时终端内提示「无法访问剪贴板」。
