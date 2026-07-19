@@ -16,10 +16,13 @@ pub fn create_hidden_command(program: impl AsRef<std::ffi::OsStr>) -> std::proce
 /// 让子进程独立于父进程启动（Unix 上创建新会话/进程组），
 /// 这样关闭时才能用 `kill -9 -<pgid>` 一次性杀掉整棵进程树，避免孤儿残留。
 #[cfg(not(target_os = "windows"))]
-pub fn spawn_detached(mut cmd: std::process::Command) -> std::io::Result<std::process::Child> {
+pub fn spawn_detached(cmd: &mut std::process::Command) -> std::io::Result<std::process::Child> {
     use std::os::unix::process::CommandExt;
     // process_group(0) 表示新建进程组，pgid 等于新进程自身的 pid
     cmd.process_group(0);
+    // Command 的 builder 方法（args/stdout/stderr/env 等）均返回 &mut Self，
+    // 因此调用方传入的链式表达式类型为 &mut Command，这里按可变引用接收，
+    // spawn(&mut self) 同样基于可变引用执行。
     cmd.spawn()
 }
 
