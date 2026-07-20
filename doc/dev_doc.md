@@ -1347,11 +1347,14 @@ python scripts/generate-icons.py
   - **Windows**：**直接启动 `admAgent.exe`**（不再经过 `powershell.exe`）。原因：release 版 `adm.exe` 带 `#![windows_subsystem = "windows"]`（无控制台），`portable-pty` 的 ConPTY 在「无控制台父进程」中拉起 `powershell.exe` 会触发 `0xc0000142` 初始化失败；直接以 admAgent 作为 PTY 子进程规避该问题。`--cwd` 作为参数传入。
   - **macOS**：启动系统默认 shell（`$SHELL`，通常为 `/bin/zsh`，以 `-i` 交互模式运行），再写入启动命令运行 admAgent。
 - PTY 输出经后台线程读取后以 base64 通过 `agent-terminal-data` 事件推送到前端；前端按键经 `agent_terminal_input` 写回 PTY。
+- **会话代次 + 读取线程生命周期（防重复输出）**：每次 `start_agent_terminal` 会 bump 一个单调递增的「Agent 终端代次」(`AppState.agent_generation`)，并把该值随每帧 `agent-terminal-data` 的 payload (`{ data, gen }`) 与 `agent-terminal-ready` 的 payload (`{ gen }`) 一同下发给前端。前端 `agent.html` 在收到 `ready` 时记录 `currentAgentGen`，此后仅接受 `gen === currentAgentGen` 的数据帧，旧代次残留输出一律丢弃——从结构上杜绝「同一输出显示两遍」。
+- **读取线程回收**：`AgentSession` 保存 `reader_stop: Arc<AtomicBool>` 与 `reader_handle: JoinHandle`。(重)启动 / 停止时经 `stop_agent_session_clean` 先置位 stop、再 kill 子进程树（让阻塞 `read` 收到 EOF 唤醒）、最后 `is_finished()` 轮询 join（500ms 超时），确保旧线程在 spawn 新会话前完全退出，不会与新线程并发向同一事件推送数据。
 - 终端就绪后自动向 shell 发送启动命令运行 `admAgent` 工具（同时启动终端与 `admAgent`）。
 - **启动前自动生成 `admAgent.json`**：`ensure_adm_agent_config` 读取 ADM 配置文件（`config.json`）中 `launch_params.ctx_size` 作为上下文大小，于用户目录 `<home>/.config/admAgent/admAgent.json` 生成（或更新）配置。`context_window` 取该值，`default_max_tokens` 取其 30%（四舍五入）；若文件已存在则仅就地更新这两个字段，尽量保留其它内容。`ctx_size` 缺失或非法时回退默认 `context_window = 128000`。
   - **触发时机 1（更早）**：点击 Agent 按钮时，`goAgent()` 在平台判断通过后即调用 `prepare_adm_agent_config`（早于模型运行检查与 admAgent 下载）。
   - **触发时机 2（兜底）**：`start_agent_terminal` 创建 PTY 之前也会再调用一次，保证最终一致。
 - 支持通过 `agent_terminal_resize` 调整终端大小、`stop_agent_terminal` 关闭会话；窗口关闭时 `lib.rs` 会调用 `kill_agent_session` 清理子进程。
+- **resize 统一节流（减少 TUI 整屏重绘）**：`agent.html` 的 `scheduleFitResize(delay)` 作为唯一 fit + resize 入口（带 trailing 节流），`ResizeObserver`、`window resize`、`agent-resize` 消息、`agent-terminal-ready`、`startAgentNow` 末尾全部走该入口，避免多源重复触发 `fitAddon.fit()` + `agent_terminal_resize` 导致 ratatui 反复整屏重绘放大重复观感。首帧 / ready 时用 `delay=0` 立即执行。
 - **避免在 iframe 隐藏时创建 PTY（防止 TUI 右边栏错位 / 重复）**：`index.html` 在把 `agent-frame` 显示为 `block` 后再设置 `src`；`agent.html` 初始化时若容器尺寸为 0（仍不可见），则通过 `ResizeObserver` 与父窗口 `agent-resize` 消息延迟到真正显示后再启动终端。这样可保证 `xterm` 的 `fitAddon` 取到真实尺寸，`start_agent_terminal` 创建 PTY 时行列数正确，避免 admAgent 的 TUI 右边栏上下文按错误宽度布局，从而出现错位或重复显示。
 - **复制 / 粘贴（终端级体验）**：`agent.html` 通过 `term.attachCustomKeyEventHandler` 实现类似真实终端的 Ctrl+C / Ctrl+V：
   - **Ctrl+C**：有文本选区时复制选区到系统剪贴板（优先 `navigator.clipboard.writeText`，失败回退 `textarea + document.execCommand('copy')`）；无选区时放行，xterm 把 `\x03`(SIGINT) 发给 admAgent，等价于终端中断。
@@ -1402,8 +1405,8 @@ python scripts/generate-icons.py
 
 ***
 
-*文档版本: 3.11*\
-*最后更新: 2026-07-18*\
+*文档版本: 3.12*\
+*最后更新: 2026-07-20*\
 *维护者: ADM 开发团队*
 
 ***
@@ -1412,6 +1415,7 @@ python scripts/generate-icons.py
 
 | 日期 | 版本 | 变更内容 |
 |------|------|----------|
+| 2026-07-20 | **3.12** | 修复 Agent 终端内容较多时出现重复输出的问题（三层加固）：<br>1. **会话代次标记**：`AppState` 新增 `agent_generation`，`start_agent_terminal` 每次 +1；`agent-terminal-data` / `agent-terminal-ready` 的 payload 携带 `gen` 字段。前端 `agent.html` 在 `ready` 时记录 `currentAgentGen`，此后仅接受当前代次的数据帧，旧会话残留输出一律丢弃——结构上杜绝「同一输出显示两遍」<br>2. **读取线程生命周期**：`AgentSession` 新增 `reader_stop: Arc<AtomicBool>` 与 `reader_handle: JoinHandle`；新增 `stop_agent_session_clean`：置位 stop → kill 子进程树（让阻塞 read 收 EOF 唤醒）→ `is_finished()` 轮询 join（500ms 超时）。`start_agent_terminal` / `stop_agent_terminal` / `kill_agent_session` 均改用该函数，确保旧线程在 spawn 新会话前完全退出，不再与新线程并发 emit<br>3. **resize 统一节流**：`agent.html` 新增 `scheduleFitResize(delay)` 作为唯一 fit + resize 入口（trailing 节流），`ResizeObserver` / `window resize` / `agent-resize` / `ready` / `startAgentNow` 末尾全部走该入口，减少 ratatui 整屏重绘次数<br>4. **`handleEnterAgent` 健壮化**：`get_agent_status` 返回 `Err` 时不再兜底重启（避免进程 spawn 瞬时空窗误判为「未运行」而二次拉起 → 两个 admAgent 并发写 PTY） |
 | 2026-07-18 | **3.11** | 修复主程序关闭后 llama-server / sd-cli 进程残留问题：<br>1. 新增 `platform::kill_process_tree`（taskkill /PID /T /F 或 kill -9 -<pgid>）和 `platform::kill_process_by_name` 兜底清理<br>2. 窗口关闭事件改为先按 PID 杀整棵进程树，再按进程名兜底强杀残留，避免 PID 记录丢失/复用导致孤儿进程<br>3. Unix 下 llama-server / sd-cli 以独立进程组（process_group(0) + setsid）启动，`kill -9 -<pgid>` 可一次杀掉整棵树<br>4. `stop_model` / `stop_sd` 改用 `kill_process_tree`，与窗口关闭逻辑一致 |
 | 2026-06-21 | **3.9** | 官网 SEO 优化：<br>1. 添加 Open Graph / Twitter Card 元标签<br>2. 添加 canonical URL 和 JSON-LD 结构化数据<br>3. 创建 robots.txt 和 sitemap.xml<br>4. 图片添加 loading="lazy"，emoji 图标添加 role="img" + aria-label<br>5. 修复"文生图"特性图标损坏的 emoji |
 | 2026-07-11 | **3.10** | 修复 admAgent 升级失败：<br>1. `download_adm_agent_update` 在替换 `admAgent.exe` 前，先停掉仍在运行的 Agent 终端进程树，释放 Windows 文件锁<br>2. 对删除旧文件的 `remove_file` 增加重试（最多 15 次、间隔 200ms），容忍进程退出延迟<br>3. 修复场景：Agent 页已打开 → 回首页 → 再次进入并弹出升级提示时，因旧进程占用二进制导致 rename 失败报「升级失败」，现无需手动关闭 Agent 进程即可完成更新 |

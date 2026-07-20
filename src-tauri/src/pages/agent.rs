@@ -14,6 +14,8 @@ use portable_pty::{native_pty_system, Child, CommandBuilder, PtySize};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tauri::Emitter;
 
@@ -731,16 +733,18 @@ pub async fn download_adm_agent_update(
     // 替换前先停掉正在运行的 Agent 终端，释放被 Windows 锁定的 admAgent.exe。
     // 典型场景：用户离开 Agent 页但进程未退出，再次进入触发更新时 admAgent.exe 仍在运行，
     // 不先结束进程会导致下方 rename 失败（表现即「升级失败」）。这里自动结束进程，
-    // 无需用户手动去关 Agent 终端。进程被杀后，PTY 读取线程会自然收到 EOF 并推送
-    // agent-terminal-exit 事件，前端会显示「进程已退出」，并在更新完成后自动重启。
-    {
+    // 无需用户手动去关 Agent 终端。使用 stop_agent_session_clean 统一回收读取线程。
+    // 注：stop 标志置位后读者线程不会 emit agent-terminal-exit——但更新弹窗此时已覆盖
+    // 整个界面，用户看不到终端，无需 exit 提示；更新完成后前端自动导航回 #/agent 并重启。
+    let old_session = {
         let mut s = state
             .agent_session
             .lock()
             .map_err(|e| e.to_string())?;
-        if let Some(mut sess) = s.take() {
-            kill_agent_child_tree(&mut sess.child);
-        }
+        s.take()
+    };
+    if let Some(mut sess) = old_session {
+        stop_agent_session_clean(&mut sess);
     }
 
     // 替换旧文件：先尝试删除旧文件（进程刚结束可能仍有极短占用，故带重试），再重命名。
@@ -905,16 +909,25 @@ pub async fn start_agent_terminal(
     rows: u16,
     cols: u16,
 ) -> Result<(), AppError> {
-    // 若已有会话，先关闭旧会话
-    {
+    // 若已有会话：先彻底回收旧读取线程（置位 stop + kill 子进程 + join），
+    // 确保旧线程不会与新线程并发向同一 `agent-terminal-data` 事件推送数据。
+    // 重要：仅在锁内做 take（O(1)），把 join 和 kill 移到锁外执行；
+    // stop_agent_session_clean 可能阻塞最多 500ms，不能一直持锁。
+    let old_session = {
         let mut s = state
             .agent_session
             .lock()
             .map_err(|e| e.to_string())?;
-        if let Some(mut old) = s.take() {
-            let _ = old.child.kill();
-        }
+        s.take()
+    };
+    if let Some(mut old) = old_session {
+        stop_agent_session_clean(&mut old);
     }
+
+    // 本会话的 Agent 终端代次（+1）。读取线程把该值随每帧数据 emit 给前端，
+    // 前端按代次过滤旧会话残留输出，结构上杜绝「同一输出显示两遍」。
+    let generation = state.bump_agent_generation();
+    let reader_stop = Arc::new(AtomicBool::new(false));
 
     // 用前端真实尺寸创建 PTY；缺失时回退到合理默认（避免 admAgent 以固定 120 列布局 TUI 错位）
     let rows = if rows > 0 { rows } else { 30 };
@@ -985,28 +998,45 @@ pub async fn start_agent_terminal(
         .take_writer()
         .map_err(|e| format!("获取终端写入失败: {}", e))?;
 
-    // 启动后台读取线程，将 PTY 输出流式推送到前端
+    // 启动后台读取线程，将 PTY 输出流式推送到前端。
+    // 每帧 payload 携带本会话的代次 `gen`，前端按代次过滤旧会话残留输出。
+    // 线程在 stop 标志置位 / EOF / 错误时退出；(重)启动时由 stop_agent_session_clean
+    // 先置位 stop + kill 子进程（产生 EOF）再 join，避免新旧线程并发 emit。
     let app2 = app.clone();
-    std::thread::spawn(move || {
+    let stop_for_thread = reader_stop.clone();
+    let reader_handle = std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
         loop {
+            // 每次 read 前后都检查 stop：read 返回后检查可避免 emit 旧进程残留数据
+            if stop_for_thread.load(Ordering::Relaxed) {
+                break;
+            }
             match reader.read(&mut buf) {
                 Ok(0) => break, // EOF
                 Ok(n) => {
+                    // read 返回后再检查一次 stop：若已被要求停止则丢弃这帧（不 emit）
+                    if stop_for_thread.load(Ordering::Relaxed) {
+                        break;
+                    }
                     let encoded =
                         base64::engine::general_purpose::STANDARD.encode(&buf[..n]);
                     let _ = app2.emit(
                         "agent-terminal-data",
-                        serde_json::json!({ "data": encoded }),
+                        serde_json::json!({ "data": encoded, "gen": generation }),
                     );
                 }
                 Err(_) => break,
             }
         }
-        let _ = app2.emit("agent-terminal-exit", serde_json::json!({}));
+        // 仅在本线程是「自然退出」（非被 stop）时才发 exit 事件；
+        // 被 stop_agent_session_clean 置位 stop 后退出的情形属于重启/停止流程，
+        // 前端会通过新会话的 ready 事件接管，不需要 exit 提示。
+        if !stop_for_thread.load(Ordering::Relaxed) {
+            let _ = app2.emit("agent-terminal-exit", serde_json::json!({}));
+        }
     });
 
-    // 保存会话
+    // 保存会话（含本会话代次与读取线程句柄，供后续 (重)启动 / 停止时回收）
     {
         let mut s = state
             .agent_session
@@ -1016,6 +1046,9 @@ pub async fn start_agent_terminal(
             master: pair.master,
             writer,
             child,
+            generation,
+            reader_stop,
+            reader_handle: Some(reader_handle),
         });
     }
 
@@ -1039,7 +1072,9 @@ pub async fn start_agent_terminal(
         }
     }
 
-    app.emit("agent-terminal-ready", serde_json::json!({})).ok();
+    // ready 事件携带本会话代次：前端据此设置 currentAgentGen，后续 data 事件按该值过滤。
+    app.emit("agent-terminal-ready", serde_json::json!({ "gen": generation }))
+        .ok();
     Ok(())
 }
 
@@ -1110,24 +1145,58 @@ fn kill_agent_child_tree(child: &mut Box<dyn Child + Send>) {
     let _ = child.kill();
 }
 
+/// 停止并回收一个 Agent 会话的读取线程，再杀掉子进程树。
+/// 顺序很重要：
+///   1) 先置位 stop 标志——读取线程在 read 返回后会检查该标志，若已停止则不 emit 直接退出；
+///   2) 再 kill 子进程树——让 PTY master 的阻塞 read 收到 EOF 从而唤醒线程；
+///   3) 最后 join（带超时轮询）确保线程真的退出。
+/// 这样可以避免「旧读取线程仍在 emit 旧进程残留输出」与「新会话的输出」同时进入
+/// 同一个 `agent-terminal-data` 事件导致前端重复显示。
+/// 超时（500ms）后不再阻塞调用方——线程最终会在 EOF/Err 后自行退出。
+fn stop_agent_session_clean(sess: &mut AgentSession) {
+    // 1) 通知读取线程停止（此后线程即使读到数据也不再 emit）
+    sess.reader_stop.store(true, Ordering::Relaxed);
+    // 2) 杀掉子进程树：让阻塞中的 read 收到 EOF 唤醒，线程得以检查 stop 并退出
+    kill_agent_child_tree(&mut sess.child);
+    // 3) 等待读取线程退出（带超时轮询，避免极端情况下永久阻塞调用方）
+    if let Some(handle) = sess.reader_handle.take() {
+        let deadline = std::time::Instant::now() + Duration::from_millis(500);
+        while std::time::Instant::now() < deadline {
+            if handle.is_finished() {
+                let _ = handle.join();
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // 超时仍未退出：放弃 join，线程最终会自行退出（读到了 EOF 或 Err）
+        // 句柄 drop 后 detached，不会泄漏进程，仅理论上的极小资源窗口。
+    }
+}
+
 /// 关闭终端会话
 #[tauri::command]
 pub async fn stop_agent_terminal(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
-    let mut s = state
-        .agent_session
-        .lock()
-        .map_err(|e| e.to_string())?;
-    if let Some(mut sess) = s.take() {
-        kill_agent_child_tree(&mut sess.child);
+    let old = {
+        let mut s = state
+            .agent_session
+            .lock()
+            .map_err(|e| e.to_string())?;
+        s.take()
+    };
+    if let Some(mut sess) = old {
+        stop_agent_session_clean(&mut sess);
     }
     Ok(())
 }
 
 /// 窗口关闭时清理 Agent 会话（供 lib.rs 调用）
 pub fn kill_agent_session(state: &AppState) {
-    if let Ok(mut s) = state.agent_session.lock() {
-        if let Some(mut sess) = s.take() {
-            kill_agent_child_tree(&mut sess.child);
-        }
+    let old = if let Ok(mut s) = state.agent_session.lock() {
+        s.take()
+    } else {
+        None
+    };
+    if let Some(mut sess) = old {
+        stop_agent_session_clean(&mut sess);
     }
 }

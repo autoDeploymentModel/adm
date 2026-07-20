@@ -561,9 +561,40 @@
     // 上次启动 admAgent 时记录到的模型代次；只有模型被重启（代次变化）或进程退出时，
     // 再次进入 Agent 页才会重启 admAgent。上下文配置变化但模型未重启 → 不重启。
     var currentModelGen = null;
+    // 当前 Agent 终端会话代次（由后端 agent-terminal-ready 事件下发）。
+    // 后端每次 start_agent_terminal +1，并把该值随每帧 agent-terminal-data 一同推送。
+    // 前端按该值过滤旧会话残留输出，结构上杜绝「同一输出显示两遍」：
+    //   ready 到达前（currentAgentGen === null）放行（后端已保证旧线程在 spawn 前停掉）；
+    //   ready 到达后严格按代次过滤，任何旧代次数据一律丢弃。
+    var currentAgentGen = null;
+    // 统一的 fit + resize 节流句柄：所有触发 fit 的入口都走 scheduleFitResize，
+    // 避免多源（ResizeObserver / window resize / agent-resize / ready / startAgentNow）
+    // 重复触发 fit + agent_terminal_resize，导致 ratatui 整屏重绘次数过多放大重复观感。
+    var _fitResizeTimer = null;
 
     function goHome() {
       window.parent.postMessage({ type: "navigate", page: "model_list.html" }, "*");
+    }
+
+    // ===== 统一的 fit + resize 入口（带 trailing 节流）=====
+    // 所有需要重新自适应尺寸的地方都调用本函数，避免多源重复触发：
+    //   ResizeObserver（容器尺寸变化）、window resize、agent-resize 消息、
+    //   agent-terminal-ready、startAgentNow 末尾。
+    // delay=0 表示立即执行（首帧 / ready 时希望尽快纠正尺寸）；默认 120ms trailing 节流。
+    // 每次 fit 后若拿到有效 rows/cols 才调用 agent_terminal_resize，避免无意义请求。
+    function scheduleFitResize(delay) {
+      if (_fitResizeTimer) clearTimeout(_fitResizeTimer);
+      var d = (delay === undefined || delay === null) ? 120 : delay;
+      var run = function () {
+        _fitResizeTimer = null;
+        if (!term || !fitAddon) return;
+        try { fitAddon.fit(); } catch (_) {}
+        if (term.rows > 0 && term.cols > 0) {
+          invoke("agent_terminal_resize", { rows: term.rows, cols: term.cols }).catch(function () {});
+        }
+      };
+      if (d <= 0) { run(); return; }
+      _fitResizeTimer = setTimeout(run, d);
     }
 
     // ===== 通过 postMessage 接收主窗口转发的 Tauri 事件（与 model_list.html 相同模式）=====
@@ -575,6 +606,13 @@
         switch (data.type) {
           case "agent-terminal-data":
             if (data.payload && data.payload.data && term) {
+              // 代次过滤：ready 到达后严格只接受当前代次的数据；
+              // ready 尚未到达时（currentAgentGen === null）放行——后端已保证旧线程
+              // 在 spawn 新会话前被停掉，此期间只有新会话数据。
+              var gen = data.payload.gen;
+              if (gen != null && currentAgentGen != null && gen !== currentAgentGen) {
+                return; // 旧会话残留输出，丢弃
+              }
               term.write(base64ToBytes(data.payload.data));
             }
             break;
@@ -585,12 +623,13 @@
             break;
           case "agent-terminal-ready":
             hideLoading();
+            // 记录本会话代次：此后 data 事件按该值过滤旧会话残留输出
+            if (data.payload && data.payload.gen != null) {
+              currentAgentGen = data.payload.gen;
+            }
             if (term) {
-              // PTY 已就绪：重新 fit 并把实际列/行同步给后端（后端初始固定 120×30，需在此纠正为真实宽度）
-              try { fitAddon.fit(); } catch (_) {}
-              if (term.rows > 0 && term.cols > 0) {
-                invoke("agent_terminal_resize", { rows: term.rows, cols: term.cols }).catch(function () {});
-              }
+              // PTY 已就绪：立即 fit（delay=0）并把实际列/行同步给后端
+              scheduleFitResize(0);
               term.focus();
             }
             window.parent.postMessage({ type: "agent-focus-me" }, "*");
@@ -606,15 +645,15 @@
             break;
           }
           case "agent-resize":
-            // 父窗口切换显示 Agent 页面后，重新自适应尺寸并聚焦
+            // 父窗口切换显示 Agent 页面后的入口信号：
+            //   1) 立即做尺寸适配与聚焦（delay=0，尽快纠正 PTY 宽度）；
+            //   2) 调 handleEnterAgent 判断是否需要 (重)启动 admAgent（模型代次变化 / 进程已退出）。
+            // 重复输出已由三层防护消除（后端回收旧读取线程 + 代次过滤 + catch 不再兜底重启），
+            // 故此处保留重启判断是安全的，且为「返回 Agent 页时模型已重启」的必要入口。
             if (term) {
-              try { fitAddon.fit(); } catch (_) {}
-              if (term.rows > 0 && term.cols > 0) {
-                invoke("agent_terminal_resize", { rows: term.rows, cols: term.cols }).catch(function () {});
-              }
+              scheduleFitResize(0);
               term.focus();
             }
-            // 每次显示页面时：检测模型上下文是否变化，变化则先停旧终端再重启 admAgent；否则仅在尚未运行时启动
             handleEnterAgent();
             break;
         }
@@ -661,6 +700,9 @@
     //   - 进程已退出（running=false，含崩溃）：需要重启
     //   - 模型代次变化（模型被重启过）：需要重启
     //   - 二者都没变（哪怕只是切换页面，或仅改了上下文配置但没重启模型）：保持原状，不重启
+    // 注：本函数只在「真正进入 Agent 页」（iframe onload 后的首次 agent-resize 前后）
+    //   与窗口缩放导致 iframe 首具可见尺寸时调用，不再由每次 agent-resize 触发，
+    //   以避免 resize 与 restart 耦合导致无谓重启。
     async function handleEnterAgent() {
       try {
         var st = await invoke("get_agent_status");
@@ -683,12 +725,9 @@
         startRequested = false;
         startTerminal();
       } catch (e) {
-        // 查询失败则兜底：若当前未运行则尝试启动
-        if (!terminalStarted && !startRequested) {
-          terminalStarted = false;
-          startRequested = false;
-          startTerminal();
-        }
+        // 查询失败（如 mutex 中毒 / IPC 瞬时不可用）：不再兜底重启。
+        // 之前的兜底会在「进程正在 spawn 的瞬时空窗」误判为未运行而二次拉起，
+        // 导致两个 admAgent 并发写 PTY → 整屏重复。改为保守 return，等用户显式操作或下次进入。
       }
     }
 
@@ -701,6 +740,9 @@
       }
       // 每次 (重)启动前清空终端旧内容（含上次的「进程已退出」提示）
       if (term) { try { term.reset(); } catch (_) {} }
+      // 重置会话代次：直到新的 agent-terminal-ready 到达前，currentAgentGen 为 null
+      //（data 事件在此期间放行，后端已保证旧线程在 spawn 前停掉，只有新会话数据）。
+      currentAgentGen = null;
       try {
         // 关键：先按当前容器真实尺寸 fit，拿到真实 rows/cols，在「创建 PTY」时就传给后端。
         // 这样 admAgent 启动时读到的 PTY 宽度就是真实显示宽度，其 TUI（右边栏上下文实时统计）
@@ -724,10 +766,8 @@
           .then(function (st) { if (st) currentModelGen = st.model_generation; })
           .catch(function () {});
         // 兜底：再 fit + resize 一次（布局可能又变化），确保 PTY 与显示一致
-        try { fitAddon.fit(); } catch (_) {}
-        if (term.rows > 0 && term.cols > 0) {
-          invoke("agent_terminal_resize", { rows: term.rows, cols: term.cols }).catch(function () {});
-        }
+        // 走统一节流入口，避免与 ready / ResizeObserver 的 fit 叠加重复
+        scheduleFitResize(0);
       } catch (err) {
         startRequested = false;
         showError("终端启动失败：" + err);
@@ -1081,22 +1121,37 @@
       //   (B) 紧跟 compositionend 的 input(insertText) 事件，_inputEvent 在纯 IME 选词
       //       （_keyDownSeen=false）时绕过保护，同步 triggerDataEvent。
       //   两条路径发出同一段合成文本 → onData 被触发两次。混入普通 keydown 时不复现 → 偶发。
-      // 方案：与 xterm 内部路径无关——在 onData 出口做「合成去重」。只在紧邻一次 IME 合成
-      //   活动（compositionstart/update/end）的极短时间窗内，若本次待发文本与刚发出的完全
-      //   相同，则判定为重复并丢弃。相比之前「捕获阶段拦 input 事件」，本方案不依赖捕获时序 /
-      //   target 判断（某些 IME 与调度下拦不住），也绝不会丢字（重复才丢，唯一发送必放行）。
-      //   门槛设计：① 60ms 内两次完全相同的发送才算重复——远短于人类再次合成并选词的时间，
-      //   不误伤两次真实相同短语；② 仅当刚发生过 IME 合成活动（350ms 内）才启用，普通英文
-      //   连打 / 长按重复字符不受影响。
-      var _imeLastActivity = 0;  // 最近一次 IME 合成活动时间戳（仅 xterm 辅助 textarea）
+      // 方案 v2：双重防线 ——
+      //   防线 1（compositionend 文本去重）：在捕获阶段监听 xterm 辅助 textarea 的
+      //     compositionend 事件，记录合成的确切文本和时间。onData 中首次见到该文本放行，
+      //     后续 250ms 内再次见到相同文本判定为 xterm 双路径重复并丢弃。
+      //     → 250ms 足以覆盖 Tauri WebView2 下 setTimeout(0) 的调度延迟。
+      //   防线 2（通用相邻去重，兜底）：若连续两次 onData 收到完全相同的文本且间隔 <150ms
+      //     且刚发生过 IME 合成活动（600ms 内），也视为重复丢弃。覆盖防线 1 未命中的边界情况，
+      //     同时不误伤真实相同短语（人类再选词一次远超 150ms）。
+      // 两防线均仅丢弃重复副本，唯一发送永远放行，绝不丢字。
+      var _imeLastActivity = 0;        // 最近一次 IME 合成活动时间戳
+      var _lastComposedText = "";      // 最近一次 compositionend 的合成文本
+      var _lastComposedAt = 0;         // compositionend 时刻
+      var _composedSent = false;       // 当前合成文本是否已经合法发送过一次
+      var _lastSentData = "";          // 上一条实际发出的数据
+      var _lastSentAt = 0;             // 发出时刻
       (function trackImeComposition() {
         var isHelperTA = function (t) {
           return !!(t && t.classList && t.classList.contains("xterm-helper-textarea"));
         };
         var mark = function (e) { if (isHelperTA(e.target)) _imeLastActivity = Date.now(); };
+        var onEnd = function (e) {
+          if (!isHelperTA(e.target)) return;
+          _imeLastActivity = Date.now();
+          // compositionend 标志新一轮去重：记录本次合成文本，重置已发送标记
+          _lastComposedText = e.data || "";
+          _lastComposedAt = Date.now();
+          _composedSent = false;
+        };
         document.addEventListener("compositionstart", mark, true);
         document.addEventListener("compositionupdate", mark, true);
-        document.addEventListener("compositionend", mark, true);
+        document.addEventListener("compositionend", onEnd, true);
       })();
 
       // ===== 粘贴预处理：将换行符替换为空格 =====
@@ -1177,19 +1232,14 @@
       // 关键：当终端尚未启动时，ResizeObserver 检测到容器从无尺寸变为有尺寸，说明 iframe 已经
       // 真正显示，此时应立即启动终端。这样可保证 PTY 创建时 xterm 已拿到真实尺寸，避免 admAgent
       // 在 iframe 还是 display:none 时按错误宽度布局 TUI 右边栏。
+      // 所有 fit + resize 走统一节流入口 scheduleFitResize，避免多源重复触发 TUI 整屏重绘。
       var roWrap = document.getElementById("terminal-wrap");
       if (roWrap && typeof ResizeObserver !== "undefined") {
-        var roTimer = null;
         var ro = new ResizeObserver(function () {
-          if (roTimer) clearTimeout(roTimer);
-          roTimer = setTimeout(function () {
-            try { fitAddon.fit(); } catch (_) {}
-            if (term.rows > 0 && term.cols > 0) {
-              invoke("agent_terminal_resize", { rows: term.rows, cols: term.cols }).catch(function () {});
-            }
-            // 如果终端还没启动，且容器现在已有可见尺寸，说明 iframe 已显示，可以安全启动。
-            maybeStartTerminal();
-          }, 120);
+          scheduleFitResize(120);
+          // 如果终端还没启动，且容器现在已有可见尺寸，说明 iframe 已显示，可以安全启动。
+          // 注意：仅触发启动判断，不在 resize 路径里直接调 handleEnterAgent（已从 agent-resize 解耦）。
+          maybeStartTerminal();
         });
         ro.observe(roWrap);
       }
@@ -1204,16 +1254,34 @@
       }
 
       // 记录上一次实际转发给后端的数据与时间，用于 IME 合成去重（见上方 trackImeComposition）
-      var _lastSentData = "";
-      var _lastSentAt = 0;
       term.onData(function (data) {
         var now = Date.now();
-        // IME 合成去重：仅在刚发生 IME 合成活动（350ms 内）且 60ms 内出现完全相同的重复
-        // 发送时判定为重复并丢弃；刷新时间戳使连续多次重复也一并丢弃。
+        // 防线 1：compositionend 文本去重（最直接，命中率最高）。
+        // 每次 compositionend 后，xterm 会通过两条路径（setTimeout(0) + input 事件）
+        // 各触发一次 triggerDataEvent 发出同一段合成文本。这里在 onData 出口拦截：
+        //   - 第一次见到该合成文本 → 放行（标记 _composedSent = true）
+        //   - 后续 250ms 内再次见到相同文本 → 丢弃（xterm 双路径重复）
+        // 250ms 足以覆盖 Tauri WebView2 下 setTimeout(0) 的最大调度延迟。
+        if (data &&
+            _lastComposedText &&
+            data === _lastComposedText &&
+            now - _lastComposedAt < 250) {
+          if (_composedSent) {
+            // 已发过一次 → 这是 xterm 另一路径的重复 → 丢弃
+            _lastSentAt = now;
+            return;
+          }
+          // 首次见到 → 合法发送
+          _composedSent = true;
+        }
+        // 防线 2：通用相邻去重（兜底）。
+        // 连续两次 onData 收到完全相同文本、间隔 <150ms、且 600ms 内发生过 IME 合成
+        // 活动时也判定为重复。覆盖防线 1 未命中的边界情况，
+        // 同时不误伤真实相同短语（人类再选词远超 150ms）。
         if (data &&
             data === _lastSentData &&
-            now - _lastSentAt < 60 &&
-            now - _imeLastActivity < 350) {
+            now - _lastSentAt < 150 &&
+            now - _imeLastActivity < 600) {
           _lastSentAt = now;
           return;
         }
@@ -1230,14 +1298,10 @@
       setupMessageListener();
 
       window.addEventListener("resize", function () {
-        try {
-          fitAddon.fit();
-          if (term.rows > 0 && term.cols > 0) {
-            invoke("agent_terminal_resize", { rows: term.rows, cols: term.cols }).catch(function () {});
-          }
-          // 若窗口缩放导致 iframe 首次具备可见尺寸，也尝试启动终端
-          maybeStartTerminal();
-        } catch (_) {}
+        // 走统一节流入口，与 ResizeObserver / agent-resize / ready 共用同一去重定时器
+        scheduleFitResize(120);
+        // 若窗口缩放导致 iframe 首次具备可见尺寸，也尝试启动终端
+        maybeStartTerminal();
       });
 
       // 初始化时：若 iframe 已可见（如用户刷新后仍停留在 Agent 页），直接启动；
