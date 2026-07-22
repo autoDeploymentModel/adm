@@ -1350,7 +1350,7 @@ python scripts/generate-icons.py
 - **会话代次 + 读取线程生命周期（防重复输出）**：每次 `start_agent_terminal` 会 bump 一个单调递增的「Agent 终端代次」(`AppState.agent_generation`)，并把该值随每帧 `agent-terminal-data` 的 payload (`{ data, gen }`) 与 `agent-terminal-ready` 的 payload (`{ gen }`) 一同下发给前端。前端 `agent.html` 在收到 `ready` 时记录 `currentAgentGen`，此后仅接受 `gen === currentAgentGen` 的数据帧，旧代次残留输出一律丢弃——从结构上杜绝「同一输出显示两遍」。
 - **读取线程回收**：`AgentSession` 保存 `reader_stop: Arc<AtomicBool>` 与 `reader_handle: JoinHandle`。(重)启动 / 停止时经 `stop_agent_session_clean` 先置位 stop、再 kill 子进程树（让阻塞 `read` 收到 EOF 唤醒）、最后 `is_finished()` 轮询 join（500ms 超时），确保旧线程在 spawn 新会话前完全退出，不会与新线程并发向同一事件推送数据。
 - 终端就绪后自动向 shell 发送启动命令运行 `admAgent` 工具（同时启动终端与 `admAgent`）。
-- **启动前自动生成 `admAgent.json`**：`ensure_adm_agent_config` 读取 ADM 配置文件（`config.json`）中 `launch_params.ctx_size` 作为上下文大小，于用户目录 `<home>/.config/admAgent/admAgent.json` 生成（或更新）配置。`context_window` 取该值，`default_max_tokens` 取其 30%（四舍五入）；若文件已存在则仅就地更新这两个字段，尽量保留其它内容。`ctx_size` 缺失或非法时回退默认 `context_window = 128000`。
+- **启动前自动生成 `admAgent.json`**：`ensure_adm_agent_config` 读取 ADM 配置文件（`config.json`）中 `launch_params.ctx_size` 作为上下文大小，于用户目录 `<home>/.config/admAgent/admAgent.json` 生成（或更新）配置。默认结构为 `{ "model": { "provider": "local", "model": "localModel" }, "providers": { "local": { ... } } }`；`context_window` 取该值，`default_max_tokens` 取其 30%（四舍五入）；若文件已存在则仅就地更新这两个字段，尽量保留其它内容。`ctx_size` 缺失或非法时回退默认 `context_window = 25600`。
   - **触发时机 1（更早）**：点击 Agent 按钮时，`goAgent()` 在平台判断通过后即调用 `prepare_adm_agent_config`（早于模型运行检查与 admAgent 下载）。
   - **触发时机 2（兜底）**：`start_agent_terminal` 创建 PTY 之前也会再调用一次，保证最终一致。
 - 支持通过 `agent_terminal_resize` 调整终端大小、`stop_agent_terminal` 关闭会话；窗口关闭时 `lib.rs` 会调用 `kill_agent_session` 清理子进程。

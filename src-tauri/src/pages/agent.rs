@@ -168,7 +168,7 @@ fn adm_agent_path(app: &tauri::AppHandle) -> Result<PathBuf, AppError> {
 // ===== admAgent.json 配置（agent 启动前生成 / 更新）=====
 
 /// 默认上下文大小（配置文件未显式配置 ctx_size 时使用，与示例一致）
-const DEFAULT_CONTEXT_WINDOW: u32 = 128000;
+const DEFAULT_CONTEXT_WINDOW: u32 = 25600;
 
 /// 默认端口（配置文件未显式配置 port 时使用）
 const DEFAULT_PORT: u16 = 1010;
@@ -211,6 +211,10 @@ fn load_port(app: &tauri::AppHandle) -> Option<u16> {
 fn build_adm_agent_config(context_window: u32, port: u16) -> serde_json::Value {
     let default_max_tokens = (context_window as f64 * 0.3).round() as u32;
     serde_json::json!({
+        "model": {
+            "provider": "local",
+            "model": "localModel"
+        },
         "providers": {
             "local": {
                 "type": "openai-compat",
@@ -225,10 +229,6 @@ fn build_adm_agent_config(context_window: u32, port: u16) -> serde_json::Value {
                     }
                 ]
             }
-        },
-        "models": {
-            "large": { "provider": "local", "model": "localModel" },
-            "small": { "provider": "local", "model": "localModel" }
         }
     })
 }

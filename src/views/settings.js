@@ -260,7 +260,7 @@ const template = `
           <div class="param-group-title">基础参数</div>
           <div class="param-row">
             <div class="param-label">上下文大小<div class="param-key">-c, --ctx-size</div></div>
-            <div class="param-input"><input type="number" id="ctx_size" value="4096" min="0"><div class="param-desc" id="ctx-floor-hint"></div></div>
+            <div class="param-input"><input type="number" id="ctx_size" value="25600" min="0"><div class="param-desc" id="ctx-floor-hint"></div></div>
           </div>
           <div class="param-row">
             <div class="param-label">预测 token 数<div class="param-key">-n, --n-predict</div></div>
@@ -410,12 +410,12 @@ const template = `
 `;
 
 const PRESET_MODES = {
-  default: { ctx_size: 65536, temperature: 1.0, top_k: 20, top_p: 0.95, min_p: 0.0, repeat_penalty: 1.0, repeat_last_n: -1, dry_multiplier: 0.0, dry_allowed_length: 2, dry_penalty_last_n: -1, presence_penalty: 1.5, frequency_penalty: 0.0, reasoning: "auto" },
-  creative: { ctx_size: 65536, temperature: 1.0, top_k: 20, top_p: 0.95, min_p: 0.0, repeat_penalty: 1.0, repeat_last_n: -1, dry_multiplier: 0.0, dry_allowed_length: 2, dry_penalty_last_n: -1, presence_penalty: 1.5, frequency_penalty: 0.0, reasoning: "auto" },
+  default: { ctx_size: 25600, temperature: 1.0, top_k: 20, top_p: 0.95, min_p: 0.0, repeat_penalty: 1.0, repeat_last_n: -1, dry_multiplier: 0.0, dry_allowed_length: 2, dry_penalty_last_n: -1, presence_penalty: 1.5, frequency_penalty: 0.0, reasoning: "auto" },
+  creative: { ctx_size: 25600, temperature: 1.0, top_k: 20, top_p: 0.95, min_p: 0.0, repeat_penalty: 1.0, repeat_last_n: -1, dry_multiplier: 0.0, dry_allowed_length: 2, dry_penalty_last_n: -1, presence_penalty: 1.5, frequency_penalty: 0.0, reasoning: "auto" },
   code: { ctx_size: 128000, temperature: 0.6, top_k: 20, top_p: 0.95, min_p: 0.0, repeat_penalty: 1.0, repeat_last_n: -1, dry_multiplier: 0.0, dry_allowed_length: 2, dry_penalty_last_n: -1, presence_penalty: 0.0, frequency_penalty: 0.0, reasoning: "off" },
 };
 
-const MODE_MIN_CTX = { default: 65536, creative: 65536, code: 1 };
+const MODE_MIN_CTX = { default: 25600, creative: 25600, code: 128000 };
 
 const invoke = () => window.__adm_invoke;
 
@@ -518,7 +518,7 @@ function getParamsFromForm() {
 function fillFormFromParams(params) {
   function getParam(key) { return params[key] ?? params[camelCase(key)]; }
   function camelCase(snake) { return snake.replace(/_([a-z])/g, (_, c) => c.toUpperCase()); }
-  document.getElementById("ctx_size").value = getParam("ctx_size") ?? 4096;
+  document.getElementById("ctx_size").value = getParam("ctx_size") ?? 25600;
   document.getElementById("n_predict").value = getParam("n_predict") ?? -1;
   document.getElementById("batch_size").value = getParam("batch_size") ?? 2048;
   document.getElementById("ubatch_size").value = getParam("ubatch_size") ?? 512;
@@ -572,7 +572,7 @@ async function saveParams() {
 
 function resetParams() {
   const defaults = {
-    ctx_size: 4096, n_predict: -1, batch_size: 2048, ubatch_size: 512,
+    ctx_size: 25600, n_predict: -1, batch_size: 2048, ubatch_size: 512,
     n_gpu_layers: "auto", threads: null, threads_batch: null,
     flash_attn: "auto", cache_type_k: "f16", cache_type_v: "f16",
     mlock: true, mmap: true, temperature: 1.0, top_k: 20, top_p: 0.95, min_p: 0.0,
