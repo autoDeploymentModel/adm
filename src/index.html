@@ -657,9 +657,19 @@
     async function goAgent() {
       try {
         const osName = String(await invoke("get_platform_os")).toLowerCase();
-        if (osName !== "windows") {
+        // 仅支持 Windows 和 macOS (arm64 / aarch64)
+        const supported = osName === "windows" || osName === "macos";
+        if (!supported) {
           showComingSoon();
           return;
+        }
+        // macOS 仅支持 ARM 架构（M 系列）
+        if (osName === "macos") {
+          const arch = String(await invoke("get_platform_arch")).toLowerCase();
+          if (arch !== "aarch64" && arch !== "arm64") {
+            showComingSoon("当前仅支持 Apple Silicon (M 系列) Mac");
+            return;
+          }
         }
         try { await invoke("prepare_adm_agent_config"); } catch (_) {}
         const running = await invoke("is_model_running");

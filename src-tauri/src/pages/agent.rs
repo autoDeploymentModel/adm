@@ -89,12 +89,75 @@ fn adm_agent_file_name() -> &'static str {
     }
 }
 
-/// admAgent 下载地址
-fn adm_agent_download_url() -> &'static str {
-    if cfg!(target_os = "windows") {
-        "https://adm.tuduoduo.top/agent/win/admAgent.exe"
+/// 从远程 admAgentVersion 字段（如 "v0.1.0-ec0848"）提取主版本号（如 "0.1.0"）。
+fn extract_major_version(remote_ver: &str) -> String {
+    let v = remote_ver.trim().trim_start_matches('v').trim();
+    let mut parts = vec![];
+    for ch in v.chars() {
+        if ch.is_ascii_digit() || ch == '.' {
+            parts.push(ch);
+        } else {
+            break;
+        }
+    }
+    let raw: String = parts.iter().collect();
+    // 保证至少 x.y.z 三段；不足则补 .0
+    let mut segs: Vec<&str> = raw.split('.').collect();
+    while segs.len() < 3 {
+        segs.push("0");
+    }
+    segs.truncate(3);
+    // 过滤空段
+    let filtered: Vec<&str> = segs.into_iter().filter(|s| !s.is_empty()).collect();
+    if filtered.is_empty() {
+        "0.0.0".to_string()
     } else {
-        "http://adm.tuduoduo.top/admAgent"
+        filtered.join(".")
+    }
+}
+
+/// admAgent 下载地址（根据平台 + 远程版本动态构造）
+/// - Windows：admAgent_{version}_Windows_x86_64.zip
+/// - macOS(arm64)：admAgent_{version}_Darwin_arm64.tar.gz
+/// - Linux：返回错误（当前未提供 Linux 版本）
+fn adm_agent_download_url(remote_ver: &str) -> Result<String, AppError> {
+    let ver = extract_major_version(remote_ver);
+    #[cfg(target_os = "windows")]
+    {
+        Ok(format!("https://adm.tuduoduo.top/agent/admAgent_{}_Windows_x86_64.zip", ver))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Ok(format!("https://adm.tuduoduo.top/agent/admAgent_{}_Darwin_arm64.tar.gz", ver))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        bail!("当前未提供 Linux 版本的 admAgent，敬请期待")
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        bail!("不支持的操作系统，当前仅支持 Windows / macOS (ARM)")
+    }
+}
+
+/// 压缩包文件名
+fn adm_agent_archive_name(remote_ver: &str) -> Result<String, AppError> {
+    let ver = extract_major_version(remote_ver);
+    #[cfg(target_os = "windows")]
+    {
+        Ok(format!("admAgent_{}_Windows_x86_64.zip", ver))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Ok(format!("admAgent_{}_Darwin_arm64.tar.gz", ver))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        bail!("当前未提供 Linux 版本的 admAgent，敬请期待")
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        bail!("不支持的操作系统，当前仅支持 Windows / macOS (ARM)")
     }
 }
 
@@ -511,16 +574,37 @@ pub async fn check_adm_agent(app: tauri::AppHandle) -> Result<AdmAgentInfo, AppE
     })
 }
 
-/// 下载 admAgent 工具（不覆盖已存在的可执行权限问题，Windows 为 exe，macOS 为二进制）
+/// 下载 admAgent 工具（远程包含 admAgentVersion 字段，自动构造压缩包 URL 下载并解压）。
+/// 会先拉取 update.json 获取远程版本号，再根据平台构造 URL；下载后解压覆盖本地 admAgent。
 #[tauri::command]
-pub async fn download_adm_agent(app: tauri::AppHandle) -> Result<(), AppError> {
-    let url = adm_agent_download_url().to_string();
+pub async fn download_adm_agent(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), AppError> {
+    // 1. 获取远程版本
+    let remote_ver = fetch_update_info()
+        .await?
+        .adm_agent_version
+        .ok_or_else(|| "远程配置缺少 admAgentVersion 字段".to_string())?;
+
+    let url = adm_agent_download_url(&remote_ver)?;
+    let archive_name = adm_agent_archive_name(&remote_ver)?;
     let dir = adm_agent_target_dir(&app)?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建目录失败: {}", e))?;
 
-    let file_name = adm_agent_file_name();
-    let dest = dir.join(file_name);
+    // 2. 下载前先停掉正在运行的 admAgent，释放 Windows 上的文件锁
+    let old_session = {
+        let mut s = state
+            .agent_session
+            .lock()
+            .map_err(|e| e.to_string())?;
+        s.take()
+    };
+    if let Some(mut sess) = old_session {
+        stop_agent_session_clean(&mut sess);
+    }
 
+    let archive_path = dir.join(&archive_name);
     app.emit(
         "agent-download-progress",
         serde_json::json!({ "status": "downloading", "progress": 0 }),
@@ -545,9 +629,9 @@ pub async fn download_adm_agent(app: tauri::AppHandle) -> Result<(), AppError> {
     let total_size: u64 = response.content_length().unwrap_or(0);
 
     use tokio::io::AsyncWriteExt;
-    let mut file = tokio::fs::File::create(&dest)
+    let mut file = tokio::fs::File::create(&archive_path)
         .await
-        .map_err(|e| format!("创建文件失败: {}", e))?;
+        .map_err(|e| format!("创建压缩包文件失败: {}", e))?;
 
     let mut downloaded: u64 = 0;
     let mut stream = response.bytes_stream();
@@ -576,15 +660,91 @@ pub async fn download_adm_agent(app: tauri::AppHandle) -> Result<(), AppError> {
     file.flush().await.map_err(|e| format!("刷新文件失败: {}", e))?;
     drop(file);
 
-    // macOS 需要赋予可执行权限
+    // 3. 解压覆盖本地 admAgent 文件
+    app.emit(
+        "agent-download-progress",
+        serde_json::json!({ "status": "extracting", "progress": 0 }),
+    )
+    .ok();
+
+    // 先尝试删除旧文件（进程刚结束可能仍有极短占用，故带重试）
+    let dest = adm_agent_path(&app)?;
+    if dest.exists() {
+        let mut removed = false;
+        for _ in 0..15 {
+            if std::fs::remove_file(&dest).is_ok() {
+                removed = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        if !removed {
+            // 尝试清理压缩包后报错
+            let _ = std::fs::remove_file(&archive_path);
+            bail!("替换 admAgent 失败：旧文件仍被占用，请手动关闭 Agent 终端后重试");
+        }
+    }
+
+    // 根据后缀判断压缩包格式并解压
+    let ext = archive_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    let is_zip = archive_name.ends_with(".zip");
+
+    let copied = if is_zip || ext == "zip" {
+        crate::common::utils::archive::extract_zip(&archive_path, &dir)?
+    } else {
+        crate::common::utils::archive::extract_tar_gz(&archive_path, &dir)?
+    };
+
+    if copied == 0 {
+        let _ = std::fs::remove_file(&archive_path);
+        bail!("解压后未找到任何文件，请检查压缩包是否完整");
+    }
+
+    // 解压出来的文件名可能与预期不同（如与 admAgent_file_name() 不一致），需要定位并移动到正确路径
+    if !dest.exists() {
+        // 在目录中搜索 admAgent 可执行文件
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_file() {
+                    if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+                        // 匹配 admAgent 或 admAgent.exe（Windows 中带 .exe 但压缩包可能不带）
+                        let is_target = if cfg!(target_os = "windows") {
+                            name.eq_ignore_ascii_case(adm_agent_file_name())
+                                || name.eq_ignore_ascii_case("admAgent")
+                                || name.eq_ignore_ascii_case("admAgent.exe")
+                        } else {
+                            name == "admAgent" || name == adm_agent_file_name()
+                        };
+                        if is_target {
+                            if p != dest {
+                                let _ = std::fs::rename(&p, &dest);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. 删除下载的压缩包
+    let _ = std::fs::remove_file(&archive_path);
+
+    // 5. macOS 需要赋予可执行权限
     #[cfg(not(target_os = "windows"))]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&dest)
-            .map_err(|e| format!("读取权限失败: {}", e))?
-            .permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&dest, perms).map_err(|e| format!("设置执行权限失败: {}", e))?;
+        if dest.exists() {
+            let mut perms = std::fs::metadata(&dest)
+                .map_err(|e| format!("读取权限失败: {}", e))?
+                .permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&dest, perms).map_err(|e| format!("设置执行权限失败: {}", e))?;
+        }
     }
 
     app.emit(
@@ -648,7 +808,7 @@ pub fn get_adm_agent_local_version(app: &tauri::AppHandle) -> Result<Option<Stri
 }
 
 /// 下载并替换 admAgent 工具（版本更新用）。
-/// 使用服务端下发的下载地址，下载到 admAgent 默认存放路径并覆盖旧版本。
+/// 使用服务端下发的下载地址（压缩包），下载到 admAgent 默认存放路径解压并覆盖旧版本。
 #[tauri::command]
 pub async fn download_adm_agent_update(
     app: tauri::AppHandle,
@@ -662,15 +822,12 @@ pub async fn download_adm_agent_update(
         );
     }
 
-    let dest = adm_agent_path(&app)?;
-    let dir = dest
-        .parent()
-        .ok_or_else(|| "无法获取 admAgent 目录".to_string())?
-        .to_path_buf();
+    let dir = adm_agent_target_dir(&app)?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建目录失败: {}", e))?;
 
-    // 临时文件：同名 .part，下载完成后替换，避免长时间占用导致锁定问题
-    let part_path = dir.join(format!("{}.part", adm_agent_file_name()));
+    // 从 URL 中提取文件名作为压缩包名
+    let archive_name = url.split('/').next_back().unwrap_or("admAgent_archive").to_string();
+    let archive_path = dir.join(&archive_name);
 
     app.emit(
         "adm-agent-update-progress",
@@ -701,9 +858,9 @@ pub async fn download_adm_agent_update(
     let total_size: u64 = response.content_length().unwrap_or(0);
 
     use tokio::io::AsyncWriteExt;
-    let mut file = tokio::fs::File::create(&part_path)
+    let mut file = tokio::fs::File::create(&archive_path)
         .await
-        .map_err(|e| format!("创建临时文件失败: {}", e))?;
+        .map_err(|e| format!("创建压缩包文件失败: {}", e))?;
 
     let mut downloaded: u64 = 0;
     let mut stream = response.bytes_stream();
@@ -730,12 +887,13 @@ pub async fn download_adm_agent_update(
     file.flush().await.map_err(|e| format!("刷新文件失败: {}", e))?;
     drop(file);
 
-    // 替换前先停掉正在运行的 Agent 终端，释放被 Windows 锁定的 admAgent.exe。
-    // 典型场景：用户离开 Agent 页但进程未退出，再次进入触发更新时 admAgent.exe 仍在运行，
-    // 不先结束进程会导致下方 rename 失败（表现即「升级失败」）。这里自动结束进程，
-    // 无需用户手动去关 Agent 终端。使用 stop_agent_session_clean 统一回收读取线程。
-    // 注：stop 标志置位后读者线程不会 emit agent-terminal-exit——但更新弹窗此时已覆盖
-    // 整个界面，用户看不到终端，无需 exit 提示；更新完成后前端自动导航回 #/agent 并重启。
+    app.emit(
+        "adm-agent-update-progress",
+        serde_json::json!({ "status": "extracting", "progress": 0 }),
+    )
+    .ok();
+
+    // 解压前先停掉正在运行的 Agent 终端，释放被 Windows 锁定的 admAgent.exe。
     let old_session = {
         let mut s = state
             .agent_session
@@ -747,7 +905,8 @@ pub async fn download_adm_agent_update(
         stop_agent_session_clean(&mut sess);
     }
 
-    // 替换旧文件：先尝试删除旧文件（进程刚结束可能仍有极短占用，故带重试），再重命名。
+    // 先尝试删除旧文件（进程刚结束可能仍有极短占用，故带重试）
+    let dest = adm_agent_path(&app)?;
     if dest.exists() {
         let mut removed = false;
         for _ in 0..15 {
@@ -758,24 +917,63 @@ pub async fn download_adm_agent_update(
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
         if !removed {
+            let _ = std::fs::remove_file(&archive_path);
             bail!("替换 admAgent 失败：旧文件仍被占用，请手动关闭 Agent 终端后重试");
         }
     }
-    std::fs::rename(&part_path, &dest).map_err(|e| {
-        format!(
-            "替换 admAgent 失败: {}（可能 admAgent 正在运行，请关闭 Agent 终端后重试）",
-            e
-        )
-    })?;
+
+    // 根据文件名后缀判断压缩包格式并解压
+    let is_zip = archive_name.ends_with(".zip");
+    let copied = if is_zip {
+        crate::common::utils::archive::extract_zip(&archive_path, &dir)?
+    } else {
+        crate::common::utils::archive::extract_tar_gz(&archive_path, &dir)?
+    };
+
+    if copied == 0 {
+        let _ = std::fs::remove_file(&archive_path);
+        bail!("解压后未找到任何文件，请检查压缩包是否完整");
+    }
+
+    // 解压出来的文件名可能与预期不同（如与 admAgent_file_name() 不一致），需要定位并移动到正确路径
+    if !dest.exists() {
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_file() {
+                    if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+                        let is_target = if cfg!(target_os = "windows") {
+                            name.eq_ignore_ascii_case(adm_agent_file_name())
+                                || name.eq_ignore_ascii_case("admAgent")
+                                || name.eq_ignore_ascii_case("admAgent.exe")
+                        } else {
+                            name == "admAgent" || name == adm_agent_file_name()
+                        };
+                        if is_target {
+                            if p != dest {
+                                let _ = std::fs::rename(&p, &dest);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 删除下载的压缩包
+    let _ = std::fs::remove_file(&archive_path);
 
     #[cfg(not(target_os = "windows"))]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&dest)
-            .map_err(|e| format!("读取权限失败: {}", e))?
-            .permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&dest, perms).map_err(|e| format!("设置执行权限失败: {}", e))?;
+        if dest.exists() {
+            let mut perms = std::fs::metadata(&dest)
+                .map_err(|e| format!("读取权限失败: {}", e))?
+                .permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&dest, perms).map_err(|e| format!("设置执行权限失败: {}", e))?;
+        }
     }
 
     app.emit(
@@ -787,19 +985,20 @@ pub async fn download_adm_agent_update(
     Ok(())
 }
 
+/// 获取当前系统架构（主要用于 macOS Intel/ARM 区分）
+#[tauri::command]
+pub fn get_platform_arch() -> String {
+    std::env::consts::ARCH.to_string()
+}
+
 /// 检查 admAgent 是否需要更新（仅在点击底部栏 Agent 按钮时调用，不在启动时检查）。
-/// 优先级由前端 goAgent 控制：先判断模型是否启动，再判断本地是否下载，最后判断版本号。
+/// 支持 Windows 和 macOS (arm64) 平台，根据远程 admAgentVersion 动态构造下载地址。
 #[tauri::command]
 pub async fn check_adm_agent_update(app: tauri::AppHandle) -> Result<AdmAgentUpdateCheck, AppError> {
-    // 仅 Windows 提供下载地址（mac/linux 暂不支持自动更新）
-    #[cfg(target_os = "windows")]
-    let download_url = Some("https://adm.tuduoduo.top/agent/win/admAgent.exe".to_string());
-    #[cfg(not(target_os = "windows"))]
-    let download_url: Option<String> = None;
-
     let mut needs_update = false;
     let mut local_version: Option<String> = None;
     let mut remote_version: Option<String> = None;
+    let mut download_url: Option<String> = None;
 
     // 拉取远程更新清单（失败时不强制更新，仅返回本地版本）
     let update_info = match fetch_update_info().await {
@@ -816,8 +1015,23 @@ pub async fn check_adm_agent_update(app: tauri::AppHandle) -> Result<AdmAgentUpd
     };
     remote_version = update_info.adm_agent_version.clone();
 
+    // 根据平台 + 远程版本构造下载地址（Linux 不返回 URL，前端据此提示暂未开放）
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(ref remote_ver) = remote_version {
+            download_url = adm_agent_download_url(remote_ver).ok();
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(ref remote_ver) = remote_version {
+            download_url = adm_agent_download_url(remote_ver).ok();
+        }
+    }
+    // Linux: download_url 保持 None，前端据此判断为暂不支持
+
     if let Some(ref remote_ver) = remote_version {
-        // 仅在能拿到下载地址（Windows）时才判定需要更新
+        // 仅在能拿到下载地址（Windows / macOS arm64）时才判定需要更新
         if download_url.is_some() {
             match get_adm_agent_local_version(&app) {
                 Ok(local_opt) => {

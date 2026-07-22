@@ -71,6 +71,7 @@ pub fn run() {
             settings::delete_llamacpp,
             // agent.rs
             agent::get_platform_os,
+            agent::get_platform_arch,
             agent::prepare_adm_agent_config,
             agent::check_adm_agent,
             agent::download_adm_agent,
