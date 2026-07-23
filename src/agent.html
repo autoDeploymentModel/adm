@@ -739,7 +739,13 @@
     }
 
     // 真正启动终端（工作目录已确认）
+    // 注意：本函数从进入起就占用启动守卫 startRequested，覆盖整个异步启动窗口
+    //（含 await start_agent_terminal），杜绝 handleEnterAgent / maybeStartTerminal
+    // 在启动途中并发发起第二次 start_agent_terminal（会产生无法回收的孤儿 admAgent 进程）。
+    // 调用方约定：startTerminal 检查守卫后进入；confirmWorkdir / restartAgentTerminal
+    // 在停旧会话前先占用守卫再调本函数。
     async function startAgentNow() {
+      startRequested = true;
       var ov = document.getElementById("loading-overlay");
       if (ov) {
         ov.classList.remove("hidden");
@@ -768,6 +774,9 @@
         ]);
         hideLoading();
         terminalStarted = true;
+        // 启动完成即释放启动守卫：终端进入「运行中」状态由 terminalStarted 表达；
+        // 之后若进程退出，handleEnterAgent 才能再次进入重启流程（守卫滞留会堵死该路径）。
+        startRequested = false;
         // 记录本次启动时的模型代次，模型重启后代次变化将触发 admAgent 重启
         invoke("get_agent_status")
           .then(function (st) { if (st) currentModelGen = st.model_generation; })
@@ -815,9 +824,10 @@
       } catch (_) {
         return;
       }
-      try { await invoke("stop_agent_terminal", {}); } catch (_) {}
+      // 同 confirmWorkdir：先占用启动守卫再停旧会话，覆盖整个重启窗口
+      startRequested = true;
       terminalStarted = false;
-      startRequested = false;
+      try { await invoke("stop_agent_terminal", {}); } catch (_) {}
       startAgentNow();
     }
 
@@ -866,6 +876,9 @@
       }
     }
 
+    // 防重复提交：确定按钮在异步保存 + 重启期间忽略后续点击（并发 start 会产生孤儿进程）
+    var workdirConfirming = false;
+
     async function confirmWorkdir() {
       var input = document.getElementById("workdir-input");
       var err = document.getElementById("workdir-error");
@@ -874,15 +887,27 @@
         if (err) err.textContent = "工作目录不能为空";
         return;
       }
+      // 双击 / 启动途中再次提交：直接忽略（启动中的会话仍使用旧目录，提示用户稍候）
+      if (workdirConfirming) return;
+      if (startRequested) {
+        if (err) err.textContent = "终端正在启动中，请稍候再试";
+        return;
+      }
+      workdirConfirming = true;
       try {
         await invoke("set_agent_workdir", { workdir: val });
         closeWorkdirDialog();
-        // 重启终端以应用新的工作目录（stop 在尚未启动时为 no-op）
-        try { await invoke("stop_agent_terminal", {}); } catch (_) {}
+        // 重启终端以应用新的工作目录（stop 在尚未启动时为 no-op）。
+        // 先占用启动守卫再停旧会话：覆盖 stop + start 整个异步窗口，避免窗口期内
+        // agent-resize / ResizeObserver 触发 handleEnterAgent 并发启动第二个 admAgent。
+        startRequested = true;
         terminalStarted = false;
+        try { await invoke("stop_agent_terminal", {}); } catch (_) {}
         startAgentNow();
       } catch (e) {
         if (err) err.textContent = "保存失败：" + e;
+      } finally {
+        workdirConfirming = false;
       }
     }
 
@@ -1155,21 +1180,31 @@
       //   (B) 紧跟 compositionend 的 input(insertText) 事件，_inputEvent 在纯 IME 选词
       //       （_keyDownSeen=false）时绕过保护，同步 triggerDataEvent。
       //   两条路径发出同一段合成文本 → onData 被触发两次。混入普通 keydown 时不复现 → 偶发。
-      // 方案 v2：双重防线 ——
-      //   防线 1（compositionend 文本去重）：在捕获阶段监听 xterm 辅助 textarea 的
-      //     compositionend 事件，记录合成的确切文本和时间。onData 中首次见到该文本放行，
-      //     后续 250ms 内再次见到相同文本判定为 xterm 双路径重复并丢弃。
-      //     → 250ms 足以覆盖 Tauri WebView2 下 setTimeout(0) 的调度延迟。
+      // 方案 v3：三重防线 ——
+      //   防线 0（源头拦截，确定性）：compositionend 之后浏览器会同步派发一个
+      //     input(insertText) 事件（即路径 B）。在 document 捕获阶段监听 input，
+      //     若目标为 xterm 辅助 textarea、文本与刚结束的合成完全一致且距 compositionend
+      //     不到 500ms，stopImmediatePropagation() 吞掉它——xterm 注册在 textarea 上的
+      //     _inputEvent 根本不会触发。只保留路径 A（setTimeout finalize）这唯一一次发送。
+      //     compositionend→input 的顺序与同步性由浏览器保证，因此本防线不依赖任何调度时延，
+      //     即便主线程拥塞也必然命中。（input 事件内容已写入 textarea，吞事件不影响路径 A 读取。）
+      //   防线 1（compositionend 文本去重，安全网）：捕获阶段记录合成的确切文本与时间。
+      //     onData 中首次见到该文本放行；2000ms 窗口内再次见到判定为双路径重复丢弃一次，
+      //     并立即清空记录（每次 compositionend 最多只丢一次，之后相同内容如恰好粘贴同样
+      //     文本一律放行）。窗口取 2000ms 是因为终端重启（设置工作目录 / 增删云端模型）后
+      //     TUI 首屏整帧渲染会拥塞主线程，setTimeout(0) 可能延迟数百毫秒，原 250ms 窗口
+      //     在该场景下会漏判——这正是「设置完工作目录后偶发重复」的直接原因。
       //   防线 2（通用相邻去重，兜底）：若连续两次 onData 收到完全相同的文本且间隔 <150ms
-      //     且刚发生过 IME 合成活动（600ms 内），也视为重复丢弃。覆盖防线 1 未命中的边界情况，
+      //     且刚发生过 IME 合成活动（600ms 内），也视为重复丢弃。覆盖前两道未命中的边界情况，
       //     同时不误伤真实相同短语（人类再选词一次远超 150ms）。
-      // 两防线均仅丢弃重复副本，唯一发送永远放行，绝不丢字。
+      // 三道防线均仅丢弃重复副本，唯一发送永远放行；粘贴走 _suppressImeDedup 绕过去重，绝不丢字。
       var _imeLastActivity = 0;        // 最近一次 IME 合成活动时间戳
       var _lastComposedText = "";      // 最近一次 compositionend 的合成文本
       var _lastComposedAt = 0;         // compositionend 时刻
       var _composedSent = false;       // 当前合成文本是否已经合法发送过一次
       var _lastSentData = "";          // 上一条实际发出的数据
       var _lastSentAt = 0;             // 发出时刻
+      var _suppressImeDedup = false;   // 粘贴期间为 true：粘贴内容不参与 IME 去重
       (function trackImeComposition() {
         var isHelperTA = function (t) {
           return !!(t && t.classList && t.classList.contains("xterm-helper-textarea"));
@@ -1186,6 +1221,18 @@
         document.addEventListener("compositionstart", mark, true);
         document.addEventListener("compositionupdate", mark, true);
         document.addEventListener("compositionend", onEnd, true);
+        // 防线 0：吞掉 compositionend 后紧跟的冗余 input(insertText) 事件（xterm 双路径中的
+        // 同步路径 B）。匹配条件与 xterm _inputEvent 的发送条件对齐（inputType === "insertText"），
+        // 并要求文本与刚结束的合成严格一致——普通按键 input 事件的 data 不可能等于整段合成文本，
+        // 不会误伤正常输入；不匹配时事件原样透传，无任何副作用。
+        document.addEventListener("input", function (e) {
+          if (!isHelperTA(e.target)) return;
+          if (!_lastComposedText) return;
+          if (e.inputType !== "insertText") return;
+          if (!e.data || e.data !== _lastComposedText) return;
+          if (Date.now() - _lastComposedAt > 500) return;
+          e.stopImmediatePropagation();
+        }, true);
       })();
 
       // ===== 粘贴预处理：将换行符替换为空格 =====
@@ -1197,7 +1244,10 @@
         if (text) {
           text = text.replace(/\r\n/g, ' ').replace(/\r/g, ' ').replace(/\n/g, ' ');
         }
-        _originalPaste(text);
+        // 粘贴内容不参与 IME 去重：若粘贴文本恰好等于刚合成的文本，防线 1/2 会误丢这次粘贴。
+        // triggerDataEvent 是同步调用 onData 的，try/finally 可精确圈定抑制范围。
+        _suppressImeDedup = true;
+        try { _originalPaste(text); } finally { _suppressImeDedup = false; }
       };
 
       // ===== Ctrl+C / Ctrl+V 复制粘贴（模拟真实终端体验）=====
@@ -1290,34 +1340,38 @@
       // 记录上一次实际转发给后端的数据与时间，用于 IME 合成去重（见上方 trackImeComposition）
       term.onData(function (data) {
         var now = Date.now();
-        // 防线 1：compositionend 文本去重（最直接，命中率最高）。
-        // 每次 compositionend 后，xterm 会通过两条路径（setTimeout(0) + input 事件）
-        // 各触发一次 triggerDataEvent 发出同一段合成文本。这里在 onData 出口拦截：
-        //   - 第一次见到该合成文本 → 放行（标记 _composedSent = true）
-        //   - 后续 250ms 内再次见到相同文本 → 丢弃（xterm 双路径重复）
-        // 250ms 足以覆盖 Tauri WebView2 下 setTimeout(0) 的最大调度延迟。
-        if (data &&
-            _lastComposedText &&
-            data === _lastComposedText &&
-            now - _lastComposedAt < 250) {
-          if (_composedSent) {
-            // 已发过一次 → 这是 xterm 另一路径的重复 → 丢弃
+        if (!_suppressImeDedup) {
+          // 防线 1：compositionend 文本去重（安全网，源头拦截未覆盖时兜底）。
+          // xterm 双路径（setTimeout(0) + input 事件）会发出同一段合成文本，这里在 onData 出口拦截：
+          //   - 第一次见到该合成文本 → 放行（标记 _composedSent = true）
+          //   - 2000ms 窗口内再次见到相同文本 → 判定为重复，丢弃【仅一次】并清空合成记录
+          // 窗口取 2000ms：终端重启后 TUI 首屏整帧渲染会拥塞主线程，setTimeout(0) 可能延迟
+          // 数百毫秒才触发，原 250ms 窗口在该场景下漏判（「设置完工作目录后偶发重复」的根因）。
+          // 丢弃后立刻清空 _lastComposedText：每次 compositionend 最多只丢一个副本，
+          // 之后相同内容（如恰好粘贴同样文本）一律放行，不会过度拦截。
+          if (data &&
+              _lastComposedText &&
+              data === _lastComposedText &&
+              now - _lastComposedAt < 2000) {
+            if (_composedSent) {
+              _lastComposedText = ""; // 只丢一次，防止误伤后续合法的相同输入
+              _lastSentAt = now;
+              return;
+            }
+            // 首次见到 → 合法发送
+            _composedSent = true;
+          }
+          // 防线 2：通用相邻去重（兜底）。
+          // 连续两次 onData 收到完全相同文本、间隔 <150ms、且 600ms 内发生过 IME 合成
+          // 活动时也判定为重复。覆盖防线 1 未命中的边界情况，
+          // 同时不误伤真实相同短语（人类再选词远超 150ms）。
+          if (data &&
+              data === _lastSentData &&
+              now - _lastSentAt < 150 &&
+              now - _imeLastActivity < 600) {
             _lastSentAt = now;
             return;
           }
-          // 首次见到 → 合法发送
-          _composedSent = true;
-        }
-        // 防线 2：通用相邻去重（兜底）。
-        // 连续两次 onData 收到完全相同文本、间隔 <150ms、且 600ms 内发生过 IME 合成
-        // 活动时也判定为重复。覆盖防线 1 未命中的边界情况，
-        // 同时不误伤真实相同短语（人类再选词远超 150ms）。
-        if (data &&
-            data === _lastSentData &&
-            now - _lastSentAt < 150 &&
-            now - _imeLastActivity < 600) {
-          _lastSentAt = now;
-          return;
         }
         _lastSentData = data;
         _lastSentAt = now;

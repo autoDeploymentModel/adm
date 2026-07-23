@@ -1359,6 +1359,12 @@ python scripts/generate-icons.py
 - **复制 / 粘贴（终端级体验）**：`agent.html` 通过 `term.attachCustomKeyEventHandler` 实现类似真实终端的 Ctrl+C / Ctrl+V：
   - **Ctrl+C**：有文本选区时复制选区到系统剪贴板（优先 `navigator.clipboard.writeText`，失败回退 `textarea + document.execCommand('copy')`）；无选区时放行，xterm 把 `\x03`(SIGINT) 发给 admAgent，等价于终端中断。
   - **Ctrl+V**：从系统剪贴板读取文本并经 `term.paste()` 写入 PTY。若 iframe 内 `navigator.clipboard.readText` 受限，则通过 `agent-read-clipboard` 事件委托父窗口 `index.html` 代理读取（回传 `agent-clipboard-result`）。读取失败时终端内提示「无法访问剪贴板」。
+- **中文 IME 偶发重复输入修复（三重防线）**：xterm 在 IME 合成结束时存在两条可能同时触发的发送路径——(A) `compositionend → _finalizeComposition` 用 `setTimeout(0)` 异步 `triggerDataEvent`；(B) 紧跟的 `input(insertText)` 事件在纯 IME 选词（`_keyDownSeen=false`）时同步 `triggerDataEvent`。两条路径发出同一段合成文本 → 打字重复。`agent.html` 的修复：
+  - **防线 0（源头拦截，确定性）**：document 捕获阶段监听 `input`，若事件来自 xterm 辅助 textarea、`inputType === "insertText"`、文本与刚结束的合成严格一致且距 `compositionend` 不到 500ms，`stopImmediatePropagation()` 吞掉它（先于 xterm 注册在 textarea 上的 `_inputEvent` 执行），只保留路径 A 这唯一一次发送。不依赖任何调度时延，主线程拥塞时也必然命中。
+  - **防线 1（onData 合成文本去重，安全网）**：首次见到合成文本放行；2000ms 窗口内再次见到丢弃【仅一次】并清空合成记录（每次 `compositionend` 最多只丢一个副本，后续相同内容一律放行）。窗口取 2000ms 是因为终端重启（设置工作目录 / 增删云端模型）后 TUI 首屏整帧渲染拥塞主线程，`setTimeout(0)` 可能延迟数百毫秒，更小的窗口会在该场景漏判。
+  - **防线 2（通用相邻去重，兜底）**：连续两次 `onData` 收到完全相同文本、间隔 <150ms 且 600ms 内有 IME 合成活动，判为重复丢弃。
+  - **粘贴绕过**：`term.paste` 覆写在粘贴期间置 `_suppressImeDedup`，粘贴内容不参与 IME 去重（防止粘贴文本恰好等于刚合成文本时被误丢）。
+- **启动守卫 `startRequested`（防并发启动）**：`startAgentNow()` 从进入起占用 `startRequested`，覆盖 `await start_agent_terminal` 整个异步窗口，成功后释放（运行中状态由 `terminalStarted` 表达），失败也释放。`confirmWorkdir()` / `restartAgentTerminal()` 在 `await stop_agent_terminal` 前先占用守卫。否则窗口期内 `agent-resize` / `ResizeObserver` 触发 `handleEnterAgent` / `maybeStartTerminal` 会并发发起第二次 `start_agent_terminal`，产生无法回收的孤儿 admAgent 进程；守卫在启动成功后释放，也保证了进程退出后 `handleEnterAgent` 能重新拉起。
 
 ### 13.3 相关命令（`src-tauri/src/pages/agent.rs`）
 
@@ -1405,8 +1411,8 @@ python scripts/generate-icons.py
 
 ***
 
-*文档版本: 3.12*\
-*最后更新: 2026-07-20*\
+*文档版本: 3.13*\
+*最后更新: 2026-07-23*\
 *维护者: ADM 开发团队*
 
 ***
@@ -1415,6 +1421,7 @@ python scripts/generate-icons.py
 
 | 日期 | 版本 | 变更内容 |
 |------|------|----------|
+| 2026-07-23 | **3.13** | 修复 Agent 终端设置工作目录（或增删云端模型触发重启）后偶发打字重复：<br>1. **新增防线 0（源头拦截）**：document 捕获阶段吞掉 `compositionend` 后紧跟的冗余 `input(insertText)` 事件（xterm IME 双路径中的同步路径），只保留 `setTimeout(0)` finalize 路径这唯一一次发送，不再依赖调度时延<br>2. **防线 1 强化**：onData 合成文本去重窗口 250ms → 2000ms（终端重启后 TUI 首屏整帧渲染拥塞主线程，`setTimeout(0)` 可能延迟数百毫秒，原窗口漏判是本次 bug 的直接原因）；每次 `compositionend` 最多只丢一个副本（丢弃后立即清空合成记录），粘贴经 `_suppressImeDedup` 绕过去重，杜绝误丢合法输入<br>3. **启动守卫修复**：`startAgentNow()` 进入即占用 `startRequested`、成功/失败后释放；`confirmWorkdir()` / `restartAgentTerminal()` 停旧会话前先占用守卫——修复裸调 `startAgentNow` 期间 `handleEnterAgent` / `maybeStartTerminal` 可能并发发起第二次 `start_agent_terminal` 产生孤儿 admAgent 进程的问题，同时恢复「进程退出后重进 Agent 页自动重启」路径（此前守卫在成功启动后永久滞留会堵死该路径） |
 | 2026-07-20 | **3.12** | 修复 Agent 终端内容较多时出现重复输出的问题（三层加固）：<br>1. **会话代次标记**：`AppState` 新增 `agent_generation`，`start_agent_terminal` 每次 +1；`agent-terminal-data` / `agent-terminal-ready` 的 payload 携带 `gen` 字段。前端 `agent.html` 在 `ready` 时记录 `currentAgentGen`，此后仅接受当前代次的数据帧，旧会话残留输出一律丢弃——结构上杜绝「同一输出显示两遍」<br>2. **读取线程生命周期**：`AgentSession` 新增 `reader_stop: Arc<AtomicBool>` 与 `reader_handle: JoinHandle`；新增 `stop_agent_session_clean`：置位 stop → kill 子进程树（让阻塞 read 收 EOF 唤醒）→ `is_finished()` 轮询 join（500ms 超时）。`start_agent_terminal` / `stop_agent_terminal` / `kill_agent_session` 均改用该函数，确保旧线程在 spawn 新会话前完全退出，不再与新线程并发 emit<br>3. **resize 统一节流**：`agent.html` 新增 `scheduleFitResize(delay)` 作为唯一 fit + resize 入口（trailing 节流），`ResizeObserver` / `window resize` / `agent-resize` / `ready` / `startAgentNow` 末尾全部走该入口，减少 ratatui 整屏重绘次数<br>4. **`handleEnterAgent` 健壮化**：`get_agent_status` 返回 `Err` 时不再兜底重启（避免进程 spawn 瞬时空窗误判为「未运行」而二次拉起 → 两个 admAgent 并发写 PTY） |
 | 2026-07-18 | **3.11** | 修复主程序关闭后 llama-server / sd-cli 进程残留问题：<br>1. 新增 `platform::kill_process_tree`（taskkill /PID /T /F 或 kill -9 -<pgid>）和 `platform::kill_process_by_name` 兜底清理<br>2. 窗口关闭事件改为先按 PID 杀整棵进程树，再按进程名兜底强杀残留，避免 PID 记录丢失/复用导致孤儿进程<br>3. Unix 下 llama-server / sd-cli 以独立进程组（process_group(0) + setsid）启动，`kill -9 -<pgid>` 可一次杀掉整棵树<br>4. `stop_model` / `stop_sd` 改用 `kill_process_tree`，与窗口关闭逻辑一致 |
 | 2026-06-21 | **3.9** | 官网 SEO 优化：<br>1. 添加 Open Graph / Twitter Card 元标签<br>2. 添加 canonical URL 和 JSON-LD 结构化数据<br>3. 创建 robots.txt 和 sitemap.xml<br>4. 图片添加 loading="lazy"，emoji 图标添加 role="img" + aria-label<br>5. 修复"文生图"特性图标损坏的 emoji |
