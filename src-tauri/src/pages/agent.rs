@@ -498,6 +498,38 @@ pub async fn list_cloud_providers(
     Ok(out)
 }
 
+/// 删除指定 key 的云端模型 Provider。
+/// 按 key 定位并从 admAgent.json 的 providers 分支中移除，原子写入。
+#[tauri::command]
+pub async fn delete_cloud_provider(
+    _app: tauri::AppHandle,
+    key: String,
+) -> Result<serde_json::Value, AppError> {
+    let dir = adm_agent_config_dir()?;
+    let path = dir.join("admAgent.json");
+    if !path.exists() {
+        bail!("未找到 admAgent.json");
+    }
+    let s = std::fs::read_to_string(&path)
+        .map_err(|e| format!("读取 admAgent.json 失败: {}", e))?;
+    let mut config: serde_json::Value = serde_json::from_str(&s)
+        .map_err(|e| format!("解析 admAgent.json 失败: {}", e))?;
+
+    let providers = config
+        .get_mut("providers")
+        .and_then(|p| p.as_object_mut())
+        .ok_or_else(|| "admAgent.json 结构异常：缺少 providers".to_string())?;
+
+    if providers.get(&key).is_none() {
+        bail!("未找到 provider: {}", key);
+    }
+
+    providers.remove(&key);
+    write_json_atomic(&path, &config)?;
+
+    Ok(serde_json::json!({ "key": key, "success": true }))
+}
+
 /// 更新指定 key 的云端模型 Provider（按 key 定位，替换其全部参数）。
 /// 模型名称变更时同步重派生 model id；保留同一 key 以免产生孤儿条目。
 #[tauri::command]

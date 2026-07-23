@@ -350,6 +350,13 @@
       white-space: nowrap;
     }
     .manage-item button:hover { background: rgba(255,255,255,0.18); }
+    .manage-item button.delete-btn {
+      color: #ff6b6b;
+      border-color: rgba(255,107,107,0.3);
+    }
+    .manage-item button.delete-btn:hover {
+      background: rgba(255,107,107,0.18);
+    }
     .manage-actions {
       display: flex;
       justify-content: flex-end;
@@ -1058,8 +1065,35 @@
         editBtn.addEventListener("click", function () { openCloudEdit(p.key); });
         item.appendChild(editBtn);
 
+        var deleteBtn = document.createElement("button");
+        deleteBtn.className = "delete-btn";
+        deleteBtn.textContent = "删除";
+        deleteBtn.addEventListener("click", function () { confirmDeleteCloudProvider(p.key, p.name || p.key); });
+        item.appendChild(deleteBtn);
+
         list.appendChild(item);
       });
+    }
+
+    // 确认删除云端模型 Provider
+    function confirmDeleteCloudProvider(key, name) {
+      var msg = '确定要删除云端模型「' + name + '」吗？此操作不可恢复。';
+      if (!window.confirm(msg)) return;
+      deleteCloudProvider(key);
+    }
+
+    // 调用后端删除云端模型 Provider
+    async function deleteCloudProvider(key) {
+      try {
+        await invoke("delete_cloud_provider", { key: key });
+        // 删除成功后刷新列表
+        closeManageDialog();
+        openManageDialog();
+        // 重启 Agent 终端以应用新配置
+        restartAgentTerminal();
+      } catch (e) {
+        alert('删除失败：' + (e && e.message ? e.message : e));
+      }
     }
 
     // 以指定 key 的 provider 数据回填表单，进入「编辑」模式

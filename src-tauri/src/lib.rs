@@ -83,6 +83,7 @@ pub fn run() {
             agent::add_cloud_provider,
             agent::list_cloud_providers,
             agent::update_cloud_provider,
+            agent::delete_cloud_provider,
             agent::start_agent_terminal,
             agent::agent_terminal_input,
             agent::agent_terminal_resize,
