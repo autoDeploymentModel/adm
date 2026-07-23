@@ -421,7 +421,28 @@ pub async fn start_model(
         args.extend(["-ub".to_string(), ub.to_string()]);
     }
     if let Some(ngl) = &params.n_gpu_layers {
-        args.extend(["-ngl".to_string(), ngl.clone()]);
+        // 转换前端传来的特殊值：all → 99，auto → 不传参数
+        let ngl_lower = ngl.to_lowercase();
+        if ngl_lower == "auto" {
+            // "auto" 表示自动决定，不传 -ngl 参数让 llama-server 自行判断
+        } else if ngl_lower == "all" {
+            // "all" 表示全部加载到 GPU，使用 99
+            args.extend(["-ngl".to_string(), "99".to_string()]);
+        } else if let Ok(_) = ngl.parse::<i32>() {
+            // 数字值直接传递
+            args.extend(["-ngl".to_string(), ngl.clone()]);
+        } else {
+            // 无法识别的值，记录警告并不传参数
+            app.emit(
+                "model-log",
+                serde_json::json!({
+                    "model_id": &model_id,
+                    "line": format!("[WARN] 无法识别的 GPU 层数值: {}，已跳过 -ngl 参数", ngl),
+                    "source": "stdout",
+                }),
+            )
+            .ok();
+        }
     }
     if let Some(t) = params.threads {
         args.extend(["-t".to_string(), t.to_string()]);
@@ -430,7 +451,24 @@ pub async fn start_model(
         args.extend(["-tb".to_string(), tb.to_string()]);
     }
     if let Some(fa) = &params.flash_attn {
-        args.extend(["-fa".to_string(), fa.clone()]);
+        // llama-server 的 -fa 接受 on/off/auto，auto 时默认使用 on
+        match fa.to_lowercase().as_str() {
+            "on" | "true" | "1" | "auto" => args.extend(["-fa".to_string(), "on".to_string()]),
+            "off" | "false" | "0" => args.extend(["-fa".to_string(), "off".to_string()]),
+            _ => {
+                // 无法识别的值，默认使用 on
+                args.extend(["-fa".to_string(), "on".to_string()]);
+                app.emit(
+                    "model-log",
+                    serde_json::json!({
+                        "model_id": &model_id,
+                        "line": format!("[WARN] 无法识别的 Flash Attention 值: {}，已使用默认值 on", fa),
+                        "source": "stdout",
+                    }),
+                )
+                .ok();
+            }
+        }
     }
     if let Some(ctk) = &params.cache_type_k {
         args.extend(["-ctk".to_string(), ctk.clone()]);
@@ -478,7 +516,26 @@ pub async fn start_model(
         args.extend(["--frequency-penalty".to_string(), fp.to_string()]);
     }
     if let Some(r) = &params.reasoning {
-        args.extend(["--reasoning".to_string(), r.clone()]);
+        // llama-server 的 --reasoning 接受 on/off/auto，auto 时不传参数
+        match r.to_lowercase().as_str() {
+            "on" | "true" | "1" => args.extend(["--reasoning".to_string(), "on".to_string()]),
+            "off" | "false" | "0" => args.extend(["--reasoning".to_string(), "off".to_string()]),
+            "auto" => {
+                // "auto" 表示自动决定，不传 --reasoning 参数让 llama-server 自行判断
+            }
+            _ => {
+                // 无法识别的值，不传参数
+                app.emit(
+                    "model-log",
+                    serde_json::json!({
+                        "model_id": &model_id,
+                        "line": format!("[WARN] 无法识别的 reasoning 值: {}，已跳过 --reasoning 参数", r),
+                        "source": "stdout",
+                    }),
+                )
+                .ok();
+            }
+        }
     }
 
     // MTP (Multi-Token Prediction) auto-detection
@@ -528,7 +585,11 @@ pub async fn start_model(
     #[cfg(target_os = "macos")]
     {
         if let Ok(llamacpp_dir) = config::get_llamacpp_dir(Some(&app)) {
+            // 同时设置 DYLD_LIBRARY_PATH 和 current_dir：
+            // - DYLD_LIBRARY_PATH 用于查找动态库（旧版 macOS）
+            // - current_dir 作为备用，防止 SIP 删除 DYLD_LIBRARY_PATH（macOS 14+）
             cmd.env("DYLD_LIBRARY_PATH", llamacpp_dir.to_string_lossy().to_string());
+            cmd.current_dir(&llamacpp_dir);
         }
     }
     #[cfg(target_os = "windows")]

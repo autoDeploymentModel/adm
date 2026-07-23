@@ -314,7 +314,7 @@ const template = `
           <div class="param-row">
             <div class="param-label">Flash Attention<div class="param-key">-fa, --flash-attn</div></div>
             <div class="param-input">
-              <select id="flash_attn"><option value="auto">auto</option><option value="on">on</option><option value="off">off</option></select>
+              <select id="flash_attn"><option value="on">on</option><option value="off">off</option></select>
             </div>
           </div>
           <div class="param-row">
@@ -535,7 +535,7 @@ function fillFormFromParams(params) {
   }
   document.getElementById("threads").value = getParam("threads") ?? "";
   document.getElementById("threads_batch").value = getParam("threads_batch") ?? "";
-  document.getElementById("flash_attn").value = getParam("flash_attn") ?? "auto";
+  document.getElementById("flash_attn").value = getParam("flash_attn") ?? "on";
   document.getElementById("cache_type_k").value = getParam("cache_type_k") ?? "f16";
   document.getElementById("cache_type_v").value = getParam("cache_type_v") ?? "f16";
   document.getElementById("mlock").checked = getParam("mlock") ?? false;
@@ -574,7 +574,7 @@ function resetParams() {
   const defaults = {
     ctx_size: 25600, n_predict: -1, batch_size: 2048, ubatch_size: 512,
     n_gpu_layers: "auto", threads: null, threads_batch: null,
-    flash_attn: "auto", cache_type_k: "f16", cache_type_v: "f16",
+    flash_attn: "on", cache_type_k: "f16", cache_type_v: "f16",
     mlock: true, mmap: true, temperature: 1.0, top_k: 20, top_p: 0.95, min_p: 0.0,
     repeat_penalty: 1.0, repeat_last_n: -1, dry_multiplier: 0.0, dry_allowed_length: 2,
     dry_penalty_last_n: -1, presence_penalty: 1.5, frequency_penalty: 0.0, reasoning: "auto",
