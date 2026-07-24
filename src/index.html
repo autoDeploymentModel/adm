@@ -901,6 +901,8 @@ var content = document.getElementById('llp-content');
           startAdmAgentUpdate(upd, function () { location.hash = "#/agent"; });
           return;
         }
+        
+        // 所有平台统一导航到 #/agent，WT 的启动由 agent.html 负责
         location.hash = "#/agent";
       } catch (e) {
         hideAgentDownloadDialog();

@@ -667,7 +667,7 @@ const routes = {
 };
 
 // 子页面发起导航请求（替代原 postMessage({type:"navigate"})）
-function navigateTo(hash) { location.hash = hash; }  // 如 "#/chat?model_id=xxx&port=1010"
+function navigateTo(hash) { location.hash = hash; }  // 如 "#/chat?model_id=xxx&port=5678"
 ```
 
 视图切换时调用上一个视图的 `unmount()`（解绑 `listen` 句柄、`clearInterval`），再注入新模板并 `mount()`，共享 `window.__adm_state` 跨视图不丢状态。
@@ -1366,7 +1366,97 @@ python scripts/generate-icons.py
   - **粘贴绕过**：`term.paste` 覆写在粘贴期间置 `_suppressImeDedup`，粘贴内容不参与 IME 去重（防止粘贴文本恰好等于刚合成文本时被误丢）。
 - **启动守卫 `startRequested`（防并发启动）**：`startAgentNow()` 从进入起占用 `startRequested`，覆盖 `await start_agent_terminal` 整个异步窗口，成功后释放（运行中状态由 `terminalStarted` 表达），失败也释放。`confirmWorkdir()` / `restartAgentTerminal()` 在 `await stop_agent_terminal` 前先占用守卫。否则窗口期内 `agent-resize` / `ResizeObserver` 触发 `handleEnterAgent` / `maybeStartTerminal` 会并发发起第二次 `start_agent_terminal`，产生无法回收的孤儿 admAgent 进程；守卫在启动成功后释放，也保证了进程退出后 `handleEnterAgent` 能重新拉起。
 
-### 13.3 相关命令（`src-tauri/src/pages/agent.rs`）
+### 13.3 Windows Terminal 外部窗口模式（Windows 平台专属）
+
+**特性**：Windows 平台使用 Windows Terminal 作为外部窗口运行 admAgent，提供更原生的终端体验。
+
+**优势**：
+- GPU 加速渲染，比 xterm.js 在 WebView2 中更流畅
+- 支持多标签、分屏、主题等丰富功能
+- 减少前端维护成本（无需处理 IME 去重、滚轮转发等 hack）
+
+**打包配置**：
+
+1. `src-tauri/tauri.conf.json` 配置了 `bundle.resources` 和构建钩子：
+
+```json
+"build": {
+  "beforeBuildCommand": "node build-hook.cjs"
+},
+"bundle": {
+  "resources": [
+    "terminal-resources"
+  ]
+}
+```
+
+2. `src-tauri/build-hook.cjs` 脚本在构建前执行：
+   - **Windows**：创建 `terminal-resources` 符号链接指向项目根目录的 `terminal/`
+   - **macOS/Linux**：确保不存在 `terminal-resources`，避免打包无关文件
+
+3. 安装后 Windows 上的目录结构：
+```
+ADM\
+├── ADM.exe
+├── terminal-resources\    ← Windows Terminal 文件
+│   ├── wt.exe
+│   ├── WindowsTerminal.exe
+│   ├── defaults.json
+│   └── ...
+└── ...
+```
+
+**macOS 打包不会包含 terminal 目录。**
+
+**文件结构**：`terminal/` 目录需包含 Windows Terminal 运行时文件：
+
+```
+terminal/
+├── wt.exe                    # 命令行启动器
+├── WindowsTerminal.exe       # 主程序
+├── OpenConsole.exe           # 控制台主机
+├── defaults.json             # 默认配置
+├── CascadiaCode*.ttf         # 字体文件
+├── Microsoft.Terminal.*.dll  # 核心组件
+└── ...
+```
+
+**交互流程**：
+
+```
+�─────────────────────────────────────────────────────────────┐
+│                     Windows 平台流程                          │
+├─────────────────────────────────────────────────────────────┤
+│  1. 用户点击 Agent 按钮                                       │
+│  2. goAgent() 检测平台为 Windows                              │
+│  3. 调用 invoke("launch_windows_terminal_agent")              │
+│  4. 后端执行：                                                │
+│     - 检查 admAgent.exe 是否存在                              │
+│     - 检查 terminal/wt.exe 是否存在                           │
+│     - 确保 admAgent.json 配置已生成                           │
+│     - 启动 wt.exe 并传入启动参数                              │
+│  5. Windows Terminal 作为独立窗口启动                          │
+│  6. agent.html 显示状态页面（非终端）                          │
+│     - 显示"Agent 终端已启动"                                  │
+│     - 提供"重新打开终端"按钮                                  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**回退机制**：
+- 如果 `wt.exe` 启动失败（文件缺失或权限问题），自动回退到内置 xterm.js 终端模式
+- 用户在 agent.html 状态页面可点击「重新打开终端」重试
+
+**前端适配**：
+- `agent.html` 初始化时检测 `navigator.userAgent`
+- Windows 平台：跳过 xterm.js 初始化，显示状态页面
+- macOS 平台：继续使用原有 xterm.js + PTY 方案
+
+**命令行参数**：
+```powershell
+wt.exe --title "ADM Agent" --startingDirectory "<workdir>" powershell.exe -NoExit -Command "& '<agent_path>' --cwd '<workdir>'"
+```
+
+### 13.4 相关命令（`src-tauri/src/pages/agent.rs`）
 
 | 命令 | 说明 |
 |------|------|
@@ -1375,7 +1465,8 @@ python scripts/generate-icons.py
 | `check_adm_agent_update` | 点击 Agent 按钮时触发（优先级 3）：拉取远程清单比对本地 `admAgent` 版本号，返回是否需要更新及下载地址（仅 Windows） |
 | `download_adm_agent` | 首次安装：下载 `admAgent` 工具并推送进度（Agent 按钮点击时优先级 2 调用） |
 | `download_adm_agent_update` | 版本更新用：从 `check_adm_agent_update` 下发的地址下载并替换 `admAgent`（仅 Windows，推送 `adm-agent-update-progress`）。**替换前会自动停掉仍在运行的 Agent 终端**以释放 Windows 文件锁，避免「Agent 页未关闭时回到首页再进入触发更新 → 升级失败」的问题 |
-| `start_agent_terminal` | 启动内嵌 PTY 终端并自动运行 `admAgent` |
+| `launch_windows_terminal_agent` | **Windows 专属**：启动 Windows Terminal 外部窗口运行 admAgent |
+| `start_agent_terminal` | 启动内嵌 PTY 终端并自动运行 `admAgent`（macOS 或 WT 回退时使用） |
 | `agent_terminal_input` | 向前端按键写入 PTY |
 | `agent_terminal_resize` | 调整终端行列 |
 | `stop_agent_terminal` | 关闭终端会话 |

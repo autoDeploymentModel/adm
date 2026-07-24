@@ -454,6 +454,17 @@
   <script src="vendor/xterm/xterm.js"></script>
   <script src="vendor/xterm/addon-fit.js"></script>
   <script>
+    // ===== 平台检测（通过后端 API，比 userAgent 更可靠）=====
+    var _platform = null;
+    async function detectPlatform() {
+      if (_platform) return _platform;
+      try {
+        _platform = String(await invoke("get_platform_os")).toLowerCase();
+      } catch (_) {
+        _platform = 'unknown';
+      }
+      return _platform;
+    }
     // ===== Tauri IPC（iframe 兼容 macOS 回退到父窗口）=====
     var invoke = (function () {
       var invokeId = 0, pending = {};
@@ -809,6 +820,10 @@
     }
 
     async function stopAndHome() {
+      // Windows 平台：关闭 Windows Terminal 外部窗口
+      if (await detectPlatform() === 'windows') {
+        try { await invoke("stop_windows_terminal_agent"); } catch (_) {}
+      }
       try { await invoke("stop_agent_terminal", {}); } catch (_) {}
       terminalStarted = false;
       startRequested = false;
@@ -818,6 +833,17 @@
     // 重启 Agent 终端：先停旧会话再重新拉起 admAgent，使其重新加载 admAgent.json 的最新配置
     // （新增 / 修改云端模型后必须重启才能生效）。若终端当前未运行则跳过（下次启动自然加载新配置）。
     async function restartAgentTerminal() {
+      // Windows 平台：重启 Windows Terminal 外部窗口
+      if (await detectPlatform() === 'windows') {
+        try { await invoke("stop_windows_terminal_agent"); } catch (_) {}
+        // 短暂等待进程完全退出后再重新启动
+        setTimeout(function () {
+          invoke("launch_windows_terminal_agent").catch(function () {});
+        }, 500);
+        return;
+      }
+      
+      // macOS / 其他平台：重启 PTY 终端
       try {
         var st = await invoke("get_agent_status");
         if (!(st && st.running)) return; // 未在运行：无需重启
@@ -897,7 +923,17 @@
       try {
         await invoke("set_agent_workdir", { workdir: val });
         closeWorkdirDialog();
-        // 重启终端以应用新的工作目录（stop 在尚未启动时为 no-op）。
+
+        // Windows 平台：重启 Windows Terminal 外部窗口以应用新工作目录
+        if (await detectPlatform() === 'windows') {
+          try { await invoke("stop_windows_terminal_agent"); } catch (_) {}
+          setTimeout(function () {
+            invoke("launch_windows_terminal_agent").catch(function () {});
+          }, 500);
+          return;
+        }
+
+        // macOS / 其他平台：重启 PTY 终端以应用新的工作目录
         // 先占用启动守卫再停旧会话：覆盖 stop + start 整个异步窗口，避免窗口期内
         // agent-resize / ResizeObserver 触发 handleEnterAgent 并发启动第二个 admAgent。
         startRequested = true;
@@ -1154,8 +1190,66 @@
       setTimeout(function () { document.getElementById("cloud-name").focus(); }, 50);
     }
 
+    // ===== Windows Terminal 状态页面 =====
+    var _wtLaunched = false; // 防止重复启动
+    function initWindowsTerminalStatus() {
+      var wrap = document.getElementById('terminal-wrap');
+      if (!wrap) return;
+      
+      // 隐藏 loading overlay
+      hideLoading();
+      
+      // 显示状态信息
+      wrap.innerHTML = [
+        '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;',
+        '  height:100%;padding:40px;text-align:center;color:#e0e0e0;">',
+        '  <div style="font-size:48px;margin-bottom:16px;">🤖</div>',
+        '  <div style="font-size:18px;font-weight:600;margin-bottom:8px;">Agent 终端已启动</div>',
+        '  <div style="font-size:14px;color:#9090b0;margin-bottom:24px;line-height:1.6;">',
+        '    Windows Terminal 已在外部窗口中启动。<br>',
+        '    请在 Windows Terminal 窗口中与 admAgent 交互。',
+        '  </div>',
+        '  <button onclick="reopenWindowsTerminal()" style="',
+        '    background:#6c63ff;color:#fff;border:none;padding:10px 24px;',
+        '    border-radius:6px;font-size:14px;cursor:pointer;">',
+        '    重新打开终端',
+        '  </button>',
+        '</div>'
+      ].join('');
+    }
+
+    // 自动启动 Windows Terminal（防止重复启动）
+    async function autoLaunchWindowsTerminal() {
+      if (_wtLaunched) return;
+      _wtLaunched = true;
+      try {
+        await invoke("launch_windows_terminal_agent");
+      } catch (e) {
+        _wtLaunched = false;
+        alert("启动 Windows Terminal 失败: " + e);
+      }
+    }
+
+    // 重新打开 Windows Terminal
+    async function reopenWindowsTerminal() {
+      try {
+        await invoke("launch_windows_terminal_agent");
+      } catch (e) {
+        alert("启动失败: " + e);
+      }
+    }
+
     // ===== 初始化 =====
-    function initTerminal() {
+    async function initTerminal() {
+      // 平台检测：Windows 使用外部 WT，其他平台使用内嵌 xterm.js
+      var platform = await detectPlatform();
+      if (platform === 'windows') {
+        initWindowsTerminalStatus();
+        // 自动启动 Windows Terminal
+        autoLaunchWindowsTerminal();
+        return;
+      }
+
       term = new Terminal({
         fontFamily: 'Menlo, Consolas, "DejaVu Sans Mono", monospace',
         fontSize: 13,

@@ -668,7 +668,7 @@ function openImageGen(modelId) {
 }
 
 function goModel(modelId) {
-  const port = S().runningModelPort || 1010;
+  const port = S().runningModelPort || 5678;
   location.hash = "#/chat?model_id=" + encodeURIComponent(modelId) + "&port=" + port;
 }
 

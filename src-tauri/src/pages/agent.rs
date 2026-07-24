@@ -171,7 +171,7 @@ fn adm_agent_path(app: &tauri::AppHandle) -> Result<PathBuf, AppError> {
 const DEFAULT_CONTEXT_WINDOW: u32 = 25600;
 
 /// 默认端口（配置文件未显式配置 port 时使用）
-const DEFAULT_PORT: u16 = 1010;
+const DEFAULT_PORT: u16 = 5678;
 
 /// admAgent.json 的存放目录：`$HOME/.config/admAgent`
 /// Windows 下 $HOME 即 C:\Users\{username}，最终路径为 C:\Users\{username}\.config\admAgent
@@ -1433,6 +1433,109 @@ pub async fn stop_agent_terminal(state: tauri::State<'_, AppState>) -> Result<()
         stop_agent_session_clean(&mut sess);
     }
     Ok(())
+}
+
+/// Windows 平台：使用 Windows Terminal 启动 admAgent（外部窗口模式）
+/// 通过 wt.exe 启动一个新的 Windows Terminal 窗口运行 admAgent，
+/// 不经过 PTY，直接作为独立应用运行。
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub async fn launch_windows_terminal_agent(
+    app: tauri::AppHandle,
+) -> Result<(), AppError> {
+    use std::path::PathBuf;
+    use std::os::windows::process::CommandExt;
+    let agent_path = adm_agent_path(&app)?;
+    if !agent_path.exists() {
+        bail!("未找到 admAgent 工具: {}", agent_path.display());
+    }
+
+    // 获取工作目录
+    let workdir = load_agent_workdir(&app);
+
+    // 获取 wt.exe 路径（位于 terminal-resources/ 目录下，仅 Windows 打包时存在）
+    let exe_dir = config::get_exe_dir()?;
+    let wt_path = exe_dir.join("terminal-resources").join("wt.exe");
+    if !wt_path.exists() {
+        bail!("未找到 Windows Terminal: {}", wt_path.display());
+    }
+
+    // 确保 admAgent.json 配置已生成
+    if let Err(e) = ensure_adm_agent_config(&app) {
+        eprintln!("[admAgent] 生成 admAgent.json 配置失败: {}", e);
+    }
+
+    // 构造 wt.exe 命令行参数
+    // wt.exe --title "ADM Agent" --startingDirectory "workdir" powershell.exe -NoExit -Command "& 'agent_path' --cwd 'workdir'"
+    let agent_path_str = agent_path.to_string_lossy().to_string();
+    
+    let mut cmd = std::process::Command::new(&wt_path);
+    cmd.arg("--title");
+    cmd.arg("ADM Agent");
+    
+    // 设置启动目录
+    let starting_dir = if workdir.is_empty() {
+        exe_dir.clone()
+    } else {
+        PathBuf::from(&workdir)
+    };
+    cmd.arg("--startingDirectory");
+    cmd.arg(starting_dir.to_string_lossy().to_string());
+    
+    // 使用 powershell 启动 admAgent
+    cmd.arg("powershell.exe");
+    cmd.arg("-NoExit");
+    cmd.arg("-Command");
+    
+    let ps_command = if workdir.is_empty() {
+        format!("\"{}\"", agent_path_str)
+    } else {
+        format!("\"{}\" --cwd \"{}\"", agent_path_str, workdir)
+    };
+    cmd.arg(ps_command);
+
+    // 启动进程（隐藏窗口，因为 WT 会自己显示）
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    
+    cmd.spawn()
+        .map_err(|e| format!("启动 Windows Terminal 失败: {}", e))?;
+
+    Ok(())
+}
+
+/// Windows 平台：关闭 Windows Terminal 外部窗口及其中运行的 admAgent 进程。
+/// 通过 taskkill 按进程名强杀整棵进程树（wt.exe → powershell.exe → admAgent.exe）。
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub async fn stop_windows_terminal_agent() -> Result<(), AppError> {
+    // 先杀 admAgent.exe（它在 WT 内部的 powershell 中运行），
+// 再杀 WindowsTerminal.exe（关闭 WT 窗口）。
+// taskkill /T /F 会连带子进程一起杀掉。
+let _ = platform::create_hidden_command("taskkill")
+    .args(["/IM", "admAgent.exe", "/T", "/F"])
+    .spawn();
+
+let _ = platform::create_hidden_command("taskkill")
+    .args(["/IM", "WindowsTerminal.exe", "/T", "/F"])
+    .spawn();
+
+Ok(())
+}
+
+/// 非 Windows 平台：返回未实现错误
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+pub async fn stop_windows_terminal_agent() -> Result<(), AppError> {
+Ok(())
+}
+
+/// 非 Windows 平台：返回未实现错误
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+pub async fn launch_windows_terminal_agent(
+    _app: tauri::AppHandle,
+) -> Result<(), AppError> {
+    bail!("Windows Terminal 模式仅在 Windows 平台上可用")
 }
 
 /// 窗口关闭时清理 Agent 会话（供 lib.rs 调用）

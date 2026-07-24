@@ -283,7 +283,7 @@ function goBack() {
 
 function init(params) {
   currentModelId = params.model_id || "未知模型";
-  const port = params.port || 1010;
+  const port = params.port || 5678;
 
   document.getElementById("model-name").textContent = currentModelId + " - 交互界面";
   document.getElementById('log-model-id').textContent = currentModelId;

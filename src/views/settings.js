@@ -357,7 +357,7 @@ const template = `
 
         <div class="param-group">
           <div class="param-group-title">服务参数</div>
-          <div class="param-row"><div class="param-label">监听端口<div class="param-key">--port</div></div><div class="param-input"><input type="number" id="port" value="1010" min="1" max="65535"></div></div>
+          <div class="param-row"><div class="param-label">监听端口<div class="param-key">--port</div></div><div class="param-input"><input type="number" id="port" value="5678" min="1" max="65535"></div></div>
           <div class="param-row"><div class="param-label">监听地址<div class="param-key">--host</div></div><div class="param-input"><select id="host"><option value="127.0.0.1">127.0.0.1 (本地)</option><option value="0.0.0.0">0.0.0.0 (所有接口)</option></select></div></div>
         </div>
 
@@ -509,7 +509,7 @@ function getParamsFromForm() {
     presence_penalty: parseFloat(document.getElementById("presence_penalty").value) || 1.5,
     frequency_penalty: parseFloat(document.getElementById("frequency_penalty").value) || 0.0,
     reasoning: document.getElementById("reasoning").value,
-    port: parseInt(document.getElementById("port").value) || 1010,
+    port: parseInt(document.getElementById("port").value) || 5678,
     host: document.getElementById("host").value,
     preset_mode: document.getElementById("preset_mode").value,
   };
@@ -552,7 +552,7 @@ function fillFormFromParams(params) {
   document.getElementById("presence_penalty").value = getParam("presence_penalty") ?? 1.5;
   document.getElementById("frequency_penalty").value = getParam("frequency_penalty") ?? 0.0;
   document.getElementById("reasoning").value = getParam("reasoning") ?? "auto";
-  document.getElementById("port").value = getParam("port") ?? 1010;
+  document.getElementById("port").value = getParam("port") ?? 5678;
   document.getElementById("host").value = getParam("host") ?? "127.0.0.1";
   const presetMode = getParam("preset_mode") ?? "default";
   document.getElementById("preset_mode").value = PRESET_MODES[presetMode] ? presetMode : "default";
@@ -578,7 +578,7 @@ function resetParams() {
     mlock: true, mmap: true, temperature: 1.0, top_k: 20, top_p: 0.95, min_p: 0.0,
     repeat_penalty: 1.0, repeat_last_n: -1, dry_multiplier: 0.0, dry_allowed_length: 2,
     dry_penalty_last_n: -1, presence_penalty: 1.5, frequency_penalty: 0.0, reasoning: "auto",
-    port: 1010, host: "127.0.0.1",
+    port: 5678, host: "127.0.0.1",
   };
   fillFormFromParams(defaults);
   applyCtxFloor();

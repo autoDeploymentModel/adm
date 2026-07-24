@@ -560,7 +560,7 @@ pub async fn start_model(
             .ok();
         }
 
-    let port = params.port.unwrap_or(1010);
+    let port = params.port.unwrap_or(5678);
     args.extend(["--port".to_string(), port.to_string()]);
 
     if let Some(host) = &params.host {

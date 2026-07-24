@@ -39,6 +39,13 @@ pub fn run() {
 
                 // 关闭 Agent 终端会话
                 agent::kill_agent_session(&state);
+
+                // Windows 平台：关闭 Windows Terminal 外部窗口及 admAgent 进程
+                #[cfg(target_os = "windows")]
+                {
+                    crate::common::utils::platform::kill_process_by_name("admAgent.exe");
+                    crate::common::utils::platform::kill_process_by_name("WindowsTerminal.exe");
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -88,6 +95,8 @@ pub fn run() {
             agent::agent_terminal_input,
             agent::agent_terminal_resize,
             agent::stop_agent_terminal,
+            agent::launch_windows_terminal_agent,
+            agent::stop_windows_terminal_agent,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -60,7 +60,7 @@
 - [x] macOS 下载/更新地址一致性 + 统一 https —— 暂不兼容 macOS/Linux，搁置
 - [x] 窗口 minWidth 刻意放大 —— 作者确认是有意设置
 - [x] Windows 实机验证 admAgent 随终端自动启动 —— 已将 `\r` 改为 `\r\n`，`cargo check` 通过（实机验证待作者进行）
-- [ ] `doc/dev_doc.md` 的新增章节（agent 命令、端口 1010、admAgent.json 路径）与实现一致
+- [ ] `doc/dev_doc.md` 的新增章节（agent 命令、端口 5678、admAgent.json 路径）与实现一致
 - [x] ctx_size 65536 下限对既有模型是否兼容 —— 作者确认撑得住
 - [x] Agent 页首次进入终端宽度不适配 —— 已修复（`agent.html`）：根因为首次进入时后端 `agent-terminal-ready` 事件早于本页注册 `message` 监听而丢失，原 rAF fit 在布局未稳时算错列数。改用 `ResizeObserver` 兜底（observe 即回调真实尺寸，窗口缩放也自动适配）+ 在 `startAgentTerminal` 的 `invoke` 成功（PTY 已建）后主动 `fit` 并 `resize` 同步后端，不再依赖一次性事件。
 
@@ -109,7 +109,7 @@
 
 ### 上线前建议
 - 执行一次 `pnpm tauri build`（release）验证完整打包（前端拷贝、权限、签名）；`cargo check` 仅验证库编译。
-- 核对 `doc/dev_doc.md` 新增章节（agent 命令、端口 1010、admAgent.json 路径）与实现一致。
+- 核对 `doc/dev_doc.md` 新增章节（agent 命令、端口 5678、admAgent.json 路径）与实现一致。
 
 ---
 
