@@ -590,19 +590,67 @@ pub async fn start_model(
             // - current_dir 作为备用，防止 SIP 删除 DYLD_LIBRARY_PATH（macOS 14+）
             cmd.env("DYLD_LIBRARY_PATH", llamacpp_dir.to_string_lossy().to_string());
             cmd.current_dir(&llamacpp_dir);
+            app.emit(
+                "model-log",
+                serde_json::json!({
+                    "model_id": &model_id,
+                    "line": format!("[DEBUG] macOS env: DYLD_LIBRARY_PATH={}, current_dir={}", llamacpp_dir.to_string_lossy(), llamacpp_dir.to_string_lossy()),
+                    "source": "stdout",
+                }),
+            ).ok();
         }
     }
+
+    app.emit(
+        "model-log",
+        serde_json::json!({
+            "model_id": &model_id,
+            "line": format!("[DEBUG] server_path: {}", server_path.to_string_lossy()),
+            "source": "stdout",
+        }),
+    ).ok();
+    app.emit(
+        "model-log",
+        serde_json::json!({
+            "model_id": &model_id,
+            "line": format!("[DEBUG] full command: {} {:?}", server_path.to_string_lossy(), args),
+            "source": "stdout",
+        }),
+    ).ok();
+
     #[cfg(target_os = "windows")]
     let mut child = cmd
         .args(&args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .map_err(|e| format!("启动 llama-server 失败: {}", e))?;
+        .map_err(|e| {
+            let msg = format!("启动 llama-server 失败: {} | path: {} | args: {:?}", e, server_path.to_string_lossy(), args);
+            app.emit(
+                "model-log",
+                serde_json::json!({
+                    "model_id": &model_id,
+                    "line": format!("[ERROR] spawn failed: {}", msg),
+                    "source": "stderr",
+                }),
+            ).ok();
+            msg
+        })?;
 
     #[cfg(not(target_os = "windows"))]
     let mut child = crate::common::utils::platform::spawn_detached(cmd.args(&args).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()))
-        .map_err(|e| format!("启动 llama-server 失败: {}", e))?;
+        .map_err(|e| {
+            let msg = format!("启动 llama-server 失败: {} | path: {} | args: {:?}", e, server_path.to_string_lossy(), args);
+            app.emit(
+                "model-log",
+                serde_json::json!({
+                    "model_id": &model_id,
+                    "line": format!("[ERROR] spawn failed: {}", msg),
+                    "source": "stderr",
+                }),
+            ).ok();
+            msg
+        })?;
 
     let pid = child.id();
 
@@ -633,69 +681,114 @@ pub async fn start_model(
     let app_clone = app.clone();
     let model_id_clone = model_id.clone();
 
+    let app_clone2 = app.clone();
+    let model_id_clone2 = model_id.clone();
+
     std::thread::spawn(move || {
         use std::io::{BufRead, BufReader};
-        
-        if let Some(stdout) = child.stdout.take() {
-            let reader = BufReader::new(stdout);
-            for line in reader.lines().map_while(Result::ok) {
-                app_clone
-                    .emit(
-                        "model-log",
-                        serde_json::json!({
-                            "model_id": &model_id_clone,
-                            "line": line,
-                            "source": "stdout",
-                        }),
-                    )
-                    .ok();
 
-                if line.contains("llama server listening")
-                    || line.contains("HTTP server listening")
-                    || line.contains("listening on")
-                {
-                    app_clone
+        // 并发读取 stdout 和 stderr，防止单个流阻塞导致另一个流无法读取
+        let stdout_handle = if let Some(stdout) = child.stdout.take() {
+            let app_c = app_clone.clone();
+            let mid = model_id_clone.clone();
+            Some(std::thread::spawn(move || {
+                let reader = BufReader::new(stdout);
+                for line in reader.lines().map_while(Result::ok) {
+                    app_c
                         .emit(
-                            "model-started",
+                            "model-log",
                             serde_json::json!({
-                                "model_id": &model_id_clone,
-                                "port": port,
+                                "model_id": &mid,
+                                "line": line,
+                                "source": "stdout",
+                            }),
+                        )
+                        .ok();
+
+                    if line.contains("llama server listening")
+                        || line.contains("HTTP server listening")
+                        || line.contains("listening on")
+                    {
+                        app_c
+                            .emit(
+                                "model-started",
+                                serde_json::json!({
+                                    "model_id": &mid,
+                                    "port": port,
+                                }),
+                            )
+                            .ok();
+                    }
+                }
+            }))
+        } else {
+            None
+        };
+
+        let stderr_handle = if let Some(stderr) = child.stderr.take() {
+            let app_c = app_clone.clone();
+            let mid = model_id_clone.clone();
+            Some(std::thread::spawn(move || {
+                let reader = BufReader::new(stderr);
+                for line in reader.lines().map_while(Result::ok) {
+                    app_c
+                        .emit(
+                            "model-log",
+                            serde_json::json!({
+                                "model_id": &mid,
+                                "line": line,
+                                "source": "stderr",
                             }),
                         )
                         .ok();
                 }
-            }
-        }
+            }))
+        } else {
+            None
+        };
 
-        if let Some(stderr) = child.stderr.take() {
-            let reader = BufReader::new(stderr);
-            for line in reader.lines().map_while(Result::ok) {
-                app_clone
-                    .emit(
-                        "model-log",
-                        serde_json::json!({
-                            "model_id": &model_id_clone,
-                            "line": line,
-                            "source": "stderr",
-                        }),
-                    )
-                    .ok();
+        // 等待 stdout/stderr 读取线程结束
+        if let Some(h) = stdout_handle { let _ = h.join(); }
+        if let Some(h) = stderr_handle { let _ = h.join(); }
+
+        // 等待子进程退出，获取退出码
+        let exit_status = child.wait();
+        match &exit_status {
+            Ok(status) => {
+                app_clone2.emit(
+                    "model-log",
+                    serde_json::json!({
+                        "model_id": &model_id_clone2,
+                        "line": format!("[DEBUG] llama-server exited with status: {}", status),
+                        "source": "stdout",
+                    }),
+                ).ok();
+            }
+            Err(e) => {
+                app_clone2.emit(
+                    "model-log",
+                    serde_json::json!({
+                        "model_id": &model_id_clone2,
+                        "line": format!("[ERROR] failed to wait for llama-server: {}", e),
+                        "source": "stderr",
+                    }),
+                ).ok();
             }
         }
 
         // 清除 AppState 中的状态，确保进程退出后可以重新启动
         {
-            let state = app_clone.state::<AppState>();
+            let state = app_clone2.state::<AppState>();
             *state.running_process.lock().unwrap_or_else(|e| e.into_inner()) = None;
             *state.running_model_id.lock().unwrap_or_else(|e| e.into_inner()) = None;
             *state.running_port.lock().unwrap_or_else(|e| e.into_inner()) = None;
             state.set_model_running(false);
         }
 
-        app_clone
+        app_clone2
             .emit(
                 "model-stopped",
-                serde_json::json!({ "model_id": &model_id_clone }),
+                serde_json::json!({ "model_id": &model_id_clone2 }),
             )
             .ok();
     });

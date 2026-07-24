@@ -213,6 +213,104 @@
       box-shadow: 0 8px 30px rgba(0,0,0,0.5);
       cursor: default;
     }
+
+    /* ===== 全局启动日志面板 ===== */
+    #launch-log-btn {
+      cursor: pointer;
+      font-size: 13px;
+      padding: 2px 10px;
+      margin-left: 10px;
+      transition: color 0.2s;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1px;
+      position: relative;
+    }
+    #launch-log-btn .btn-icon { font-size: 20px; line-height: 1; }
+    #launch-log-btn .btn-text { font-size: 11px; font-weight: 500; }
+    #launch-log-btn:hover { color: #6c63ff; }
+#launch-log-panel {
+      display: none;
+      position: fixed;
+      right: 0;
+      bottom: 44px;
+      width: 720px;
+      max-width: 100vw;
+      height: 420px;
+      background: #0d1117;
+      border: 1px solid #2a2a4e;
+      border-bottom: none;
+      border-radius: 8px 0 0 0;
+      z-index: 9990;
+      flex-direction: column;
+      box-shadow: 0 -4px 24px rgba(0,0,0,0.5);
+    }
+    #launch-log-panel.show { display: flex; }
+
+    .llp-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 14px;
+      background: #161b22;
+      border-bottom: 1px solid #2a2a4e;
+      border-radius: 8px 0 0 0;
+      flex-shrink: 0;
+    }
+    .llp-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #e0e0e0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .llp-status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #555;
+      flex-shrink: 0;
+    }
+    .llp-status-dot.running { background: #43a047; }
+    .llp-status-dot.stopped { background: #e53935; }
+    .llp-controls { display: flex; gap: 6px; }
+    .llp-btn {
+      padding: 3px 10px;
+      border: none;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .llp-btn-clear { background: #e53935; color: #fff; }
+    .llp-btn-clear:hover { background: #c62828; }
+    .llp-btn-export { background: #43a047; color: #fff; }
+    .llp-btn-export:hover { background: #2e7d32; }
+    .llp-btn-close { background: #333; color: #ccc; }
+    .llp-btn-close:hover { background: #444; }
+
+    .llp-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 14px;
+      font-family: "SF Mono", "Cascadia Code", "Consolas", monospace;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .llp-content::-webkit-scrollbar { width: 6px; }
+    .llp-content::-webkit-scrollbar-track { background: #0d1117; }
+    .llp-content::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+
+    .llp-line { white-space: pre-wrap; word-break: break-all; padding: 1px 0; }
+    .llp-line.info { color: #c9d1d9; }
+    .llp-line.stderr { color: #f97583; }
+    .llp-line.error { color: #f85149; font-weight: 600; }
+    .llp-line.warning { color: #d29922; }
+    .llp-line.success { color: #56d364; }
+    .llp-line.debug { color: #58a6ff; }
+    .llp-line.timestamp { color: #6e7681; }
   </style>
 </head>
 <body>
@@ -266,6 +364,27 @@
           <span class="hw-value" id="cpu-info">--</span>
         </div>
       </div>
+      <div id="launch-log-btn" onclick="toggleLaunchLogPanel()">
+        <span class="btn-icon">📋</span>
+        <span class="btn-text">启动日志</span>
+        
+      </div>
+    </div>
+
+    <div id="launch-log-panel">
+      <div class="llp-header">
+        <div class="llp-title">
+          <span class="llp-status-dot" id="llp-status-dot"></span>
+          <span>启动日志</span>
+          <span id="llp-model-name" style="color:#8b949e;font-weight:400;font-size:12px;"></span>
+        </div>
+        <div class="llp-controls">
+          <button class="llp-btn llp-btn-export" onclick="exportLaunchLogs()">导出</button>
+          <button class="llp-btn llp-btn-clear" onclick="clearLaunchLogs()">清除</button>
+          <button class="llp-btn llp-btn-close" onclick="toggleLaunchLogPanel()">关闭</button>
+        </div>
+      </div>
+      <div class="llp-content" id="llp-content"></div>
     </div>
   </div>
 
@@ -305,6 +424,102 @@
       const i = Math.floor(Math.log(bytes) / Math.log(k));
       return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + sizes[i];
     }
+
+    // ===== 全局启动日志 =====
+    const launchLogs = [];
+    let launchLogPanelVisible = false;
+    let launchLogUnreadCount = 0;
+    let launchLogCurrentModel = null;
+
+    function addLaunchLog(line, type) {
+      type = type || 'info';
+      const ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+      const entry = { ts: ts, line: line, type: type };
+      launchLogs.push(entry);
+      if (launchLogs.length > 2000) launchLogs.shift();
+
+
+      var content = document.getElementById('llp-content');
+      if (content) {
+        var div = document.createElement('div');
+        div.className = 'llp-line ' + type;
+        div.textContent = '[' + ts + '] ' + line;
+        content.appendChild(div);
+        content.scrollTop = content.scrollHeight;
+      }
+    }
+
+    function toggleLaunchLogPanel() {
+      launchLogPanelVisible = !launchLogPanelVisible;
+      var panel = document.getElementById('launch-log-panel');
+      if (panel) panel.classList.toggle('show', launchLogPanelVisible);
+if (launchLogPanelVisible) {
+var content = document.getElementById('llp-content');
+        if (content) content.scrollTop = content.scrollHeight;
+      }
+    }
+
+    function clearLaunchLogs() {
+      launchLogs.length = 0;
+      var content = document.getElementById('llp-content');
+      if (content) content.innerHTML = '';
+    }
+
+    function exportLaunchLogs() {
+      if (launchLogs.length === 0) return;
+      var text = launchLogs.map(function(e) { return '[' + e.ts + '] [' + e.type + '] ' + e.line; }).join('\\n');
+      var blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = 'launch-log-' + Date.now() + '.txt';
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function setLaunchLogStatus(running, modelName) {
+      var dot = document.getElementById('llp-status-dot');
+      var nameEl = document.getElementById('llp-model-name');
+      if (dot) {
+        dot.classList.remove('running', 'stopped');
+        if (running) dot.classList.add('running');
+        else dot.classList.add('stopped');
+      }
+      if (nameEl) nameEl.textContent = modelName ? '- ' + modelName : '';
+    }
+
+    function setupGlobalLaunchLogListener() {
+      if (typeof listen !== "function") return;
+      try {
+        listen("model-log", function(event) {
+          var payload = event.payload || {};
+          var line = payload.line;
+          var source = payload.source || 'stdout';
+          if (!line) return;
+          var type = 'info';
+          if (source === 'stderr') type = 'stderr';
+          else if (/error|Error|ERROR|fatal|FATAL/.test(line)) type = 'error';
+          else if (/warning|Warning|WARN/.test(line)) type = 'warning';
+          else if (/success|Success|listening|started|ready/.test(line)) type = 'success';
+          else if (/^\[DEBUG\]|^\[WARN\]/.test(line)) type = 'debug';
+          addLaunchLog(line, type);
+        });
+        listen("model-started", function(event) {
+          var payload = event.payload || {};
+          launchLogCurrentModel = payload.model_id || launchLogCurrentModel;
+          setLaunchLogStatus(true, launchLogCurrentModel);
+          addLaunchLog('✅ 模型启动成功! 端口: ' + (payload.port || ''), 'success');
+        });
+        listen("model-stopped", function(event) {
+          setLaunchLogStatus(false, null);
+          addLaunchLog('⏹️ 模型已停止', 'info');
+        });
+      } catch(e) { console.error('启动日志监听失败:', e); }
+    }
+
+    window.toggleLaunchLogPanel = toggleLaunchLogPanel;
+    window.clearLaunchLogs = clearLaunchLogs;
+    window.exportLaunchLogs = exportLaunchLogs;
 
     // ===== 导航激活态 =====
     function setActiveNav(id) {
@@ -886,6 +1101,7 @@
         setupAdmAgentUpdateProgressListener();
         setupAgentDownloadListener();
         setupAgentTerminalEventForwarding();
+        setupGlobalLaunchLogListener();
 
         systemInfo = await invoke("get_system_info");
         window.__adm_state.systemInfo = systemInfo;

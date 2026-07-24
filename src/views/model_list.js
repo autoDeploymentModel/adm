@@ -218,14 +218,6 @@ const template = `
     background: #c62828;
   }
 
-  .btn-log {
-    background: #8e24aa;
-    color: #fff;
-  }
-
-  .btn-log:hover:not(:disabled) {
-    background: #6a1b9a;
-  }
 
   .actions-cell {
     white-space: nowrap;
@@ -274,85 +266,6 @@ const template = `
   @keyframes slideIn {
     from { transform: translateX(100%); opacity: 0; }
     to { transform: translateX(0); opacity: 1; }
-  }
-
-  .log-panel {
-    margin: 0 20px 20px;
-    background: #16213e;
-    border-radius: 8px;
-    overflow: hidden;
-    display: none;
-  }
-
-  .log-panel.visible {
-    display: block;
-  }
-
-  .log-panel-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 12px 16px;
-    background: #0f3460;
-    border-bottom: 1px solid #1a1a3e;
-  }
-
-  .log-panel-title {
-    font-size: 14px;
-    font-weight: 600;
-    color: #ffffff;
-  }
-
-  .log-panel-controls {
-    display: flex;
-    gap: 8px;
-  }
-
-  .log-panel-btn {
-    padding: 4px 12px;
-    border: none;
-    border-radius: 4px;
-    font-size: 12px;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-
-  .log-panel-btn-clear {
-    background: #e53935;
-    color: #fff;
-  }
-
-  .log-panel-btn-clear:hover {
-    background: #c62828;
-  }
-
-  .log-panel-btn-export {
-    background: #43a047;
-    color: #fff;
-  }
-
-  .log-panel-btn-export:hover {
-    background: #2e7d32;
-  }
-
-  .log-panel-btn-toggle {
-    background: #1e88e5;
-    color: #fff;
-  }
-
-  .log-panel-btn-toggle:hover {
-    background: #1565c0;
-  }
-
-  .log-panel-content {
-    padding: 12px 16px;
-    max-height: 300px;
-    overflow-y: auto;
-    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-    font-size: 12px;
-    line-height: 1.6;
-    color: #a0a0c0;
-    background: #0d1117;
   }
 
   .log-line {
@@ -450,17 +363,6 @@ const template = `
       </tr>
     </tbody>
   </table></div>
-  <div id="log-panel" class="log-panel">
-    <div class="log-panel-header">
-      <div class="log-panel-title">📋 模型启动日志 - <span id="log-model-id"></span></div>
-      <div class="log-panel-controls">
-        <button class="log-panel-btn log-panel-btn-export" id="log-export-btn">导出</button>
-        <button id="log-toggle-btn" class="log-panel-btn log-panel-btn-toggle">隐藏</button>
-        <button class="log-panel-btn log-panel-btn-clear" id="log-clear-btn">清除</button>
-      </div>
-    </div>
-    <div id="log-content" class="log-panel-content"></div>
-  </div>
 </main>
 </div>
 `;
@@ -569,120 +471,11 @@ async function populateTypeFilter() {
   updateModelDesc();
 }
 
-function toggleLogPanel() {
-  const panel = document.getElementById('log-panel');
-  const btn = document.getElementById('log-toggle-btn');
-  S().logPanelVisible = !S().logPanelVisible;
-  if (S().logPanelVisible) {
-    panel.classList.add('visible');
-    btn.textContent = '隐藏';
-  } else {
-    panel.classList.remove('visible');
-    btn.textContent = '显示';
-  }
-  localStorage.setItem('logPanelVisible', S().logPanelVisible);
-}
-
-function clearLogs() {
-  const el = document.getElementById('log-content');
-  if (el) el.innerHTML = '';
-  if (S().currentLogModelId) localStorage.removeItem('modelLogs_' + S().currentLogModelId);
-}
-
 function addLogLine(line, type = 'info') {
-  const logContent = document.getElementById('log-content');
-  if (!logContent) return;
-  const logLine = document.createElement('div');
-  logLine.className = 'log-line ' + type;
-  logLine.textContent = line;
-  logContent.appendChild(logLine);
-  logContent.scrollTop = logContent.scrollHeight;
-  saveLogToStorage(line, type);
-}
-
-function saveLogToStorage(line, type) {
-  if (!S().currentLogModelId) return;
-  const storageKey = 'modelLogs_' + S().currentLogModelId;
-  const logs = JSON.parse(localStorage.getItem(storageKey) || '[]');
-  logs.push({ line: line, type: type, timestamp: Date.now() });
-  if (logs.length > 5000) logs.shift();
-  localStorage.setItem(storageKey, JSON.stringify(logs));
-}
-
-function loadLogsFromStorage(modelId) {
-  const storageKey = 'modelLogs_' + modelId;
-  const logs = JSON.parse(localStorage.getItem(storageKey) || '[]');
-  const logContent = document.getElementById('log-content');
-  logContent.innerHTML = '';
-  logs.forEach(function(log) {
-    const logLine = document.createElement('div');
-    logLine.className = 'log-line ' + log.type;
-    logLine.textContent = log.line;
-    logContent.appendChild(logLine);
-  });
-  if (logContent.children.length > 0) {
-    logContent.scrollTop = logContent.scrollHeight;
+  // 委托给全局启动日志面板
+  if (typeof window.addLaunchLog === 'function') {
+    window.addLaunchLog(line, type);
   }
-  return logs.length;
-}
-
-function exportLogs() {
-  if (!S().currentLogModelId) {
-    showToast('没有可导出的日志');
-    return;
-  }
-  const logContent = document.getElementById('log-content');
-  const logLines = logContent.querySelectorAll('.log-line');
-  if (logLines.length === 0) {
-    showToast('日志为空，无法导出');
-    return;
-  }
-  let exportContent = '=== ADM 模型日志 ===\n';
-  exportContent += '模型: ' + S().currentLogModelId + '\n';
-  exportContent += '导出时间: ' + new Date().toLocaleString('zh-CN') + '\n';
-  exportContent += '================================\n\n';
-  logLines.forEach(function(line) {
-    exportContent += line.textContent + '\n';
-  });
-  const blob = new Blob([exportContent], { type: 'text/plain;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = S().currentLogModelId + '_log_' + new Date().toISOString().replace(/[:.]/g, '-') + '.log';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-  showToast('日志已导出: ' + a.download);
-}
-
-function showLogPanel(modelId) {
-  S().currentLogModelId = modelId;
-  document.getElementById('log-model-id').textContent = modelId;
-  document.getElementById('log-content').innerHTML = '';
-  const panel = document.getElementById('log-panel');
-  if (!S().logPanelVisible) {
-    S().logPanelVisible = true;
-    panel.classList.add('visible');
-    document.getElementById('log-toggle-btn').textContent = '隐藏';
-  }
-  const loadedCount = loadLogsFromStorage(modelId);
-  if (loadedCount > 0) {
-    addLogLine(`[${new Date().toLocaleTimeString()}] 📋 已恢复 ${loadedCount} 条历史日志`, 'info');
-  }
-  addLogLine(`[${new Date().toLocaleTimeString()}] 🚀 开始启动模型: ${modelId}`, 'info');
-}
-
-function hideLogPanel() {
-  S().currentLogModelId = null;
-  document.getElementById('log-panel').classList.remove('visible');
-  S().logPanelVisible = false;
-  document.getElementById('log-toggle-btn').textContent = '显示';
-}
-
-function showModelLog(modelId) {
-  showLogPanel(modelId);
-  addLogLine(`[${new Date().toLocaleTimeString()}] 📋 查看模型日志: ${modelId}`, 'info');
 }
 
 function renderModelTable() {
@@ -740,8 +533,7 @@ function renderModelTable() {
 
     let actionsHtml = "";
     if (isRunning) {
-      actionsHtml = '<button class="btn btn-view" id="view-' + safeModelId + '">查看模型</button>';
-      actionsHtml += '<button class="btn btn-log" id="log-' + safeModelId + '">日志</button>';
+actionsHtml = '<button class="btn btn-view" id="view-' + safeModelId + '">查看模型</button>';
       actionsHtml += '<button class="btn btn-stop" data-stop-btn="' + safeModelId + '" id="stop-' + safeModelId + '">关闭模型</button>';
     } else if (model.model_type === "文本生成图片" && downloaded) {
       actionsHtml = '<button class="btn btn-start" id="img-' + safeModelId + '">生成图片</button>';
@@ -801,13 +593,6 @@ function bindRowEvents() {
     btn.addEventListener('click', function() {
       const modelId = btn.id.replace('view-', '');
       goModel(modelId);
-    });
-  });
-  const logBtns = document.querySelectorAll('#model-tbody .btn-log');
-  logBtns.forEach(function(btn) {
-    btn.addEventListener('click', function() {
-      const modelId = btn.id.replace('log-', '');
-      showModelLog(modelId);
     });
   });
   const imgBtns = document.querySelectorAll('#model-tbody .btn-start[id^="img-"]');
@@ -1004,21 +789,11 @@ function handleTauriEvent(type, payload) {
       }
       break;
     }
-    case "model-started": {
+case "model-started": {
       st.runningModelId = model_id;
       st.runningModelPort = port;
       renderModelTable();
-      const logEl = document.getElementById('log-content');
-      const pendingLogs = [];
-      if (logEl) logEl.querySelectorAll('.log-line').forEach(function(el) {
-        pendingLogs.push({ line: el.textContent, type: (el.className || '').replace('log-line ', ''), timestamp: Date.now() });
-      });
-      if (pendingLogs.length > 0) {
-        const key = 'modelLogs_' + model_id;
-        const existing = JSON.parse(localStorage.getItem(key) || '[]');
-        localStorage.setItem(key, JSON.stringify([...existing, ...pendingLogs]));
-      }
-      showLogPanel(model_id);
+      // 日志面板默认不自动弹出，用户可点击底部栏「启动日志」按钮查看
       addLogLine(`[${new Date().toLocaleTimeString()}] ✅ 模型启动成功! 端口: ${port}`, 'success');
       break;
     }
@@ -1027,9 +802,6 @@ function handleTauriEvent(type, payload) {
       st.runningModelPort = null;
       renderModelTable();
       addLogLine(`[${new Date().toLocaleTimeString()}] ⏹️ 模型已停止`, 'info');
-      setTimeout(() => {
-        if (st.currentLogModelId === model_id) hideLogPanel();
-      }, 3000);
       break;
     }
     case "model-error": {
@@ -1084,16 +856,10 @@ async function init() {
 
   try {
     const status = await invoke()("get_model_status");
-    if (status.running) {
-      st.runningModelId = status.model_id;
-      st.runningModelPort = status.port;
-      const savedVisible = localStorage.getItem('logPanelVisible');
-      if (savedVisible === 'true') {
-        st.logPanelVisible = true;
-        document.getElementById('log-panel').classList.add('visible');
-        document.getElementById('log-toggle-btn').textContent = '隐藏';
-      }
-    }
+if (status.running) {
+  st.runningModelId = status.model_id;
+  st.runningModelPort = status.port;
+}
   } catch (e) { console.error("获取模型状态失败:", e); }
 
   try {
@@ -1122,15 +888,10 @@ export default {
   template,
   mount(root) {
     root.innerHTML = template;
-    S().currentTypeFilter = "all";
-    S().logPanelVisible = localStorage.getItem('logPanelVisible') === 'true';
-    S().currentLogModelId = null;
+S().currentTypeFilter = "all";
+  S().currentLogModelId = null;
 
-    document.getElementById('log-toggle-btn').addEventListener('click', toggleLogPanel);
-    document.getElementById('log-clear-btn').addEventListener('click', clearLogs);
-    document.getElementById('log-export-btn').addEventListener('click', exportLogs);
-
-    setupListeners();
+  setupListeners();
     init();
   },
   unmount() {
