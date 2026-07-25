@@ -35,13 +35,15 @@ if (isWindows) {
     console.log('[tauri-build-hook] ✅ 已复制 terminal -> terminal-resources');
   }
 } else {
-  // macOS/Linux: 创建空 terminal-resources 目录（Tauri 打包需要资源存在）
-  if (!fs.existsSync(terminalResourcesDir)) {
-    fs.mkdirSync(terminalResourcesDir, { recursive: true });
-    console.log('[tauri-build-hook] ✅ 已创建空的 terminal-resources（非 Windows 平台，仅用于占位）');
-  } else {
-    console.log('[tauri-build-hook] ✅ terminal-resources 已存在');
+  // macOS/Linux: 确保 terminal-resources 为空（避免打包无关的 Windows Terminal 文件）
+  if (fs.existsSync(terminalResourcesDir)) {
+    // 删除现有目录及其所有内容，防止打包进不必要的 Windows Terminal 文件
+    fs.rmSync(terminalResourcesDir, { recursive: true, force: true });
+    console.log('[tauri-build-hook] ✅ 已删除 terminal-resources 目录（清理 Windows Terminal 文件）');
   }
+  // 创建空目录占位（Tauri 打包要求资源路径存在）
+  fs.mkdirSync(terminalResourcesDir, { recursive: true });
+  console.log('[tauri-build-hook] ✅ 已创建空的 terminal-resources 目录（非 Windows 平台）');
 }
 
 function copyDir(src, dest) {
