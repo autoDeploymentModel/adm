@@ -5,6 +5,7 @@ mod pages;
 use app_state::AppState;
 use pages::{agent, index, model_list, model_image, settings};
 
+use tauri::Emitter;
 use tauri::Manager;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
