@@ -18,13 +18,23 @@ pub async fn save_settings(app: tauri::AppHandle, settings: Settings) -> Result<
     dbg_log!("[DEBUG] config.json content: {}", json);
     
     let temp_path = config_path.with_extension("tmp");
-    std::fs::write(&temp_path, json).map_err(|e| AppError::msg(format!("写入临时配置文件失败: {}", e)))?;
+    std::fs::write(&temp_path, &json).map_err(|e| AppError::msg(format!("写入临时配置文件失败: {}", e)))?;
     
     if let Ok(file) = std::fs::File::open(&temp_path) {
         let _ = file.sync_all();
     }
     
-    std::fs::rename(&temp_path, &config_path).map_err(|e| AppError::msg(format!("重命名配置文件失败: {}", e)))?;
+    // rename 可能在 macOS 上因文件系统属性/权限问题失败，添加回退逻辑
+    if let Err(_) = std::fs::rename(&temp_path, &config_path) {
+        // 回退：先删除目标文件后重试 rename
+        let _ = std::fs::remove_file(&config_path);
+        if let Err(_) = std::fs::rename(&temp_path, &config_path) {
+            // 最终回退：copy + delete
+            std::fs::copy(&temp_path, &config_path)
+                .map_err(|e| AppError::msg(format!("保存配置文件失败(copy): {}", e)))?;
+            let _ = std::fs::remove_file(&temp_path);
+        }
+    }
     
     dbg_log!("[DEBUG] Config saved successfully to: {:?}", config_path);
     Ok(())

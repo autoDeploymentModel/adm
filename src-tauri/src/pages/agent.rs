@@ -53,9 +53,16 @@ fn save_agent_workdir(app: &tauri::AppHandle, workdir: &str) -> Result<(), AppEr
     let json = serde_json::to_string_pretty(&settings)
         .map_err(|e| format!("序列化配置失败: {}", e))?;
     let temp_path = config_path.with_extension("tmp");
-    std::fs::write(&temp_path, json).map_err(|e| format!("写入临时配置文件失败: {}", e))?;
-    std::fs::rename(&temp_path, &config_path)
-        .map_err(|e| format!("重命名配置文件失败: {}", e))?;
+    std::fs::write(&temp_path, &json).map_err(|e| format!("写入临时配置文件失败: {}", e))?;
+    // rename 可能在 macOS 上失败，添加回退逻辑
+    if let Err(_) = std::fs::rename(&temp_path, &config_path) {
+        let _ = std::fs::remove_file(&config_path);
+        if let Err(_) = std::fs::rename(&temp_path, &config_path) {
+            std::fs::copy(&temp_path, &config_path)
+                .map_err(|e| format!("保存配置文件失败(copy): {}", e))?;
+            let _ = std::fs::remove_file(&temp_path);
+        }
+    }
     Ok(())
 }
 
@@ -299,7 +306,15 @@ fn write_json_atomic(path: &std::path::Path, value: &serde_json::Value) -> Resul
     let temp = path.with_extension("tmp");
     std::fs::write(&temp, &json)
         .map_err(|e| format!("写入临时配置文件失败: {}", e))?;
-    std::fs::rename(&temp, path).map_err(|e| format!("重命名配置文件失败: {}", e))?;
+    // rename 可能在 macOS 上失败，添加回退逻辑
+    if let Err(_) = std::fs::rename(&temp, path) {
+        let _ = std::fs::remove_file(path);
+        if let Err(_) = std::fs::rename(&temp, path) {
+            std::fs::copy(&temp, path)
+                .map_err(|e| format!("保存配置文件失败(copy): {}", e))?;
+            let _ = std::fs::remove_file(&temp);
+        }
+    }
     Ok(())
 }
 
