@@ -926,9 +926,14 @@
 
         // Windows 平台：重启 Windows Terminal 外部窗口以应用新工作目录
         if (await detectPlatform() === 'windows') {
+          // 渲染状态页面（含「打开 Agent cli工具」按钮）
+          initWindowsTerminalStatus();
           try { await invoke("stop_windows_terminal_agent"); } catch (_) {}
           setTimeout(function () {
-            invoke("launch_windows_terminal_agent").catch(function () {});
+            invoke("launch_windows_terminal_agent").then(function () {
+              // WT 启动成功后最小化主窗口到托盘
+              minimizeMainToTray();
+            }).catch(function () {});
           }, 500);
           return;
         }
@@ -1212,10 +1217,17 @@
         '  <button onclick="reopenWindowsTerminal()" style="',
         '    background:#6c63ff;color:#fff;border:none;padding:10px 24px;',
         '    border-radius:6px;font-size:14px;cursor:pointer;">',
-        '    重新打开终端',
+        '    打开 Agent cli工具',
         '  </button>',
         '</div>'
       ].join('');
+    }
+
+    // ===== 将主窗口最小化到系统托盘 =====
+    // Agent 终端（Windows 外部 WT）启动后自动最小化主窗口，
+    // 用户通过托盘图标恢复窗口后可点击「停止并返回」回到首页。
+    function minimizeMainToTray() {
+      invoke("minimize_to_tray").catch(function () {});
     }
 
     // 自动启动 Windows Terminal（防止重复启动）
@@ -1244,9 +1256,25 @@
       // 平台检测：Windows 使用外部 WT，其他平台使用内嵌 xterm.js
       var platform = await detectPlatform();
       if (platform === 'windows') {
+        // 进入 Agent 页面前先检查工作目录是否已配置
+        try {
+          var wd = await invoke("get_agent_workdir");
+          if (!wd || !wd.trim()) {
+            // 工作目录为空：弹出工作目录弹窗（必填），
+            // 用户确认后由 confirmWorkdir 启动 WT 并最小化主窗口
+            hideLoading();
+            openWorkdirDialog(true);
+            return;
+          }
+        } catch (e) {
+          hideLoading();
+          openWorkdirDialog(true);
+          return;
+        }
         initWindowsTerminalStatus();
-        // 自动启动 Windows Terminal
-        autoLaunchWindowsTerminal();
+        // 自动启动 Windows Terminal，启动成功后最小化主窗口到托盘
+        await autoLaunchWindowsTerminal();
+        minimizeMainToTray();
         return;
       }
 

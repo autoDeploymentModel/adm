@@ -302,7 +302,7 @@ get_base_dir() 查找优先级：
 
 ### 4.2 `lib.rs` — 入口
 
-**职责**：模块声明、Tauri Builder 配置、插件/状态注册、Command 注册。
+**职责**：模块声明、Tauri Builder 配置、插件/状态注册、系统托盘、Command 注册。
 
 ```rust
 mod app_state;
@@ -315,41 +315,34 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_hwinfo::init())
         .manage(AppState::new())
+        .setup(|app| {
+            // 创建系统托盘图标（显示窗口 / 退出 ADM 菜单）
+            // 左键点击切换窗口显隐
+        })
         .on_window_event(|window, event| {
-            // 窗口关闭时清理 llama-server / sd-cli 进程：
-            // 1. 按记录的 PID 杀整棵进程树（kill_process_tree）
-            // 2. 兜底按进程名强杀残留（kill_process_by_name），防止 PID 记录丢失/复用导致孤儿进程残留
+            // 窗口关闭时：
+            // 1. 若启用 minimize_to_tray：拦截关闭 → 隐藏窗口 + 从任务栏移除
+            // 2. 否则：清理 llama-server / sd-cli / Agent 进程后正常关闭
         })
         .invoke_handler(tauri::generate_handler![
             // pages/index.rs
             index::get_system_info,
-            index::check_update,
-            index::download_and_extract_llamacpp,
-            // pages/model_list.rs
-            model_list::scan_local_models,
-            model_list::scan_part_files,
-            model_list::fetch_model_list,
-            model_list::download_model,
-            model_list::start_model,
-            model_list::stop_model,
-            model_list::get_model_status,
-            model_list::get_downloading_models,
-            model_list::get_downloading_phases,
-            // pages/model_image.rs
-            model_image::check_sd_exists,
-            model_image::download_and_extract_sd,
-            model_image::start_sd_generation,
-            model_image::stop_sd,
-            // pages/settings.rs
-            settings::save_settings,
-            settings::load_settings,
-            settings::get_app_version,
-            settings::get_llamacpp_version,
+            // ...
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
 }
 ```
+
+**系统托盘**（v0.4.9+）：
+- 在 `.setup()` 中通过 `TrayIconBuilder` 创建托盘图标，复用应用窗口图标
+- 右键菜单：显示窗口 / 退出 ADM
+- 左键单击：切换主窗口显隐（`show()` + `set_skip_taskbar(false)` ↔ `hide()` + `set_skip_taskbar(true)`）
+- "退出 ADM"：调用 `cleanup_processes()` 清理所有子进程后 `app.exit(0)`
+- `cleanup_processes()` 从原 `on_window_event(CloseRequested)` 提取，供托盘退出和正常关闭复用
+
+**窗口关闭行为**：
+- 启用 `minimize_to_tray`（默认）：`api.prevent_close()` + `window.hide()` + `window.set_skip_taskbar(true)`，并 emit `window-minimized-to-tray` 事件通知前端显示提示
+- 未启用 `minimize_to_tray`：执行 `cleanup_processes()` 后窗口正常关闭 → 应用退出
+- `read_minimize_to_tray()` 直接读取 `config.json`，读取失败时默认返回 `true`
 
 ### 4.3 `app_state.rs` — 全局状态
 
@@ -380,7 +373,7 @@ AppState {
 | `ModelStatus`          | 模型运行状态：是否运行、model\_id、pid、port                                                      |
 | `LaunchParams`         | 模型启动参数（见 §5.5），新增 `dry_multiplier`、`dry_allowed_length`、`dry_penalty_last_n`、`presence_penalty`、`frequency_penalty`、`preset_mode`、`spec_draft_n_max`、`spec_type` 字段。MTP 模型自动检测（见 §6.8） |
 | `RemoteModel`          | 远程模型数据：model\_id、model\_url、model\_size、need\_ram、support\_tools/reasoning/images、model\_diffusion、model\_vae |
-| `Settings`             | 用户配置包装：`{ launch_params: LaunchParams }`                                            |
+| `Settings`             | 用户配置包装：`{ launch_params, agent_workdir, minimize_to_tray }`                                            |
 | `PartFileProgress`     | 断点续传进度：model\_id、existing\_size                                                     |
 | `UpdateInfo`           | 远程更新信息：版本号、llamacpp 版本、admAgent 版本、各平台下载配置                                                      |
 | `UpdateCheckResult`    | 更新检查结果：应用/llamacpp 是否有更新、下载地址、VC++ 运行库状态、更新日志                                       |
@@ -978,7 +971,7 @@ SystemInfo     — total_ram, used_ram, total_vram, used_vram, has_gpu, cpu_usag
 ModelStatus    — running: bool, model_id, pid, port
 LaunchParams   — 所有 llama-server CLI 参数的 Option 封装（ctx_size, n_gpu_layers, temp 等）
 RemoteModel    — 远程模型信息：model_id, model_url, model_size, need_ram, support_*, model_diffusion, model_vae
-Settings       — 用户配置包装：{ launch_params: LaunchParams }
+Settings       — 用户配置包装：{ launch_params: LaunchParams, agent_workdir: String, minimize_to_tray: bool }
 UpdateInfo     — 远程更新信息：version, llamacpp_version, adm_agent_version, windows/mac 平台更新
 UpdateCheckResult — 更新检查结果：has_update, 各平台下载 URL, llamacpp 版本对比, vc_redist_installed
 AdmAgentUpdateCheck — admAgent 版本检查结果（点击 Agent 按钮时调用）：needs_update, remote_version, local_version, download_url
@@ -1512,6 +1505,7 @@ wt.exe --title "ADM Agent" --startingDirectory "<workdir>" powershell.exe -NoExi
 
 | 日期 | 版本 | 变更内容 |
 |------|------|----------|
+| 2026-07-24 | **3.14** | 新增系统托盘（最小化到右下角）功能：<br>1. `Cargo.toml` 启用 `tauri` `tray-icon` feature；`capabilities/default.json` 添加 `core:window:allow-hide/show/set-focus` 权限<br>2. `lib.rs` `.setup()` 创建托盘图标（复用窗口图标），右键菜单「显示窗口 / 退出 ADM」，左键单击切换窗口显隐<br>3. 窗口关闭行为：启用 `minimize_to_tray` 时 `api.prevent_close()` + `window.hide()` + `set_skip_taskbar(true)` 并 emit `window-minimized-to-tray` 事件；未启用时执行进程清理后正常关闭<br>4. 从原 `on_window_event` 提取 `cleanup_processes()` 公共函数，供托盘「退出」和正常关闭复用<br>5. `Settings` 新增 `minimize_to_tray: bool` 字段（`#[serde(default = "default_true")]`，默认启用），手动实现 `Default`<br>6. `settings.js` 新增「通用」设置面板含托盘开关，`saveParams` / `saveGeneralSettings` 改用 read-modify-write 避免覆盖其他字段<br>7. `index.html` 监听 `window-minimized-to-tray` 事件，首次隐藏时显示 toast 提示 |
 | 2026-07-23 | **3.13** | 修复 Agent 终端设置工作目录（或增删云端模型触发重启）后偶发打字重复：<br>1. **新增防线 0（源头拦截）**：document 捕获阶段吞掉 `compositionend` 后紧跟的冗余 `input(insertText)` 事件（xterm IME 双路径中的同步路径），只保留 `setTimeout(0)` finalize 路径这唯一一次发送，不再依赖调度时延<br>2. **防线 1 强化**：onData 合成文本去重窗口 250ms → 2000ms（终端重启后 TUI 首屏整帧渲染拥塞主线程，`setTimeout(0)` 可能延迟数百毫秒，原窗口漏判是本次 bug 的直接原因）；每次 `compositionend` 最多只丢一个副本（丢弃后立即清空合成记录），粘贴经 `_suppressImeDedup` 绕过去重，杜绝误丢合法输入<br>3. **启动守卫修复**：`startAgentNow()` 进入即占用 `startRequested`、成功/失败后释放；`confirmWorkdir()` / `restartAgentTerminal()` 停旧会话前先占用守卫——修复裸调 `startAgentNow` 期间 `handleEnterAgent` / `maybeStartTerminal` 可能并发发起第二次 `start_agent_terminal` 产生孤儿 admAgent 进程的问题，同时恢复「进程退出后重进 Agent 页自动重启」路径（此前守卫在成功启动后永久滞留会堵死该路径） |
 | 2026-07-20 | **3.12** | 修复 Agent 终端内容较多时出现重复输出的问题（三层加固）：<br>1. **会话代次标记**：`AppState` 新增 `agent_generation`，`start_agent_terminal` 每次 +1；`agent-terminal-data` / `agent-terminal-ready` 的 payload 携带 `gen` 字段。前端 `agent.html` 在 `ready` 时记录 `currentAgentGen`，此后仅接受当前代次的数据帧，旧会话残留输出一律丢弃——结构上杜绝「同一输出显示两遍」<br>2. **读取线程生命周期**：`AgentSession` 新增 `reader_stop: Arc<AtomicBool>` 与 `reader_handle: JoinHandle`；新增 `stop_agent_session_clean`：置位 stop → kill 子进程树（让阻塞 read 收 EOF 唤醒）→ `is_finished()` 轮询 join（500ms 超时）。`start_agent_terminal` / `stop_agent_terminal` / `kill_agent_session` 均改用该函数，确保旧线程在 spawn 新会话前完全退出，不再与新线程并发 emit<br>3. **resize 统一节流**：`agent.html` 新增 `scheduleFitResize(delay)` 作为唯一 fit + resize 入口（trailing 节流），`ResizeObserver` / `window resize` / `agent-resize` / `ready` / `startAgentNow` 末尾全部走该入口，减少 ratatui 整屏重绘次数<br>4. **`handleEnterAgent` 健壮化**：`get_agent_status` 返回 `Err` 时不再兜底重启（避免进程 spawn 瞬时空窗误判为「未运行」而二次拉起 → 两个 admAgent 并发写 PTY） |
 | 2026-07-18 | **3.11** | 修复主程序关闭后 llama-server / sd-cli 进程残留问题：<br>1. 新增 `platform::kill_process_tree`（taskkill /PID /T /F 或 kill -9 -<pgid>）和 `platform::kill_process_by_name` 兜底清理<br>2. 窗口关闭事件改为先按 PID 杀整棵进程树，再按进程名兜底强杀残留，避免 PID 记录丢失/复用导致孤儿进程<br>3. Unix 下 llama-server / sd-cli 以独立进程组（process_group(0) + setsid）启动，`kill -9 -<pgid>` 可一次杀掉整棵树<br>4. `stop_model` / `stop_sd` 改用 `kill_process_tree`，与窗口关闭逻辑一致 |

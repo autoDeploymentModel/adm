@@ -113,11 +113,28 @@ pub struct RemoteModel {
     pub model_vae: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+fn default_true() -> bool {
+true
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Settings {
-    pub launch_params: LaunchParams,
-    #[serde(default)]
-    pub agent_workdir: String,
+pub launch_params: LaunchParams,
+#[serde(default)]
+pub agent_workdir: String,
+/// 关闭窗口时最小化到系统托盘（默认启用）
+#[serde(default = "default_true")]
+pub minimize_to_tray: bool,
+}
+
+impl Default for Settings {
+fn default() -> Self {
+Self {
+launch_params: LaunchParams::default(),
+agent_workdir: String::new(),
+minimize_to_tray: true,
+}
+}
 }
 
 // ===== 自动更新相关结构 =====

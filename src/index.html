@@ -1101,11 +1101,11 @@ var content = document.getElementById('llp-content');
       try {
         setupLlamacppProgressListener();
         setupAdmAgentUpdateProgressListener();
-        setupAgentDownloadListener();
-        setupAgentTerminalEventForwarding();
-        setupGlobalLaunchLogListener();
+setupAgentDownloadListener();
+setupAgentTerminalEventForwarding();
+setupGlobalLaunchLogListener();
 
-        systemInfo = await invoke("get_system_info");
+systemInfo = await invoke("get_system_info");
         window.__adm_state.systemInfo = systemInfo;
 
         try {

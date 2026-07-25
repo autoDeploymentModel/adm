@@ -234,6 +234,7 @@ const template = `
   <div id="settings-layout">
     <nav id="settings-nav">
       <div class="nav-item active" data-panel="launch-params" id="nav-launch-params">模型启动参数</div>
+      <div class="nav-item" data-panel="general" id="nav-general">通用</div>
       <div class="nav-item" data-panel="version" id="nav-version">系统版本号</div>
       <div class="nav-item" data-panel="about" id="nav-about">关于</div>
     </nav>
@@ -362,6 +363,20 @@ const template = `
         </div>
 
         <button class="btn-reset" id="reset-btn">恢复默认</button>
+      </div>
+
+      <div id="panel-general" class="panel">
+        <div class="panel-title">通用设置</div>
+        <div class="param-group">
+          <div class="param-group-title">窗口行为</div>
+          <div class="param-row">
+            <div class="param-label">最小化到系统托盘<div class="param-key">关闭窗口时</div></div>
+            <div class="param-input">
+              <div class="checkbox-wrap"><input type="checkbox" id="minimize_to_tray" checked><span>启用（关闭窗口时隐藏到托盘，模型继续运行）</span></div>
+              <div class="param-desc">关闭后点击右下角托盘图标可恢复窗口；如需彻底退出请右键托盘图标选择“退出 ADM”</div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div id="panel-version" class="panel">
@@ -560,12 +575,38 @@ function fillFormFromParams(params) {
 
 async function saveParams() {
   const params = getParamsFromForm();
-  const settings = { launch_params: params };
   try {
+    // 加载当前设置以保留其他字段（如 agent_workdir、minimize_to_tray）
+    let current = {};
+    try { current = await invoke()("load_settings"); } catch (_) {}
+    const minimizeToTray = document.getElementById("minimize_to_tray")?.checked ?? current.minimize_to_tray ?? true;
+    const settings = {
+      launch_params: params,
+      minimize_to_tray: minimizeToTray,
+      agent_workdir: current.agent_workdir || current.agentWorkdir || "",
+    };
     await invoke()("save_settings", { settings: settings });
     showToast("设置已保存，重启模型后生效");
   } catch (e) {
     console.error("[DEBUG] Failed to save settings:", e);
+    showToast("保存失败: " + e, true);
+  }
+}
+
+async function saveGeneralSettings() {
+  const minimizeToTray = document.getElementById("minimize_to_tray").checked;
+  try {
+    // 加载当前设置以保留其他字段（如 launch_params、agent_workdir）
+    let current = {};
+    try { current = await invoke()("load_settings"); } catch (_) {}
+    const settings = {
+      launch_params: current.launch_params || current.launchParams || {},
+      minimize_to_tray: minimizeToTray,
+      agent_workdir: current.agent_workdir || current.agentWorkdir || "",
+    };
+    await invoke()("save_settings", { settings: settings });
+    showToast("设置已保存");
+  } catch (e) {
     showToast("保存失败: " + e, true);
   }
 }
@@ -711,6 +752,7 @@ export default {
     document.getElementById("delete-llamacpp-btn").addEventListener("click", deleteLlamacpp);
     document.getElementById("confirm-cancel-btn").addEventListener("click", function() { closeConfirmDialog(false); });
     document.getElementById("confirm-ok-btn").addEventListener("click", function() { closeConfirmDialog(true); });
+    document.getElementById("minimize_to_tray").addEventListener("change", saveGeneralSettings);
 
     setupAutoSave();
 
@@ -720,6 +762,10 @@ export default {
         const params = settings.launch_params || settings.launchParams;
         if (settings && params) fillFormFromParams(params);
         applyCtxFloor();
+        // 加载最小化到托盘设置
+        const minimizeToTray = settings.minimize_to_tray ?? settings.minimizeToTray ?? true;
+        const trayCheckbox = document.getElementById("minimize_to_tray");
+        if (trayCheckbox) trayCheckbox.checked = minimizeToTray;
       } catch (e) {
         console.error("加载设置失败:", e);
       }

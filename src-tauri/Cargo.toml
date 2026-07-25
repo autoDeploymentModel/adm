@@ -18,10 +18,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-hwinfo = "0.2.3"
+tauri-plugin-single-instance = "2"
 windows = { version = "0.58", features = ["Win32_UI_HiDpi"] }
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
