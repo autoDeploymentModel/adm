@@ -335,12 +335,17 @@ pub fn run() {
 **系统托盘**（v0.4.9+）：
 - 在 `.setup()` 中通过 `TrayIconBuilder` 创建托盘图标，复用应用窗口图标
 - 右键菜单：显示窗口 / 退出 ADM
-- 左键单击：切换主窗口显隐（`show()` + `set_skip_taskbar(false)` ↔ `hide()` + `set_skip_taskbar(true)`）
+- 左键单击：切换主窗口显隐（`show_main_window()` ↔ `hide_main_window()`）
 - "退出 ADM"：调用 `cleanup_processes()` 清理所有子进程后 `app.exit(0)`
 - `cleanup_processes()` 从原 `on_window_event(CloseRequested)` 提取，供托盘退出和正常关闭复用
 
+**窗口显隐 helper 函数**（v0.4.10+）：
+- `show_main_window(app)`：显示主窗口并带到前台。macOS 上先 `set_activation_policy(Regular)` 再 `show` + `set_focus`；Windows/Linux 上 `set_skip_taskbar(false)` + `show` + `set_focus`
+- `hide_main_window(window)`：隐藏主窗口到托盘。macOS 上仅 `hide()`（保持 `Regular` 策略，Dock 图标可见）；Windows/Linux 上 `hide()` + `set_skip_taskbar(true)`
+- **macOS 关键差异**：`set_skip_taskbar(true)` 在 macOS 上会切换到 `Accessory` 激活策略（隐藏 Dock 图标），之后单纯 `show()` + `set_focus()` 无法把窗口带到前台。因此 macOS 隐藏时不切换策略，显示时先显式恢复 `Regular`
+
 **窗口关闭行为**：
-- 启用 `minimize_to_tray`（默认）：`api.prevent_close()` + `window.hide()` + `window.set_skip_taskbar(true)`，并 emit `window-minimized-to-tray` 事件通知前端显示提示
+- 启用 `minimize_to_tray`（默认）：`api.prevent_close()` + `hide_main_window()`，并 emit `window-minimized-to-tray` 事件通知前端显示提示
 - 未启用 `minimize_to_tray`：执行 `cleanup_processes()` 后窗口正常关闭 → 应用退出
 - `read_minimize_to_tray()` 直接读取 `config.json`，读取失败时默认返回 `true`
 
@@ -1495,8 +1500,8 @@ wt.exe --title "ADM Agent" --startingDirectory "<workdir>" powershell.exe -NoExi
 
 ***
 
-*文档版本: 3.13*\
-*最后更新: 2026-07-23*\
+*文档版本: 3.15*\
+*最后更新: 2026-07-25*\
 *维护者: ADM 开发团队*
 
 ***
@@ -1505,6 +1510,7 @@ wt.exe --title "ADM Agent" --startingDirectory "<workdir>" powershell.exe -NoExi
 
 | 日期 | 版本 | 变更内容 |
 |------|------|----------|
+| 2026-07-25 | **3.15** | 修复 macOS 点击关闭最小化到托盘后，再点击托盘图标无法显示窗口的问题：<br>1. **根因**：`set_skip_taskbar(true)` 在 macOS 上会将应用激活策略切换为 `Accessory`（隐藏 Dock 图标），之后从托盘点击恢复时 `show()` + `set_focus()` 无法把窗口带到前台<br>2. 新增 `show_main_window(app)` / `hide_main_window(window)` 跨平台 helper 函数，统一所有窗口显隐逻辑（托盘左键、右键菜单「显示」、单实例回调、CloseRequested、Resized 最小化、`minimize_to_tray` 命令）<br>3. macOS 隐藏时仅 `hide()`，不调用 `set_skip_taskbar(true)`，保持 `Regular` 激活策略（Dock 图标可见，符合 macOS 习惯）；macOS 显示时先 `set_activation_policy(Regular)` 再 `show` + `set_focus`<br>4. Windows/Linux 行为不变（`set_skip_taskbar` 用于从任务栏移除）<br>5. `index.rs` `minimize_to_tray` 命令同步修复 |
 | 2026-07-24 | **3.14** | 新增系统托盘（最小化到右下角）功能：<br>1. `Cargo.toml` 启用 `tauri` `tray-icon` feature；`capabilities/default.json` 添加 `core:window:allow-hide/show/set-focus` 权限<br>2. `lib.rs` `.setup()` 创建托盘图标（复用窗口图标），右键菜单「显示窗口 / 退出 ADM」，左键单击切换窗口显隐<br>3. 窗口关闭行为：启用 `minimize_to_tray` 时 `api.prevent_close()` + `window.hide()` + `set_skip_taskbar(true)` 并 emit `window-minimized-to-tray` 事件；未启用时执行进程清理后正常关闭<br>4. 从原 `on_window_event` 提取 `cleanup_processes()` 公共函数，供托盘「退出」和正常关闭复用<br>5. `Settings` 新增 `minimize_to_tray: bool` 字段（`#[serde(default = "default_true")]`，默认启用），手动实现 `Default`<br>6. `settings.js` 新增「通用」设置面板含托盘开关，`saveParams` / `saveGeneralSettings` 改用 read-modify-write 避免覆盖其他字段<br>7. `index.html` 监听 `window-minimized-to-tray` 事件，首次隐藏时显示 toast 提示 |
 | 2026-07-23 | **3.13** | 修复 Agent 终端设置工作目录（或增删云端模型触发重启）后偶发打字重复：<br>1. **新增防线 0（源头拦截）**：document 捕获阶段吞掉 `compositionend` 后紧跟的冗余 `input(insertText)` 事件（xterm IME 双路径中的同步路径），只保留 `setTimeout(0)` finalize 路径这唯一一次发送，不再依赖调度时延<br>2. **防线 1 强化**：onData 合成文本去重窗口 250ms → 2000ms（终端重启后 TUI 首屏整帧渲染拥塞主线程，`setTimeout(0)` 可能延迟数百毫秒，原窗口漏判是本次 bug 的直接原因）；每次 `compositionend` 最多只丢一个副本（丢弃后立即清空合成记录），粘贴经 `_suppressImeDedup` 绕过去重，杜绝误丢合法输入<br>3. **启动守卫修复**：`startAgentNow()` 进入即占用 `startRequested`、成功/失败后释放；`confirmWorkdir()` / `restartAgentTerminal()` 停旧会话前先占用守卫——修复裸调 `startAgentNow` 期间 `handleEnterAgent` / `maybeStartTerminal` 可能并发发起第二次 `start_agent_terminal` 产生孤儿 admAgent 进程的问题，同时恢复「进程退出后重进 Agent 页自动重启」路径（此前守卫在成功启动后永久滞留会堵死该路径） |
 | 2026-07-20 | **3.12** | 修复 Agent 终端内容较多时出现重复输出的问题（三层加固）：<br>1. **会话代次标记**：`AppState` 新增 `agent_generation`，`start_agent_terminal` 每次 +1；`agent-terminal-data` / `agent-terminal-ready` 的 payload 携带 `gen` 字段。前端 `agent.html` 在 `ready` 时记录 `currentAgentGen`，此后仅接受当前代次的数据帧，旧会话残留输出一律丢弃——结构上杜绝「同一输出显示两遍」<br>2. **读取线程生命周期**：`AgentSession` 新增 `reader_stop: Arc<AtomicBool>` 与 `reader_handle: JoinHandle`；新增 `stop_agent_session_clean`：置位 stop → kill 子进程树（让阻塞 read 收 EOF 唤醒）→ `is_finished()` 轮询 join（500ms 超时）。`start_agent_terminal` / `stop_agent_terminal` / `kill_agent_session` 均改用该函数，确保旧线程在 spawn 新会话前完全退出，不再与新线程并发 emit<br>3. **resize 统一节流**：`agent.html` 新增 `scheduleFitResize(delay)` 作为唯一 fit + resize 入口（trailing 节流），`ResizeObserver` / `window resize` / `agent-resize` / `ready` / `startAgentNow` 末尾全部走该入口，减少 ratatui 整屏重绘次数<br>4. **`handleEnterAgent` 健壮化**：`get_agent_status` 返回 `Err` 时不再兜底重启（避免进程 spawn 瞬时空窗误判为「未运行」而二次拉起 → 两个 admAgent 并发写 PTY） |

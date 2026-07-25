@@ -5,33 +5,68 @@ mod pages;
 use app_state::AppState;
 use pages::{agent, index, model_list, model_image, settings};
 
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
 /// 读取用户设置：是否启用"关闭窗口时最小化到系统托盘"。
-/// 读取失败时默认返回 true（启用），以提供更好的开箱体验。
+/// 读取失败时默认返回 false（禁用），以提供更好的开箱体验（在 macOS 上直接退出）。
 fn read_minimize_to_tray(app: &tauri::AppHandle) -> bool {
     use crate::common::config;
     use crate::common::types::Settings;
 
     let data_dir = match config::get_data_dir(Some(app)) {
         Ok(d) => d,
-        Err(_) => return true,
+        Err(_) => return false,
     };
     let config_path = data_dir.join("config.json");
     if !config_path.exists() {
-        return true;
+        return false;
     }
     let json = match std::fs::read_to_string(&config_path) {
         Ok(s) => s,
-        Err(_) => return true,
+        Err(_) => return false,
     };
     let settings: Settings = match serde_json::from_str(&json) {
         Ok(s) => s,
-        Err(_) => return true,
+        Err(_) => return false,
     };
     settings.minimize_to_tray
+}
+
+/// 显示主窗口并带到前台（跨平台）。
+///
+/// macOS 关键点：`set_skip_taskbar(true)` 在 macOS 上会切换到 `Accessory` 激活策略
+/// （隐藏 Dock 图标），之后单纯 `show()` + `set_focus()` 无法把窗口带到前台。
+/// 因此 macOS 上需要先显式恢复 `Regular` 激活策略，再 `show` + `set_focus`。
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        #[cfg(target_os = "macos")]
+        {
+            // macOS：先恢复 Regular 策略（Dock 图标 + 菜单栏），再显示窗口
+            let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = window.set_skip_taskbar(false);
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    }
+}
+
+/// 隐藏主窗口到系统托盘（跨平台）。
+///
+/// macOS 不调用 `set_skip_taskbar(true)`，避免切换到 `Accessory` 策略导致
+/// 后续无法从托盘恢复窗口；Dock 图标保持可见（符合 macOS 习惯）。
+fn hide_main_window(window: &tauri::Window) {
+    let _ = window.hide();
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window.set_skip_taskbar(true);
+    }
 }
 
 /// 清理所有子进程（模型 / SD / Agent / Windows Terminal）。
@@ -73,11 +108,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // 单实例：第二个实例启动时，让第一个实例显示窗口
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_skip_taskbar(false);
-                let _ = window.set_focus();
-            }
+            show_main_window(app);
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -96,11 +127,7 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "show" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_skip_taskbar(false);
-                            let _ = window.set_focus();
-                        }
+                        show_main_window(app);
                     }
                     "quit" => {
                         cleanup_processes(app);
@@ -120,12 +147,14 @@ pub fn run() {
                         let app = tray.app_handle();
                         if let Some(window) = app.get_webview_window("main") {
                             if window.is_visible().unwrap_or(false) {
+                                // 隐藏到托盘（与 hide_main_window 逻辑一致）
                                 let _ = window.hide();
-                                let _ = window.set_skip_taskbar(true);
+                                #[cfg(not(target_os = "macos"))]
+                                {
+                                    let _ = window.set_skip_taskbar(true);
+                                }
                             } else {
-                                let _ = window.show();
-                                let _ = window.set_skip_taskbar(false);
-                                let _ = window.set_focus();
+                                show_main_window(app);
                             }
                         }
                     }
@@ -140,25 +169,32 @@ pub fn run() {
             if let tauri::WindowEvent::Resized(_) = event {
                 if read_minimize_to_tray(app) && window.is_minimized().unwrap_or(false) {
                     let _ = window.unminimize();
-                    let _ = window.hide();
-                    let _ = window.set_skip_taskbar(true);
+                    hide_main_window(window);
                 }
                 return;
             }
 
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if read_minimize_to_tray(app) {
-                    // 最小化到托盘：拦截关闭，隐藏窗口并从任务栏移除
-                    api.prevent_close();
-                    let _ = window.hide();
-                    let _ = window.set_skip_taskbar(true);
-                    // 通知前端显示提示
-                    let _ = app.emit("window-minimized-to-tray", ());
-                    return;
+                #[cfg(target_os = "macos")]
+                {
+                    let _api = api; // 标记为未用
+                    // macOS：点击关闭一律退出，不最小化到托盘
+                    // 注意：不需要 api.prevent_close()，正常退出即可
+                    cleanup_processes(app);
                 }
-
-                // 未启用托盘：执行进程清理，窗口正常关闭 → 应用退出
-                cleanup_processes(app);
+                #[cfg(not(target_os = "macos"))]
+                {
+                    if read_minimize_to_tray(app) {
+                        // 最小化到托盘：拦截关闭，隐藏窗口
+                        api.prevent_close();
+                        hide_main_window(window);
+                        // 通知前端显示提示
+                        let _ = app.emit("window-minimized-to-tray", ());
+                        return;
+                    }
+                    // 未启用托盘：执行进程清理，窗口正常关闭 → 应用退出
+                    cleanup_processes(app);
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
