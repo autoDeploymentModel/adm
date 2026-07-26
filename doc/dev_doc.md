@@ -1355,6 +1355,7 @@ Agent 页面采用 HTTP API + SSE 架构，不再使用 PTY 终端或 xterm.js�
 - **云端模型管理（前端 `agent.js`）**：顶部栏「添加云端模型」弹出表单（模型名称 / Base URL / API Key / 上下文大小，默认 256000），「模型管理」弹出已添加模型列表，每项带「编辑」按钮，编辑复用同一表单并回填参数。
 - **切换模型（`switchModel`）**：`agent_default_provider` 只存在 ADM 自己的 `config.json`，admAgent 服务端不读它。因此切换时必须先调服务端 `POST /v1/workspaces/{id}/config/model`（`scope=0`，携带 `provider`/`model`，可选 `reasoning_effort`/`temperature`）把首选模型写进 admAgent 配置，再调 `POST .../agent/update` 重载，否则服务端会一直使用 `admAgent.json` 里旧的 `model` 字段（表现为选什么模型都显示旧模型）。本地模型（`local` / `local:xxx`）统一映射为 `provider=local, model=localModel`；云端模型用 `list_cloud_providers` 返回的 `model_id`。
 - **云端 provider 不被覆盖**：`add_cloud_provider` / `update_cloud_provider` 均保持 `providers.local` 存在；由于 `ensure_adm_agent_config` 仅原地更新 `providers.local`，用户新增 / 编辑的云端 provider 在改上下文大小、重进 Agent 页等场景下均被保留。
+- **附件功能**：前端支持发送图片附件给 Agent，三种输入方式：点击 📎 按钮选择文件、拖放到输入区域、Ctrl+V 粘贴剪贴板图片。附件以 base64 编码通过 `attachments` 字段随消息发送到 admAgent server（`POST /v1/workspaces/{id}/agent`）。发送前检查 `agentInfo.model.supports_images`，若模型不支持图片则弹出错误提示阻止发送。附件预览区显示在输入框上方，支持逐个删除。文件大小限制 20MB。
 
 ---
 
@@ -1381,8 +1382,8 @@ Agent 页面采用 HTTP API + SSE 架构，不再使用 PTY 终端或 xterm.js�
 
 ***
 
-*文档版本: 3.15*\
-*最后更新: 2026-07-25*\
+*文档版本: 3.16*\
+*最后更新: 2026-07-26*\
 *维护者: ADM 开发团队*
 
 ***
@@ -1391,6 +1392,7 @@ Agent 页面采用 HTTP API + SSE 架构，不再使用 PTY 终端或 xterm.js�
 
 | 日期 | 版本 | 变更内容 |
 |------|------|----------|
+| 2026-07-26 | **3.16** | Agent 附件功能：前端支持发送图片附件给 Agent，三种输入方式（点击按钮选择、拖放、Ctrl+V 粘贴），base64 编码发送，模型不支持图片时弹出提示阻止发送，附件预览区支持逐个删除 |
 | 2026-07-25 | **3.15** | 修复 macOS 点击关闭最小化到托盘后，再点击托盘图标无法显示窗口的问题：<br>1. **根因**：`set_skip_taskbar(true)` 在 macOS 上会将应用激活策略切换为 `Accessory`（隐藏 Dock 图标），之后从托盘点击恢复时 `show()` + `set_focus()` 无法把窗口带到前台<br>2. 新增 `show_main_window(app)` / `hide_main_window(window)` 跨平台 helper 函数，统一所有窗口显隐逻辑（托盘左键、右键菜单「显示」、单实例回调、CloseRequested、Resized 最小化、`minimize_to_tray` 命令）<br>3. macOS 隐藏时仅 `hide()`，不调用 `set_skip_taskbar(true)`，保持 `Regular` 激活策略（Dock 图标可见，符合 macOS 习惯）；macOS 显示时先 `set_activation_policy(Regular)` 再 `show` + `set_focus`<br>4. Windows/Linux 行为不变（`set_skip_taskbar` 用于从任务栏移除）<br>5. `index.rs` `minimize_to_tray` 命令同步修复 |
 | 2026-07-24 | **3.14** | 新增系统托盘（最小化到右下角）功能：<br>1. `Cargo.toml` 启用 `tauri` `tray-icon` feature；`capabilities/default.json` 添加 `core:window:allow-hide/show/set-focus` 权限<br>2. `lib.rs` `.setup()` 创建托盘图标（复用窗口图标），右键菜单「显示窗口 / 退出 ADM」，左键单击切换窗口显隐<br>3. 窗口关闭行为：启用 `minimize_to_tray` 时 `api.prevent_close()` + `window.hide()` + `set_skip_taskbar(true)` 并 emit `window-minimized-to-tray` 事件；未启用时执行进程清理后正常关闭<br>4. 从原 `on_window_event` 提取 `cleanup_processes()` 公共函数，供托盘「退出」和正常关闭复用<br>5. `Settings` 新增 `minimize_to_tray: bool` 字段（`#[serde(default = "default_true")]`，默认启用），手动实现 `Default`<br>6. `settings.js` 新增「通用」设置面板含托盘开关，`saveParams` / `saveGeneralSettings` 改用 read-modify-write 避免覆盖其他字段<br>7. `index.html` 监听 `window-minimized-to-tray` 事件，首次隐藏时显示 toast 提示 |
 | 2026-07-23 | **3.13** | 修复 Agent 终端设置工作目录（或增删云端模型触发重启）后偶发打字重复：<br>1. **新增防线 0（源头拦截）**：document 捕获阶段吞掉 `compositionend` 后紧跟的冗余 `input(insertText)` 事件（xterm IME 双路径中的同步路径），只保留 `setTimeout(0)` finalize 路径这唯一一次发送，不再依赖调度时延<br>2. **防线 1 强化**：onData 合成文本去重窗口 250ms → 2000ms（终端重启后 TUI 首屏整帧渲染拥塞主线程，`setTimeout(0)` 可能延迟数百毫秒，原窗口漏判是本次 bug 的直接原因）；每次 `compositionend` 最多只丢一个副本（丢弃后立即清空合成记录），粘贴经 `_suppressImeDedup` 绕过去重，杜绝误丢合法输入<br>3. **启动守卫修复**：`startAgentNow()` 进入即占用 `startRequested`、成功/失败后释放；`confirmWorkdir()` / `restartAgentTerminal()` 停旧会话前先占用守卫——修复裸调 `startAgentNow` 期间 `handleEnterAgent` / `maybeStartTerminal` 可能并发发起第二次 `start_agent_terminal` 产生孤儿 admAgent 进程的问题，同时恢复「进程退出后重进 Agent 页自动重启」路径（此前守卫在成功启动后永久滞留会堵死该路径） |

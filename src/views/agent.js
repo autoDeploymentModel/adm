@@ -20,6 +20,8 @@ let contextUsage = { used: 0, max: 0 };
 let sessionViewMode = "current"; // "current" | "all"
 let workspaceInfo = null; // { id, path, name }
 let agentInfo = null;    // Agent 状态信息 (当前模型等)
+let pendingFiles = [];   // 待发送附件列表 [{name, type, size, base64, dataUrl}]
+let sendSafetyTimer = null; // isSending 安全超时定时器（3分钟无 run_complete 则自动重置）
 
 // ===== 模板 =====
 const template = `
@@ -367,6 +369,7 @@ const template = `
     display: flex;
     flex-direction: column;
     gap: 16px;
+    user-select: text;
   }
   .msg-area::-webkit-scrollbar { width: 8px; }
   .msg-area::-webkit-scrollbar-track { background: #0d1117; }
@@ -380,6 +383,7 @@ const template = `
     line-height: 1.6;
     white-space: pre-wrap;
     word-break: break-word;
+    user-select: text;
   }
 
   .msg.user {
@@ -563,6 +567,67 @@ const template = `
     transition: all 0.15s;
   }
   .toolbar-attach-btn:hover { background: rgba(255,255,255,0.15); color: #fff; }
+
+  /* ===== 附件预览区 ===== */
+  .attach-preview-area {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px 12px 0;
+  }
+  .attach-preview-area:empty { display: none; }
+  .attach-preview-item {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 4px 8px;
+    font-size: 12px;
+    color: #b0b8c8;
+    max-width: 220px;
+  }
+  .attach-preview-item img {
+    width: 32px;
+    height: 32px;
+    object-fit: cover;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+  .attach-preview-item .attach-file-icon {
+    font-size: 18px;
+    flex-shrink: 0;
+  }
+  .attach-preview-item .attach-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .attach-preview-item .attach-remove {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    width: 16px;
+    height: 16px;
+    background: #e85d3a;
+    color: #fff;
+    border: none;
+    border-radius: 50%;
+    font-size: 10px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    padding: 0;
+  }
+  .attach-preview-item .attach-remove:hover { background: #c94e30; }
+  .input-area.drag-over { background: rgba(108,99,255,0.08); }
+
+  /* ===== 右键菜单 ===== */
+  #agent-ctx-menu div:hover { background: #2a3344; }
 
   .toolbar-send-btn {
     background: #6c63ff;
@@ -1042,6 +1107,8 @@ const template = `
       <!-- 输入框区域: textarea 在上, 工具栏在下 -->
       <div class="input-area">
         <textarea class="input-textarea" id="agent-input" placeholder="输入消息... (Enter 发送, Shift+Enter 换行)" rows="1"></textarea>
+        <!-- 附件预览区 -->
+        <div class="attach-preview-area" id="agent-attach-preview"></div>
         <!-- 底部工具栏: ⚡Agent | 模型▾ | 上下文用量 | 📎 📤发送 -->
         <div class="agent-input-toolbar">
           <!-- ① 工作模式切换 -->
@@ -1339,7 +1406,9 @@ async function init() {
         contextUsage.max = agentInfo.model.context_window;
       }
       updateContextUsage();
-    } catch (_) {}
+    } catch (e) {
+      console.warn("[agent] 获取 agentInfo 失败:", e);
+    }
   }
 
   // 加载会话列表
@@ -1513,12 +1582,6 @@ function renderConversationList() {
       });
     });
 
-    // 右键菜单
-    item.addEventListener("contextmenu", function(e) {
-      e.preventDefault();
-      showConvContextMenu(e, conv.id);
-    });
-
     container.appendChild(item);
   });
 }
@@ -1559,55 +1622,6 @@ function handleConvAction(action, convId) {
       });
       break;
   }
-}
-
-function showConvContextMenu(e, convId) {
-  // 简易右键菜单
-  var menu = document.createElement("div");
-  menu.style.cssText = "position:fixed;background:#1c2331;border:1px solid #30363d;border-radius:8px;padding:4px 0;z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,0.4);";
-  menu.style.left = e.clientX + "px";
-  menu.style.top = e.clientY + "px";
-
-  var items = [
-    { label: "撤销上一轮", action: "undo" },
-    { label: "取消运行", action: "cancel" },
-    { label: "Shell 命令", action: "shell" },
-  ];
-
-  items.forEach(function(it) {
-    var mi = document.createElement("div");
-    mi.textContent = it.label;
-    mi.style.cssText = "padding:6px 16px;font-size:12px;cursor:pointer;color:#b0b8c8;";
-    mi.addEventListener("mouseenter", function() { mi.style.background = "#2a3344"; });
-    mi.addEventListener("mouseleave", function() { mi.style.background = "transparent"; });
-    mi.addEventListener("click", function() {
-      document.body.removeChild(menu);
-      if (it.action === "undo") {
-        api("POST", "/v1/workspaces/" + serverInfo.workspace_id + "/agent/sessions/" + convId + "/undo")
-          .catch(function(e) { showError("撤销失败: " + e); });
-      } else if (it.action === "cancel") {
-        api("POST", "/v1/workspaces/" + serverInfo.workspace_id + "/agent/sessions/" + convId + "/cancel")
-          .catch(function(e) { showError("取消失败: " + e); });
-      } else if (it.action === "shell") {
-        var cmd = prompt("Shell 命令:", "");
-        if (cmd) {
-          api("POST", "/v1/workspaces/" + serverInfo.workspace_id + "/agent/sessions/" + convId + "/shell", {
-            session_id: convId, command: cmd
-          }).catch(function(e) { showError("Shell 执行失败: " + e); });
-        }
-      }
-    });
-    menu.appendChild(mi);
-  });
-
-  document.body.appendChild(menu);
-  var closeHandler = function(ev) {
-    if (!menu.contains(ev.target)) {
-      if (document.body.contains(menu)) document.body.removeChild(menu);
-      document.removeEventListener("click", closeHandler);
-    }
-  };
-  setTimeout(function() { document.addEventListener("click", closeHandler); }, 0);
 }
 
 async function selectConversation(convId) {
@@ -1862,6 +1876,206 @@ function renderMessageParts(container, parts, role) {
   });
 }
 
+// ===== 附件处理 =====
+var ATTACH_MAX_SIZE = 1 * 1024 * 1024;  // 超过此大小的图片进行压缩 (1MB)
+var ATTACH_MAX_DIMENSION = 2048;         // 图片最大边长
+
+function addPendingFiles(fileList) {
+  var files = Array.from(fileList);
+  files.forEach(function(file) {
+    if (file.size > 20 * 1024 * 1024) {
+      showError("文件过大: " + file.name + " (最大 20MB)");
+      return;
+    }
+    if (file.type && file.type.indexOf("image/") === 0) {
+      compressImage(file).then(function(result) {
+        pendingFiles.push(result);
+        renderAttachPreview();
+      }).catch(function() {
+        showError("图片处理失败: " + file.name);
+      });
+    } else {
+      var reader = new FileReader();
+      reader.onload = function(e) {
+        var dataUrl = e.target.result;
+        var base64 = dataUrl.split(",")[1] || "";
+        pendingFiles.push({
+          name: file.name,
+          type: file.type,
+          size: file.size,
+          base64: base64,
+          dataUrl: dataUrl,
+        });
+        renderAttachPreview();
+      };
+      reader.readAsDataURL(file);
+    }
+  });
+}
+
+function compressImage(file) {
+  return new Promise(function(resolve, reject) {
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      var dataUrl = e.target.result;
+      var img = new Image();
+      img.onload = function() {
+        var w = img.naturalWidth;
+        var h = img.naturalHeight;
+        if (w <= ATTACH_MAX_DIMENSION && h <= ATTACH_MAX_DIMENSION && file.size <= ATTACH_MAX_SIZE) {
+          var base64 = dataUrl.split(",")[1] || "";
+          resolve({ name: file.name, type: file.type, size: file.size, base64: base64, dataUrl: dataUrl });
+          return;
+        }
+        var scale = Math.min(ATTACH_MAX_DIMENSION / w, ATTACH_MAX_DIMENSION / h, 1);
+        var tw = Math.round(w * scale);
+        var th = Math.round(h * scale);
+        var canvas = document.createElement("canvas");
+        canvas.width = tw;
+        canvas.height = th;
+        var ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, tw, th);
+        var quality = file.size > ATTACH_MAX_SIZE ? 0.7 : 0.85;
+        var compressedDataUrl = canvas.toDataURL(file.type || "image/jpeg", quality);
+        var base64 = compressedDataUrl.split(",")[1] || "";
+        var compressedSize = Math.round(base64.length * 3 / 4);
+        console.log("[agent] 图片压缩: " + file.name + " " + w + "x" + h + " -> " + tw + "x" + th + ", " + (file.size / 1024).toFixed(0) + "KB -> " + (compressedSize / 1024).toFixed(0) + "KB");
+        resolve({ name: file.name, type: file.type || "image/jpeg", size: compressedSize, base64: base64, dataUrl: compressedDataUrl });
+      };
+      img.onerror = function() { reject(new Error("图片加载失败")); };
+      img.src = dataUrl;
+    };
+    reader.onerror = function() { reject(new Error("文件读取失败")); };
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderAttachPreview() {
+  var container = document.getElementById("agent-attach-preview");
+  if (!container) return;
+  container.innerHTML = "";
+  pendingFiles.forEach(function(f, idx) {
+    var item = document.createElement("div");
+    item.className = "attach-preview-item";
+    if (f.type && f.type.indexOf("image/") === 0 && f.dataUrl) {
+      var img = document.createElement("img");
+      img.src = f.dataUrl;
+      item.appendChild(img);
+    } else {
+      var icon = document.createElement("span");
+      icon.className = "attach-file-icon";
+      icon.textContent = "📄";
+      item.appendChild(icon);
+    }
+    var name = document.createElement("span");
+    name.className = "attach-name";
+    name.textContent = f.name;
+    item.appendChild(name);
+    var removeBtn = document.createElement("button");
+    removeBtn.className = "attach-remove";
+    removeBtn.textContent = "✕";
+    removeBtn.addEventListener("click", function() {
+      pendingFiles.splice(idx, 1);
+      renderAttachPreview();
+    });
+    item.appendChild(removeBtn);
+    container.appendChild(item);
+  });
+}
+
+function clearPendingFiles() {
+  pendingFiles = [];
+  renderAttachPreview();
+}
+
+// ===== isSending 安全超时 =====
+function startSendSafetyTimer() {
+  clearSendSafetyTimer();
+  sendSafetyTimer = setTimeout(function() {
+    if (isSending) {
+      console.warn("[agent] isSending 安全超时 (3min)，自动重置");
+      isSending = false;
+      updateSendButton();
+      updateStatusBar("ready", null, contextUsage.used);
+      showError("运行超时，已自动重置状态");
+    }
+  }, 180000);
+}
+
+function clearSendSafetyTimer() {
+  if (sendSafetyTimer) {
+    clearTimeout(sendSafetyTimer);
+    sendSafetyTimer = null;
+  }
+}
+
+// ===== 右键菜单（仅复制/粘贴） =====
+function showCopyPasteMenu(e, targetInput) {
+  e.preventDefault();
+  e.stopPropagation();
+  var old = document.getElementById("agent-ctx-menu");
+  if (old) old.remove();
+  var menu = document.createElement("div");
+  menu.id = "agent-ctx-menu";
+  menu.style.cssText = "position:fixed;background:#1c2331;border:1px solid #30363d;border-radius:8px;padding:4px 0;z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,0.4);min-width:100px;";
+  menu.style.left = e.clientX + "px";
+  menu.style.top = e.clientY + "px";
+
+  var hasSelection = false;
+  try { hasSelection = window.getSelection().toString().length > 0; } catch (_) {}
+
+  var items = [];
+  if (hasSelection) {
+    items.push({ label: "复制", action: function() {
+      var sel = window.getSelection();
+      if (sel && sel.toString()) {
+        navigator.clipboard.writeText(sel.toString()).catch(function() {
+          document.execCommand("copy");
+        });
+      }
+    }});
+  }
+  if (targetInput) {
+    items.push({ label: "粘贴", action: function() {
+      navigator.clipboard.readText().then(function(text) {
+        if (text) {
+          var start = targetInput.selectionStart;
+          var end = targetInput.selectionEnd;
+          var val = targetInput.value;
+          targetInput.value = val.substring(0, start) + text + val.substring(end);
+          targetInput.selectionStart = targetInput.selectionEnd = start + text.length;
+          targetInput.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+      }).catch(function() {});
+    }});
+  }
+
+  if (items.length === 0) return;
+
+  items.forEach(function(it) {
+    var mi = document.createElement("div");
+    mi.textContent = it.label;
+    mi.style.cssText = "padding:6px 16px;font-size:12px;cursor:pointer;color:#b0b8c8;";
+    mi.addEventListener("mouseenter", function() { mi.style.background = "#2a3344"; });
+    mi.addEventListener("mouseleave", function() { mi.style.background = "transparent"; });
+    mi.addEventListener("click", function() {
+      menu.remove();
+      it.action();
+    });
+    menu.appendChild(mi);
+  });
+
+  document.body.appendChild(menu);
+  setTimeout(function() {
+    document.addEventListener("mousedown", function closeHandler(ev) {
+      if (!menu.contains(ev.target)) {
+        menu.remove();
+        document.removeEventListener("mousedown", closeHandler);
+      }
+    });
+  }, 0);
+}
+
 // ===== 发送消息 =====
 async function sendMessage() {
   console.log("[agent] sendMessage() isSending:", isSending, "convId:", currentConvId);
@@ -1870,24 +2084,45 @@ async function sendMessage() {
     if (currentConvId) {
       try {
         await api("POST", "/v1/workspaces/" + serverInfo.workspace_id + "/agent/sessions/" + currentConvId + "/cancel");
-      } catch (e) { showError("取消失败: " + e); }
+      } catch (e) {
+        showError("取消失败: " + e);
+      }
     }
+    isSending = false;
+    updateSendButton();
+    updateStatusBar("ready", null, contextUsage.used);
+    clearSendSafetyTimer();
     return;
   }
   if (!currentConvId) return;
   var input = document.getElementById("agent-input");
   var text = input.value.trim();
-  if (!text) return;
+  if (!text && pendingFiles.length === 0) return;
+
+  // 检查模型是否支持图片
+  var hasImages = pendingFiles.some(function(f) { return f.type && f.type.indexOf("image/") === 0; });
+  if (hasImages && (!agentInfo || !agentInfo.model)) {
+    try {
+      agentInfo = await api("GET", "/v1/workspaces/" + serverInfo.workspace_id + "/agent");
+    } catch (_) {}
+  }
+  console.log("[agent] 图片检查:", { hasImages, agentInfo: agentInfo ? agentInfo.model : null, supports_images: agentInfo && agentInfo.model ? agentInfo.model.supports_images : "N/A" });
+  if (hasImages && agentInfo && agentInfo.model && agentInfo.model.supports_images !== true) {
+    showError("当前模型 (" + (agentInfo.model.id || "未知") + ") 不支持图片，请仅发送文本或切换到支持图片的模型");
+    return;
+  }
 
   isSending = true;
   updateSendButton();
 
   // 立即显示用户消息（使用临时 ID，以便 SSE 到来时去重替换）
   var tempId = "temp-user-" + Date.now();
-  messages.push({ id: tempId, role: "user", content: text, _temp: true });
+  messages.push({ id: tempId, role: "user", content: text, _temp: true, _attachments: pendingFiles.length > 0 ? pendingFiles.map(function(f) { return f.name; }) : null });
   renderMessages();
   input.value = "";
   autoResize(input);
+  var filesToSend = pendingFiles.slice();
+  clearPendingFiles();
 
   // 更新状态栏
   updateStatusBar("busy", null, contextUsage.used);
@@ -1901,17 +2136,23 @@ async function sendMessage() {
       prompt: text,
       run_id: runId,
     };
+    if (filesToSend.length > 0) {
+      body.attachments = filesToSend.map(function(f) {
+        return {
+          file_name: f.name,
+          mime_type: f.type || "application/octet-stream",
+          content: f.base64,
+        };
+      });
+    }
     await api("POST", "/v1/workspaces/" + serverInfo.workspace_id + "/agent", body);
     console.log("[agent] 消息已发送, runId:", runId);
-    // 不在此处添加 assistant 消息，由 SSE message 事件驱动
-    // 注意：不在此处重置 isSending / 状态栏！
-    // isSending 和 busy 状态由 SSE "run_complete" 事件来重置（见 handleSSEEvent）
-    // 这样用户在 Agent 工作期间能看到"运行中"状态和"取消"按钮
+    startSendSafetyTimer();
     updateContextUsage();
   } catch (e) {
-    // 仅在请求失败时重置状态（网络错误、server 未运行等）
     isSending = false;
     updateSendButton();
+    clearSendSafetyTimer();
     updateStatusBar("ready", null, contextUsage.used);
     messages.push({ role: "error", content: "发送失败: " + e, type: "error" });
     renderMessages();
@@ -1957,6 +2198,9 @@ function setupSSEListener() {
 // SSE 断线重连
 function reconnectSSE() {
   if (sseReconnectTimer) return;
+  isSending = false;
+  updateSendButton();
+  clearSendSafetyTimer();
   updateStatusBar("error", null, contextUsage.used);
   showError("SSE 连接断开，3 秒后重连...");
   sseReconnectTimer = setTimeout(async function() {
@@ -2001,6 +2245,7 @@ function handleSSEEvent(payload) {
     case "run_complete":
       isSending = false;
       updateSendButton();
+      clearSendSafetyTimer();
       updateStatusBar("ready", null, contextUsage.used);
       // 运行完成后刷新 Agent 信息（模型可能已变更）并更新模型按钮显示
       api("GET", "/v1/workspaces/" + serverInfo.workspace_id + "/agent").then(function(info) {
@@ -2851,18 +3096,59 @@ function bindEvents() {
 
   // 附件按钮
   document.getElementById("agent-attach-btn").addEventListener("click", function() {
-    // TODO: 实现文件选择对话框
     var input = document.createElement("input");
     input.type = "file";
     input.multiple = true;
+    input.accept = "image/*";
     input.onchange = function(e) {
       var files = e.target.files;
       if (files && files.length > 0) {
-        // 暂时仅显示提示
-        showError("附件功能开发中: 选择了 " + files.length + " 个文件");
+        addPendingFiles(files);
       }
     };
     input.click();
+  });
+
+  // 输入区域拖放附件
+  var inputArea = document.querySelector(".input-area");
+  if (inputArea) {
+    inputArea.addEventListener("dragover", function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      inputArea.classList.add("drag-over");
+    });
+    inputArea.addEventListener("dragleave", function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      inputArea.classList.remove("drag-over");
+    });
+    inputArea.addEventListener("drop", function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      inputArea.classList.remove("drag-over");
+      var files = e.dataTransfer && e.dataTransfer.files;
+      if (files && files.length > 0) {
+        addPendingFiles(files);
+      }
+    });
+  }
+
+  // Ctrl+V 粘贴图片
+  var inputEl = document.getElementById("agent-input");
+  inputEl.addEventListener("paste", function(e) {
+    var clipItems = e.clipboardData && e.clipboardData.items;
+    if (!clipItems) return;
+    var imageFiles = [];
+    for (var i = 0; i < clipItems.length; i++) {
+      if (clipItems[i].type.indexOf("image/") === 0) {
+        var f = clipItems[i].getAsFile();
+        if (f) imageFiles.push(f);
+      }
+    }
+    if (imageFiles.length > 0) {
+      e.preventDefault();
+      addPendingFiles(imageFiles);
+    }
   });
 
   // 标题栏操作按钮
@@ -2887,6 +3173,22 @@ function bindEvents() {
 
   // 发送
   document.getElementById("agent-send-btn").addEventListener("click", sendMessage);
+
+  // 右键菜单：消息区域 → 复制/粘贴
+  var msgArea = document.getElementById("agent-msg-area");
+  if (msgArea) {
+    msgArea.addEventListener("contextmenu", function(e) {
+      showCopyPasteMenu(e, null);
+    });
+  }
+
+  // 右键菜单：输入框 → 复制/粘贴
+  var inputForCtx = document.getElementById("agent-input");
+  if (inputForCtx) {
+    inputForCtx.addEventListener("contextmenu", function(e) {
+      showCopyPasteMenu(e, inputForCtx);
+    });
+  }
 }
 
 // ===== Todo 列表渲染 =====
@@ -2971,6 +3273,8 @@ export default {
   },
   unmount() {
     console.log("[agent] unmount()");
+    pendingFiles = [];
+    clearSendSafetyTimer();
     // 停止 SSE 监听
     if (sseListener) { try { sseListener(); } catch (_) {} sseListener = null; }
     // 清除重连定时器
