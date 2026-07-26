@@ -8,6 +8,7 @@ let clientId = null;   // UUID，客户端标识
 let serverInfo = null; // { port, workspace_id }
 let settings = null;   // { agent_yolo, agent_default_provider, ... }
 let providers = [];    // cloud providers list
+let serverProviders = []; // admAgent 服务端 /providers 返回的完整 provider 列表（含内置模型）
 let localModels = [];  // 本地模型列表 (来自 scan_local_models)
 let conversations = []; // 会话列表
 let currentConvId = null;
@@ -1421,6 +1422,9 @@ async function init() {
     providers = [];
   }
 
+  // 加载服务端 provider 列表（含 admAgent 内置模型）
+  await refreshServerProviders();
+
   // 加载本地模型列表
   try {
     localModels = await invoke("scan_local_models");
@@ -2669,12 +2673,27 @@ async function switchModel(providerKey, displayName, ctxLen) {
   }
 }
 
-// 把前端 providerKey（"local" / "local:xxx" / 云端 provider key）解析成
+// 从 admAgent 服务端拉取完整 provider 列表（含编译内置的 provider，
+// admAgent.json 里没有、仅 CLI 能看到的内置模型也在其中）
+async function refreshServerProviders() {
+  if (!serverInfo || !serverInfo.workspace_id) return;
+  try {
+    var list = await api("GET", "/v1/workspaces/" + serverInfo.workspace_id + "/providers");
+    if (Array.isArray(list)) serverProviders = list;
+  } catch (_) { /* 拉取失败时保留旧数据，下拉回退 admAgent.json 列表 */ }
+}
+
+// 把前端 providerKey（"local" / "local:xxx" / "provider/model" / 云端 provider key）解析成
 // admAgent /config/model 接口需要的 { provider, model }
 function resolveAgentModel(providerKey) {
   if (providerKey === "local" || providerKey.startsWith("local:")) {
     // 本地模型统一走 admAgent.json 里自动维护的 local provider（唯一 model id 为 localModel）
     return { provider: "local", model: "localModel" };
+  }
+  // "provider/model" 复合 key（服务端 provider 列表条目，含内置模型）
+  var slash = providerKey.indexOf("/");
+  if (slash > 0) {
+    return { provider: providerKey.slice(0, slash), model: providerKey.slice(slash + 1) };
   }
   var p = providers.find(function(x) { return x.key === providerKey; });
   if (p && p.model_id) return { provider: providerKey, model: p.model_id };
@@ -2720,13 +2739,49 @@ function updateModelDropdown() {
   });
   dropdown.appendChild(localItem);
 
-  // 云端模型
-  providers.forEach(function(p) {
+  // 云端模型：优先用服务端 /providers 列表（含 admAgent 内置模型，一个 provider 可能多个 model），
+  // 服务端不可用时回退 admAgent.json 里用户添加的列表
+  var cloudEntries = [];
+  if (Array.isArray(serverProviders) && serverProviders.length > 0) {
+    serverProviders.forEach(function(sp) {
+      if (!sp || sp.id === "local") return;
+      (Array.isArray(sp.models) ? sp.models : []).forEach(function(m) {
+        if (!m || !m.id) return;
+        cloudEntries.push({
+          key: sp.id + "/" + m.id,
+          providerId: sp.id,
+          name: m.name || m.id,
+          context_window: m.context_window || 0,
+          supports_images: m.supports_images === true,
+        });
+      });
+    });
+    // admAgent.json 里刚添加、服务端尚未重载的 provider 作补充
+    providers.forEach(function(p) {
+      var exists = serverProviders.some(function(sp) { return sp && sp.id === p.key; });
+      if (!exists) {
+        cloudEntries.push({ key: p.key, providerId: p.key, name: p.name, context_window: p.context_window || 0, supports_images: p.supports_images === true });
+      }
+    });
+  } else {
+    providers.forEach(function(p) {
+      cloudEntries.push({ key: p.key, providerId: p.key, name: p.name, context_window: p.context_window || 0, supports_images: p.supports_images === true });
+    });
+  }
+
+  // 同一 provider 下模型数（用于旧格式选中态兼容：旧设置只存 provider key）
+  var providerModelCount = {};
+  cloudEntries.forEach(function(c) {
+    providerModelCount[c.providerId] = (providerModelCount[c.providerId] || 0) + 1;
+  });
+
+  cloudEntries.forEach(function(p) {
     var item = document.createElement("div");
-    var isSelected = settings.agent_default_provider === p.key;
+    var isSelected = currentProvider === p.key ||
+      (currentProvider === p.providerId && providerModelCount[p.providerId] === 1);
     item.className = "model-item" + (isSelected ? " selected" : "");
     var ctxStr = p.context_window ? formatTokens(p.context_window) : "";
-    item.innerHTML = '<span class="model-item-name">☁ ' + escapeHtml(p.name) + '</span>' +
+    item.innerHTML = '<span class="model-item-name">☁ ' + escapeHtml(p.name) + (p.supports_images ? ' 📷' : '') + '</span>' +
       (ctxStr ? '<span class="model-item-ctx">' + ctxStr + '</span>' : '');
     item.addEventListener("click", function() {
       switchModel(p.key, p.name, p.context_window || 0);
@@ -2753,6 +2808,9 @@ function updateModelBtn() {
   // 检查是否是本地模型
   if (provider === "local" || provider.startsWith("local:")) {
     nameEl.textContent = "Local Model";
+  } else if (provider.indexOf("/") > 0) {
+    // "provider/model" 复合 key（服务端列表条目）：显示 model 部分
+    nameEl.textContent = provider.slice(provider.indexOf("/") + 1);
   } else {
     var p = providers.find(function(x) { return x.key === provider; });
     nameEl.textContent = p ? p.name : provider;
@@ -3242,6 +3300,8 @@ function bindEvents() {
   document.getElementById("agent-model-btn").addEventListener("click", function(e) {
     e.stopPropagation();
     updateModelDropdown();
+    // 异步刷新服务端 provider 列表（含内置模型），完成后重渲染
+    refreshServerProviders().then(function() { updateModelDropdown(); });
     document.getElementById("agent-model-dropdown").classList.toggle("show");
   });
   document.addEventListener("click", function() {

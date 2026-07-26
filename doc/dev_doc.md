@@ -1354,7 +1354,8 @@ Agent 页面采用 HTTP API + SSE 架构，不再使用 PTY 终端或 xterm.js�
 | `update_cloud_provider` | 按 `key` 定位并更新指定 Provider 的全部参数（含 `supports_images`）；模型名称变更时同步重派生 model id，保留同一 key 以免产生孤儿条目 |
 
 - **云端模型管理（前端 `agent.js`）**：顶部栏「添加云端模型」弹出表单（模型名称 / Base URL / API Key / 上下文大小，默认 256000 / 「支持图片输入」复选框，默认不勾选），「模型管理」弹出已添加模型列表，每项带「编辑」按钮，编辑复用同一表单并回填参数；列表卡片中支持图片的模型展示「支持图片」标记。
-- **切换模型（`switchModel`）**：`agent_default_provider` 只存在 ADM 自己的 `config.json`，admAgent 服务端不读它。因此切换时必须先调服务端 `POST /v1/workspaces/{id}/config/model`（`scope=0`，携带 `provider`/`model`，可选 `reasoning_effort`/`temperature`）把首选模型写进 admAgent 配置，再调 `POST .../agent/update` 重载，否则服务端会一直使用 `admAgent.json` 里旧的 `model` 字段（表现为选什么模型都显示旧模型）。本地模型（`local` / `local:xxx`）统一映射为 `provider=local, model=localModel`；云端模型用 `list_cloud_providers` 返回的 `model_id`。
+- **模型下拉列表（`updateModelDropdown`）**：云端部分优先使用服务端 `GET /v1/workspaces/{id}/providers` 返回的完整 provider 列表（含编译内置在 admAgent 里、`admAgent.json` 中不存在的内置 provider，一个 provider 可能含多个 model，逐 model 渲染），条目 key 为复合格式 `provider/model`；`admAgent.json` 里刚添加、服务端尚未重载的 provider 作补充；服务端不可用时回退 `list_cloud_providers` 列表。支持图片的模型名后显示 📷 标记。打开下拉时异步刷新服务端列表（`refreshServerProviders`）并重渲染。
+- **切换模型（`switchModel`）**：`agent_default_provider` 只存在 ADM 自己的 `config.json`，admAgent 服务端不读它。因此切换时必须先调服务端 `POST /v1/workspaces/{id}/config/model`（`scope=0`，携带 `provider`/`model`，可选 `reasoning_effort`/`temperature`）把首选模型写进 admAgent 配置，再调 `POST .../agent/update` 重载，否则服务端会一直使用 `admAgent.json` 里旧的 `model` 字段（表现为选什么模型都显示旧模型）。本地模型（`local` / `local:xxx`）统一映射为 `provider=local, model=localModel`；复合 key（`provider/model`，服务端列表条目）直接拆分；其它云端 key 用 `list_cloud_providers` 返回的 `model_id`。
 - **云端 provider 不被覆盖**：`add_cloud_provider` / `update_cloud_provider` 均保持 `providers.local` 存在；由于 `ensure_adm_agent_config` 仅原地更新 `providers.local`，用户新增 / 编辑的云端 provider 在改上下文大小、重进 Agent 页等场景下均被保留。
 - **附件功能**：前端支持发送图片附件给 Agent，三种输入方式：点击 📎 按钮选择文件、拖放到输入区域、Ctrl+V 粘贴剪贴板图片。附件以 base64 编码通过 `attachments` 字段随消息发送到 admAgent server（`POST /v1/workspaces/{id}/agent`）。发送前检查 `agentInfo.model.supports_images`，若模型不支持图片则弹出错误提示阻止发送。附件预览区显示在输入框上方，支持逐个删除。文件大小限制 20MB。
 
@@ -1383,7 +1384,7 @@ Agent 页面采用 HTTP API + SSE 架构，不再使用 PTY 终端或 xterm.js�
 
 ***
 
-*文档版本: 3.18*\
+*文档版本: 3.19*\
 *最后更新: 2026-07-26*\
 *维护者: ADM 开发团队*
 
@@ -1393,6 +1394,7 @@ Agent 页面采用 HTTP API + SSE 架构，不再使用 PTY 终端或 xterm.js�
 
 | 日期 | 版本 | 变更内容 |
 |------|------|----------|
+| 2026-07-26 | **3.19** | 修复 admAgent 内置模型不在模型下拉列表显示的问题（CLI 模式可见）：下拉列表之前只读 `admAgent.json`（`list_cloud_providers`），而内置 provider 编译在 admAgent 二进制里。现前端新增 `refreshServerProviders()` 调用服务端 `GET /v1/workspaces/{id}/providers` 获取完整列表（逐 model 渲染，复合 key `provider/model`），`resolveAgentModel` / `updateModelBtn` 支持复合 key，服务端不可用时回退旧列表；支持图片的模型显示 📷 标记 |
 | 2026-07-26 | **3.18** | 添加云端模型时新增「支持图片输入」选项：`CloudProviderInput` 新增 `supports_images` 字段（默认 false），`add_cloud_provider` / `update_cloud_provider` 写入 `models[0].supports_images`，`list_cloud_providers` 返回该字段；前端添加弹窗增加复选框，列表卡片展示「支持图片」标记，admAgent 据此报告云端模型图片能力，发送附件前的检查随之生效 |
 | 2026-07-26 | **3.17** | 修复本地视觉模型在 Agent 页上传图片被误拦（提示「当前模型 (localModel) 不支持图片」）：`admAgent.json` 的 local 模型条目之前从不写 `supports_images`，admAgent 恒报告不支持图片。现 `AppState` 新增 `model_supports_images`，`start_model` 按 `support_images` + mmproj 实际加载写入（停止模型清零），`ensure_adm_agent_config` 将其同步到 `providers.local.models[0].supports_images` |
 | 2026-07-26 | **3.16** | Agent 附件功能：前端支持发送图片附件给 Agent，三种输入方式（点击按钮选择、拖放、Ctrl+V 粘贴），base64 编码发送，模型不支持图片时弹出提示阻止发送，附件预览区支持逐个删除 |
