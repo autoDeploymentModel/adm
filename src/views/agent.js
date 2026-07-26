@@ -18,7 +18,7 @@ let sseListener = null;
 let sseErrorUnlisten = null; // SSE 错误事件 unlisten（避免重复注册）
 let sseReconnectTimer = null; // SSE 重连定时器
 let isSending = false;
-let contextUsage = { used: 0, max: 0 };
+let contextUsage = { used: 0, max: 0, estimated: false };
 let sessionViewMode = "current"; // "current" | "all"
 let workspaceInfo = null; // { id, path, name }
 let agentInfo = null;    // Agent 状态信息 (当前模型等)
@@ -1712,8 +1712,14 @@ async function selectConversation(convId) {
     if (!Array.isArray(messages)) messages = messages.messages || [];
     renderMessages();
 
-    // 更新上下文用量
-    contextUsage.used = currentConv.context_tokens ?? currentConv.prompt_tokens ?? 0;
+    // 更新上下文用量（服务端重启后 context_tokens 不持久化会归 0，回退为本地估算）
+    if (currentConv.context_tokens) {
+      contextUsage.used = currentConv.context_tokens;
+      contextUsage.estimated = false;
+    } else {
+      contextUsage.used = estimateContextTokens(messages);
+      contextUsage.estimated = true;
+    }
     updateContextUsage();
 
     // 渲染 Todo 列表
@@ -1743,6 +1749,7 @@ async function newConversation() {
     messages = [];
     currentConv = resp;
     contextUsage.used = 0;
+    contextUsage.estimated = false;
     await loadConversations();
     renderMessages();
     document.getElementById("agent-conv-title").textContent = resp.title || "新会话";
@@ -2434,8 +2441,12 @@ function handleSessionSSEEvent(action, sessData) {
     // 如果是当前会话，更新标题和上下文
     if (currentConvId === sessData.id) {
       document.getElementById("agent-conv-title").textContent = sessData.title || "会话";
-      contextUsage.used = sessData.context_tokens ?? sessData.prompt_tokens ?? 0;
-      updateContextUsage();
+      // context_tokens 为 0 时（如仅改标题触发的更新）保留现有估算值，避免被清零
+      if (sessData.context_tokens) {
+        contextUsage.used = sessData.context_tokens;
+        contextUsage.estimated = false;
+        updateContextUsage();
+      }
     }
   } else if (action === "deleted") {
     // 会话删除
@@ -2844,7 +2855,7 @@ function updateContextUsage() {
   var max = contextUsage.max || 0;
 
   if (max > 0) {
-    var usedStr = formatTokens(used);
+    var usedStr = (contextUsage.estimated && used > 0 ? "~" : "") + formatTokens(used);
     var maxStr = formatTokens(max);
     if (currentEl) currentEl.textContent = usedStr;
     if (maxEl) maxEl.textContent = maxStr;
@@ -2865,8 +2876,51 @@ function updateContextUsage() {
   // 更新状态栏 Token
   var tokenEl = document.getElementById("agent-status-tokens");
   if (tokenEl) {
-    tokenEl.textContent = "Token: " + formatTokens(used) + (max > 0 ? " / " + formatTokens(max) : "");
+    tokenEl.textContent = "Token: " + (contextUsage.estimated && used > 0 ? "~" : "") + formatTokens(used) + (max > 0 ? " / " + formatTokens(max) : "");
   }
+}
+
+// 本地估算历史消息占用的上下文 token 数。
+// 服务端的 context_tokens 仅存内存，重启后加载历史会话会返回 0，此时用字符数估算：
+// CJK 字符 ≈ 1 token/字，其他字符 ≈ 4 字符/token，另加每条消息固定开销。
+function estimateContextTokens(msgs) {
+  if (!Array.isArray(msgs) || msgs.length === 0) return 0;
+
+  // 已压缩会话：只统计摘要消息（含）之后的消息
+  var start = 0;
+  if (currentConv && currentConv.summary_message_id) {
+    var idx = msgs.findIndex(function(m) { return m.id === currentConv.summary_message_id; });
+    if (idx >= 0) start = idx;
+  }
+
+  var cjkRe = /[\u3000-\u9fff\uac00-\ud7af\uff00-\uffef]/;
+  function countText(text) {
+    if (!text) return 0;
+    var cjk = 0, other = 0;
+    for (var i = 0; i < text.length; i++) {
+      if (cjkRe.test(text[i])) cjk++; else other++;
+    }
+    return cjk + Math.ceil(other / 4);
+  }
+
+  var total = 0;
+  for (var m = start; m < msgs.length; m++) {
+    var msg = msgs[m];
+    total += 4; // 每条消息的角色/分隔符开销
+    if (msg.content) total += countText(msg.content);
+    if (!msg.parts || !Array.isArray(msg.parts)) continue;
+    msg.parts.forEach(function(p) {
+      if (!p || !p.data) return;
+      switch (p.type) {
+        case "text": total += countText(p.data.text); break;
+        case "tool_call": total += countText(p.data.name) + countText(p.data.input); break;
+        case "tool_result": total += countText(p.data.content); break;
+        case "shell_command": total += countText(p.data.command) + countText(p.data.output); break;
+        // reasoning 一般不回传上下文，finish/image/binary 忽略
+      }
+    });
+  }
+  return total;
 }
 
 function formatTokens(n) {

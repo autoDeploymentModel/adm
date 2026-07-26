@@ -1358,6 +1358,7 @@ Agent 页面采用 HTTP API + SSE 架构，不再使用 PTY 终端或 xterm.js�
 - **切换模型（`switchModel`）**：`agent_default_provider` 只存在 ADM 自己的 `config.json`，admAgent 服务端不读它。因此切换时必须先调服务端 `POST /v1/workspaces/{id}/config/model`（`scope=0`，携带 `provider`/`model`，可选 `reasoning_effort`/`temperature`）把首选模型写进 admAgent 配置，再调 `POST .../agent/update` 重载，否则服务端会一直使用 `admAgent.json` 里旧的 `model` 字段（表现为选什么模型都显示旧模型）。本地模型（`local` / `local:xxx`）统一映射为 `provider=local, model=localModel`；复合 key（`provider/model`，服务端列表条目）直接拆分；其它云端 key 用 `list_cloud_providers` 返回的 `model_id`。
 - **云端 provider 不被覆盖**：`add_cloud_provider` / `update_cloud_provider` 均保持 `providers.local` 存在；由于 `ensure_adm_agent_config` 仅原地更新 `providers.local`，用户新增 / 编辑的云端 provider 在改上下文大小、重进 Agent 页等场景下均被保留。
 - **附件功能**：前端支持发送图片附件给 Agent，三种输入方式：点击 📎 按钮选择文件、拖放到输入区域、Ctrl+V 粘贴剪贴板图片。附件以 base64 编码通过 `attachments` 字段随消息发送到 admAgent server（`POST /v1/workspaces/{id}/agent`）。发送前检查 `agentInfo.model.supports_images`，若模型不支持图片则弹出错误提示阻止发送。附件预览区显示在输入框上方，支持逐个删除。文件大小限制 20MB。
+- **上下文用量显示（`agent.js`）**：工具栏显示 `当前/最大` token（最大值取 `agentInfo.model.context_window`）。运行中由 SSE `session` 事件的 `context_tokens` 实时更新；但 admAgent 的 sessions 表**不持久化 `context_tokens`**（仅有 `prompt_tokens`/`completion_tokens` 列），server 重启后加载历史会话接口返回 0。此时前端回退 `estimateContextTokens(messages)` 本地估算（CJK ≈ 1 token/字、其它 ≈ 4 字符/token，统计 text/tool_call/tool_result/shell_command 部分，已压缩会话从 `summary_message_id` 开始统计），估算值带 `~` 前缀；收到非 0 的服务端 `context_tokens` 后恢复精确值，SSE 事件中 `context_tokens=0` 时不覆盖估算值。
 
 ---
 
