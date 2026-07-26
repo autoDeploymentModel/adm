@@ -23,7 +23,7 @@ let sessionViewMode = "current"; // "current" | "all"
 let workspaceInfo = null; // { id, path, name }
 let agentInfo = null;    // Agent 状态信息 (当前模型等)
 let pendingFiles = [];   // 待发送附件列表 [{name, type, size, base64, dataUrl}]
-let sendSafetyTimer = null; // isSending 安全超时定时器（3分钟无 run_complete 则自动重置）
+let sendSafetyTimer = null; // isSending 安全超时定时器（3分钟无任何 SSE 活动则自动重置，收到消息事件会续期）
 
 // ===== 模板 =====
 const template = `
@@ -2326,6 +2326,8 @@ function handleSSEEvent(payload) {
 
   switch (eventType) {
     case "message":
+      // 收到消息事件说明 Agent 仍在活动，重置安全超时计时器（避免长任务被误判超时）
+      if (isSending) startSendSafetyTimer();
       handleMessageSSEEvent(innerType, actualData);
       break;
     case "session":
