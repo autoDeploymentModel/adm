@@ -34,6 +34,8 @@ pub struct AppState {
     pub agent_session: Mutex<Option<AgentServerSession>>,
     /// 全局标识：是否有模型成功启动（用于进入 Agent 页前的判断）
     pub model_running: Mutex<bool>,
+    /// 当前运行模型是否支持图片输入（启动时按 support_images + mmproj 文件实际加载判定）
+    pub model_supports_images: Mutex<bool>,
     /// 模型启动代次：每次成功启动模型 +1
     pub model_generation: Mutex<u64>,
 }
@@ -52,6 +54,7 @@ impl AppState {
             sys: Mutex::new(System::new_all()),
             agent_session: Mutex::new(None),
             model_running: Mutex::new(false),
+            model_supports_images: Mutex::new(false),
             model_generation: Mutex::new(0),
         }
     }
@@ -72,6 +75,7 @@ impl AppState {
         *self.running_model_id.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.running_port.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.model_running.lock().unwrap_or_else(|e| e.into_inner()) = false;
+        *self.model_supports_images.lock().unwrap_or_else(|e| e.into_inner()) = false;
     }
 
     pub fn set_model_running(&self, running: bool) {

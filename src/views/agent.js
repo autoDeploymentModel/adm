@@ -1282,6 +1282,9 @@ const template = `
         <input type="text" class="settings-input" id="add-model-baseurl" placeholder="API Base URL (如 https://api.example.com/v1)">
         <input type="text" class="settings-input" id="add-model-apikey" placeholder="API Key">
         <input type="text" class="settings-input" id="add-model-ctx" placeholder="上下文大小 (如 256K, 1M)">
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#b0b8c8;cursor:pointer;user-select:none;">
+          <input type="checkbox" id="add-model-images" style="cursor:pointer;"> 支持图片输入（视觉模型）
+        </label>
         <div id="add-model-msg" style="font-size:12px;min-height:18px;line-height:18px;"></div>
         <button class="settings-btn settings-btn-primary" id="add-model-submit" style="align-self:flex-start;">添加</button>
       </div>
@@ -3041,7 +3044,7 @@ function renderProviderList() {
           '<button class="provider-action-btn delete" data-key="' + p.key + '">删除</button>' +
         '</div>' +
       '</div>' +
-      '<div class="provider-detail">' + escapeHtml(p.base_url) + ' · 上下文: ' + (p.context_window || '默认') + '</div>';
+      '<div class="provider-detail">' + escapeHtml(p.base_url) + ' · 上下文: ' + (p.context_window || '默认') + (p.supports_images ? ' · 支持图片' : '') + '</div>';
     card.querySelector(".delete").addEventListener("click", function() {
       showConfirm("确定删除云端模型「" + p.name + "」？", async function() {
         try {
@@ -3071,6 +3074,7 @@ async function addModel() {
   var baseUrl = document.getElementById("add-model-baseurl").value.trim();
   var apiKey = document.getElementById("add-model-apikey").value.trim();
   var ctx = parseContextSize(document.getElementById("add-model-ctx").value) || 256000;
+  var supportsImages = document.getElementById("add-model-images").checked;
 
   if (!modelId || !baseUrl || !apiKey) {
     addModelMsg("请填写模型ID、API地址和密钥", true);
@@ -3079,7 +3083,7 @@ async function addModel() {
 
   try {
     await invoke("add_cloud_provider", {
-      input: { name: name, base_url: baseUrl, api_key: apiKey, context_window: ctx, model_id: modelId || null }
+      input: { name: name, base_url: baseUrl, api_key: apiKey, context_window: ctx, model_id: modelId || null, supports_images: supportsImages }
     });
     providers = await invoke("list_cloud_providers");
     renderProviderList();
@@ -3092,6 +3096,7 @@ async function addModel() {
       document.getElementById("add-model-apikey").value = "";
       document.getElementById("add-model-modelid").value = "";
       document.getElementById("add-model-ctx").value = "";
+      document.getElementById("add-model-images").checked = false;
       document.getElementById("add-model-msg").textContent = "";
     }, 1000);
   } catch (e) {

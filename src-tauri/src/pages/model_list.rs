@@ -386,6 +386,8 @@ pub async fn start_model(
     )
     .ok();
 
+    // 视觉多模态：仅当模型声明支持图片且 mmproj 文件实际存在时才启用（同步记录到 AppState 供 Agent 配置使用）
+    let mut vision_enabled = false;
     if support_images {
         let model_dir = model_path.parent().unwrap();
         let mut mmproj_path: Option<std::path::PathBuf> = None;
@@ -405,8 +407,10 @@ pub async fn start_model(
         }
         if let Some(mp) = mmproj_path {
             args.extend(["--mmproj".to_string(), mp.to_string_lossy().to_string()]);
+            vision_enabled = true;
         }
     }
+    *state.model_supports_images.lock().unwrap_or_else(|e| e.into_inner()) = vision_enabled;
 
     if let Some(ctx) = params.ctx_size {
         args.extend(["-c".to_string(), ctx.to_string()]);

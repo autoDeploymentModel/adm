@@ -1327,7 +1327,8 @@ Agent 页面采用 HTTP API + SSE 架构，不再使用 PTY 终端或 xterm.js�
 - SSE 事件通过 Tauri event `agent-sse-event` 转发给前端
 
 **admAgent.json 配置**：
-- `ensure_adm_agent_config` 读取 ADM 配置文件（`config.json`）中 `launch_params.ctx_size` 作为上下文大小，于用户目录 `<home>/.config/admAgent/admAgent.json` 生成（或更新）配置。默认结构为 `{ "model": { "provider": "local", "model": "localModel" }, "providers": { "local": { ... } } }`；`context_window` 取该值，`default_max_tokens` 取其 30%（四舍五入）；若文件已存在则仅就地更新这两个字段，尽量保留其它内容。`ctx_size` 缺失或非法时回退默认 `context_window = 25600`。
+- `ensure_adm_agent_config` 读取 ADM 配置文件（`config.json`）中 `launch_params.ctx_size` 作为上下文大小，于用户目录 `<home>/.config/admAgent/admAgent.json` 生成（或更新）配置。默认结构为 `{ "model": { "provider": "local", "model": "localModel" }, "providers": { "local": { ... } } }`；`context_window` 取该值，`default_max_tokens` 取其 30%（四舍五入）；若文件已存在则仅就地更新这些字段，尽量保留其它内容。`ctx_size` 缺失或非法时回退默认 `context_window = 25600`。
+- **图片支持同步**：`start_model` 启动模型时，若模型声明 `support_images` 且 mmproj 文件实际存在（即 `--mmproj` 参数真正传入），将 `AppState.model_supports_images` 置为 `true`（停止模型时清零）；`ensure_adm_agent_config` 据此将 `supports_images` 写入 `providers.local.models[0]`，admAgent 的 `GET /agent` 即可正确报告本地视觉模型支持图片，前端附件发送前的 `supports_images` 检查不再误拦。
   - **触发时机 1（更早）**：点击 Agent 按钮时，`goAgent()` 在平台判断通过后即调用 `prepare_adm_agent_config`（早于模型运行检查与 admAgent 下载）。
 
 **进程管理**：
@@ -1348,11 +1349,11 @@ Agent 页面采用 HTTP API + SSE 架构，不再使用 PTY 终端或 xterm.js�
 | `get_agent_server_status` | 获取 admAgent server 运行状态 |
 | `agent_http_request` | 代理前端 HTTP API 请求到 admAgent server |
 | `agent_subscribe_events` / `agent_unsubscribe_events` | SSE 事件订阅/取消订阅 |
-| `add_cloud_provider` | 新增云端模型 Provider：写入 `admAgent.json` 的 `providers` 分支（`type=openai-compat`，含 `models` 数组）。写入前先 `ensure_adm_agent_config` 保证文件含合法 `providers.local`，避免后续启动 Agent 时被默认结构覆盖。provider key 与 model id 由模型名称派生（slugify），原子写入。上下文大小 `256K=256000`（K×1000、M×1000000） |
-| `list_cloud_providers` | 列出 `admAgent.json` 中已添加的云端模型 Provider（排除自动管理的 `local`），返回每项 `key/name/base_url/api_key/context_window/model_id`（`model_id` 取 `models[0].id`，缺失时按 slugify 派生），供「模型管理」弹窗列表展示、编辑回填与切换模型时调用服务端 `/config/model` |
-| `update_cloud_provider` | 按 `key` 定位并更新指定 Provider 的全部参数；模型名称变更时同步重派生 model id，保留同一 key 以免产生孤儿条目 |
+| `add_cloud_provider` | 新增云端模型 Provider：写入 `admAgent.json` 的 `providers` 分支（`type=openai-compat`，含 `models` 数组）。写入前先 `ensure_adm_agent_config` 保证文件含合法 `providers.local`，避免后续启动 Agent 时被默认结构覆盖。provider key 与 model id 由模型名称派生（slugify），原子写入。上下文大小 `256K=256000`（K×1000、M×1000000）。`supports_images` 字段写入 `models[0]`，标记该云端模型是否支持图片输入 |
+| `list_cloud_providers` | 列出 `admAgent.json` 中已添加的云端模型 Provider（排除自动管理的 `local`），返回每项 `key/name/base_url/api_key/context_window/model_id/supports_images`（`model_id` 取 `models[0].id`，缺失时按 slugify 派生），供「模型管理」弹窗列表展示、编辑回填与切换模型时调用服务端 `/config/model` |
+| `update_cloud_provider` | 按 `key` 定位并更新指定 Provider 的全部参数（含 `supports_images`）；模型名称变更时同步重派生 model id，保留同一 key 以免产生孤儿条目 |
 
-- **云端模型管理（前端 `agent.js`）**：顶部栏「添加云端模型」弹出表单（模型名称 / Base URL / API Key / 上下文大小，默认 256000），「模型管理」弹出已添加模型列表，每项带「编辑」按钮，编辑复用同一表单并回填参数。
+- **云端模型管理（前端 `agent.js`）**：顶部栏「添加云端模型」弹出表单（模型名称 / Base URL / API Key / 上下文大小，默认 256000 / 「支持图片输入」复选框，默认不勾选），「模型管理」弹出已添加模型列表，每项带「编辑」按钮，编辑复用同一表单并回填参数；列表卡片中支持图片的模型展示「支持图片」标记。
 - **切换模型（`switchModel`）**：`agent_default_provider` 只存在 ADM 自己的 `config.json`，admAgent 服务端不读它。因此切换时必须先调服务端 `POST /v1/workspaces/{id}/config/model`（`scope=0`，携带 `provider`/`model`，可选 `reasoning_effort`/`temperature`）把首选模型写进 admAgent 配置，再调 `POST .../agent/update` 重载，否则服务端会一直使用 `admAgent.json` 里旧的 `model` 字段（表现为选什么模型都显示旧模型）。本地模型（`local` / `local:xxx`）统一映射为 `provider=local, model=localModel`；云端模型用 `list_cloud_providers` 返回的 `model_id`。
 - **云端 provider 不被覆盖**：`add_cloud_provider` / `update_cloud_provider` 均保持 `providers.local` 存在；由于 `ensure_adm_agent_config` 仅原地更新 `providers.local`，用户新增 / 编辑的云端 provider 在改上下文大小、重进 Agent 页等场景下均被保留。
 - **附件功能**：前端支持发送图片附件给 Agent，三种输入方式：点击 📎 按钮选择文件、拖放到输入区域、Ctrl+V 粘贴剪贴板图片。附件以 base64 编码通过 `attachments` 字段随消息发送到 admAgent server（`POST /v1/workspaces/{id}/agent`）。发送前检查 `agentInfo.model.supports_images`，若模型不支持图片则弹出错误提示阻止发送。附件预览区显示在输入框上方，支持逐个删除。文件大小限制 20MB。
@@ -1382,7 +1383,7 @@ Agent 页面采用 HTTP API + SSE 架构，不再使用 PTY 终端或 xterm.js�
 
 ***
 
-*文档版本: 3.16*\
+*文档版本: 3.18*\
 *最后更新: 2026-07-26*\
 *维护者: ADM 开发团队*
 
@@ -1392,6 +1393,8 @@ Agent 页面采用 HTTP API + SSE 架构，不再使用 PTY 终端或 xterm.js�
 
 | 日期 | 版本 | 变更内容 |
 |------|------|----------|
+| 2026-07-26 | **3.18** | 添加云端模型时新增「支持图片输入」选项：`CloudProviderInput` 新增 `supports_images` 字段（默认 false），`add_cloud_provider` / `update_cloud_provider` 写入 `models[0].supports_images`，`list_cloud_providers` 返回该字段；前端添加弹窗增加复选框，列表卡片展示「支持图片」标记，admAgent 据此报告云端模型图片能力，发送附件前的检查随之生效 |
+| 2026-07-26 | **3.17** | 修复本地视觉模型在 Agent 页上传图片被误拦（提示「当前模型 (localModel) 不支持图片」）：`admAgent.json` 的 local 模型条目之前从不写 `supports_images`，admAgent 恒报告不支持图片。现 `AppState` 新增 `model_supports_images`，`start_model` 按 `support_images` + mmproj 实际加载写入（停止模型清零），`ensure_adm_agent_config` 将其同步到 `providers.local.models[0].supports_images` |
 | 2026-07-26 | **3.16** | Agent 附件功能：前端支持发送图片附件给 Agent，三种输入方式（点击按钮选择、拖放、Ctrl+V 粘贴），base64 编码发送，模型不支持图片时弹出提示阻止发送，附件预览区支持逐个删除 |
 | 2026-07-25 | **3.15** | 修复 macOS 点击关闭最小化到托盘后，再点击托盘图标无法显示窗口的问题：<br>1. **根因**：`set_skip_taskbar(true)` 在 macOS 上会将应用激活策略切换为 `Accessory`（隐藏 Dock 图标），之后从托盘点击恢复时 `show()` + `set_focus()` 无法把窗口带到前台<br>2. 新增 `show_main_window(app)` / `hide_main_window(window)` 跨平台 helper 函数，统一所有窗口显隐逻辑（托盘左键、右键菜单「显示」、单实例回调、CloseRequested、Resized 最小化、`minimize_to_tray` 命令）<br>3. macOS 隐藏时仅 `hide()`，不调用 `set_skip_taskbar(true)`，保持 `Regular` 激活策略（Dock 图标可见，符合 macOS 习惯）；macOS 显示时先 `set_activation_policy(Regular)` 再 `show` + `set_focus`<br>4. Windows/Linux 行为不变（`set_skip_taskbar` 用于从任务栏移除）<br>5. `index.rs` `minimize_to_tray` 命令同步修复 |
 | 2026-07-24 | **3.14** | 新增系统托盘（最小化到右下角）功能：<br>1. `Cargo.toml` 启用 `tauri` `tray-icon` feature；`capabilities/default.json` 添加 `core:window:allow-hide/show/set-focus` 权限<br>2. `lib.rs` `.setup()` 创建托盘图标（复用窗口图标），右键菜单「显示窗口 / 退出 ADM」，左键单击切换窗口显隐<br>3. 窗口关闭行为：启用 `minimize_to_tray` 时 `api.prevent_close()` + `window.hide()` + `set_skip_taskbar(true)` 并 emit `window-minimized-to-tray` 事件；未启用时执行进程清理后正常关闭<br>4. 从原 `on_window_event` 提取 `cleanup_processes()` 公共函数，供托盘「退出」和正常关闭复用<br>5. `Settings` 新增 `minimize_to_tray: bool` 字段（`#[serde(default = "default_true")]`，默认启用），手动实现 `Default`<br>6. `settings.js` 新增「通用」设置面板含托盘开关，`saveParams` / `saveGeneralSettings` 改用 read-modify-write 避免覆盖其他字段<br>7. `index.html` 监听 `window-minimized-to-tray` 事件，首次隐藏时显示 toast 提示 |

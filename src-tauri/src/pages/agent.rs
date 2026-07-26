@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::Emitter;
+use tauri::Manager;
 
 // 读取配置文件中的 agent 工作目录（默认空）
 fn load_agent_workdir(app: &tauri::AppHandle) -> String {
@@ -201,9 +202,9 @@ fn load_port(app: &tauri::AppHandle) -> Option<u16> {
     settings.launch_params.port
 }
 
-/// 根据上下文大小与端口构造完整的 admAgent.json 配置结构体。
+/// 根据上下文大小、端口与图片支持标志构造完整的 admAgent.json 配置结构体。
 /// default_max_tokens 取 context_window 的 30%（四舍五入为整数）。
-fn build_adm_agent_config(context_window: u32, port: u16) -> serde_json::Value {
+fn build_adm_agent_config(context_window: u32, port: u16, supports_images: bool) -> serde_json::Value {
     let default_max_tokens = (context_window as f64 * 0.3).round() as u32;
     serde_json::json!({
         "model": {
@@ -220,7 +221,8 @@ fn build_adm_agent_config(context_window: u32, port: u16) -> serde_json::Value {
                         "id": "localModel",
                         "name": "Local Model",
                         "context_window": context_window,
-                        "default_max_tokens": default_max_tokens
+                        "default_max_tokens": default_max_tokens,
+                        "supports_images": supports_images
                     }
                 ]
             }
@@ -228,19 +230,28 @@ fn build_adm_agent_config(context_window: u32, port: u16) -> serde_json::Value {
     })
 }
 
-/// 确保 admAgent.json 存在且 context_window / default_max_tokens / base_url 与当前配置一致。
+/// 确保 admAgent.json 存在且 context_window / default_max_tokens / base_url / supports_images 与当前配置一致。
 ///
 /// - 目录不存在则创建。
 /// - 文件不存在：写入完整的默认结构（context_window、port 来自配置，default_max_tokens = 30%）。
-/// - 文件已存在：原地更新 providers.local.models[0] 的 context_window 与 default_max_tokens，
+/// - 文件已存在：原地更新 providers.local.models[0] 的 context_window、default_max_tokens
+///   与 supports_images（取自 AppState，启动模型时按 mmproj 实际加载判定），
 ///   以及 providers.local.base_url 中的端口，尽量保留文件中其它字段；
-///   若结构异常无法原地更新，则回退写入完整默认结构。
+/// 若结构异常无法原地更新，则回退写入完整默认结构。
 fn ensure_adm_agent_config(app: &tauri::AppHandle) -> Result<(), AppError> {
     let ctx = load_ctx_size(app)
         .filter(|v| *v > 0)
         .unwrap_or(DEFAULT_CONTEXT_WINDOW as i32) as u32;
 
     let port = load_port(app).unwrap_or(DEFAULT_PORT);
+
+    // 当前运行模型是否支持图片（start_model 时按 support_images + mmproj 实际加载写入）
+    let supports_images = app
+        .state::<AppState>()
+        .model_supports_images
+        .lock()
+        .map(|g| *g)
+        .unwrap_or(false);
 
     let dir = adm_agent_config_dir()?;
     std::fs::create_dir_all(&dir)
@@ -262,6 +273,7 @@ fn ensure_adm_agent_config(app: &tauri::AppHandle) -> Result<(), AppError> {
                     if let Some(first) = models.get_mut(0) {
                         first["context_window"] = serde_json::json!(ctx);
                         first["default_max_tokens"] = serde_json::json!(default_max_tokens);
+                        first["supports_images"] = serde_json::json!(supports_images);
                         updated = true;
                     }
                     // 同步更新 base_url 中的端口
@@ -283,7 +295,7 @@ fn ensure_adm_agent_config(app: &tauri::AppHandle) -> Result<(), AppError> {
     }
 
     // 文件不存在，或结构异常无法原地更新：写入完整默认结构
-    let config = build_adm_agent_config(ctx, port);
+    let config = build_adm_agent_config(ctx, port, supports_images);
     write_json_atomic(&path, &config)
 }
 
@@ -365,6 +377,9 @@ pub struct CloudProviderInput {
     /// 用户指定的模型ID（可选）。为空时自动从 name 派生
     #[serde(default)]
     pub model_id: Option<String>,
+    /// 是否支持图片输入（视觉模型），默认 false
+    #[serde(default)]
+    pub supports_images: bool,
 }
 
 /// 新增一个云端模型 Provider 到 admAgent.json 的 `providers` 分支下。
@@ -394,7 +409,7 @@ pub async fn add_cloud_provider(
             .map_err(|e| format!("读取 admAgent.json 失败: {}", e))?;
         serde_json::from_str(&s).map_err(|e| format!("解析 admAgent.json 失败: {}", e))?
     } else {
-        build_adm_agent_config(DEFAULT_CONTEXT_WINDOW, DEFAULT_PORT)
+        build_adm_agent_config(DEFAULT_CONTEXT_WINDOW, DEFAULT_PORT, false)
     };
 
     if !config.get("providers").map_or(false, |v| v.is_object()) {
@@ -416,7 +431,8 @@ pub async fn add_cloud_provider(
             {
                 "id": model_id,
                 "name": input.name,
-                "context_window": input.context_window
+                "context_window": input.context_window,
+                "supports_images": input.supports_images
             }
         ]
     });
@@ -439,6 +455,8 @@ pub struct CloudProviderView {
     pub context_window: u32,
     /// models[0].id，供前端调用服务端 `/config/model` 切换模型时使用
     pub model_id: String,
+    /// models[0].supports_images，是否支持图片输入
+    pub supports_images: bool,
 }
 
 /// 列出 admAgent.json 中已添加的全部云端模型 Provider（排除自动管理的 `local`）。
@@ -492,6 +510,12 @@ pub async fn list_cloud_providers(
                 .and_then(|i| i.as_str())
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| slugify_model_id(&name));
+            let supports_images = prov
+                .get("models")
+                .and_then(|m| m.get(0))
+                .and_then(|m0| m0.get("supports_images"))
+                .and_then(|s| s.as_bool())
+                .unwrap_or(false);
             out.push(CloudProviderView {
                 key: key.clone(),
                 name,
@@ -499,6 +523,7 @@ pub async fn list_cloud_providers(
                 api_key,
                 context_window,
                 model_id,
+                supports_images,
             });
         }
     }
@@ -576,7 +601,8 @@ pub async fn update_cloud_provider(
             {
                 "id": model_id,
                 "name": input.name,
-                "context_window": input.context_window
+                "context_window": input.context_window,
+                "supports_images": input.supports_images
             }
         ]
     });
