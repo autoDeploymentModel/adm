@@ -70,7 +70,7 @@ fn hide_main_window(window: &tauri::Window) {
     }
 }
 
-/// 清理所有子进程（模型 / SD / Agent / Windows Terminal）。
+/// 清理所有子进程（模型 / SD / Agent / admAgent）。
 /// 从原 `on_window_event(CloseRequested)` 提取，供托盘"退出"和正常关闭复用。
 fn cleanup_processes(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
@@ -92,14 +92,13 @@ fn cleanup_processes(app: &tauri::AppHandle) {
         crate::common::utils::platform::kill_process_by_name("sd-cli");
     }
 
-    // 关闭 Agent 终端会话
+    // 关闭 Agent 会话
     agent::kill_agent_session(&state);
 
-    // Windows 平台：关闭 Windows Terminal 外部窗口及 admAgent 进程
+    // Windows 平台：关闭 admAgent 进程
     #[cfg(target_os = "windows")]
     {
         crate::common::utils::platform::kill_process_by_name("admAgent.exe");
-        crate::common::utils::platform::kill_process_by_name("WindowsTerminal.exe");
     }
 }
 
@@ -226,27 +225,29 @@ pub fn run() {
             settings::get_app_version,
             settings::get_llamacpp_version,
             settings::delete_llamacpp,
-            // agent.rs
+            // agent.rs - server mode
             agent::get_platform_os,
             agent::get_platform_arch,
             agent::prepare_adm_agent_config,
             agent::check_adm_agent,
+            agent::get_adm_agent_version,
             agent::download_adm_agent,
             agent::check_adm_agent_update,
             agent::download_adm_agent_update,
             agent::get_agent_workdir,
             agent::set_agent_workdir,
-            agent::get_agent_status,
             agent::add_cloud_provider,
             agent::list_cloud_providers,
             agent::update_cloud_provider,
             agent::delete_cloud_provider,
-            agent::start_agent_terminal,
-            agent::agent_terminal_input,
-            agent::agent_terminal_resize,
-            agent::stop_agent_terminal,
-            agent::launch_windows_terminal_agent,
-            agent::stop_windows_terminal_agent,
+            agent::start_agent_server,
+            agent::stop_agent_server,
+            agent::get_agent_server_status,
+            agent::agent_http_request,
+            agent::agent_subscribe_events,
+            agent::agent_unsubscribe_events,
+            agent::get_adm_agent_logs,
+            agent::export_agent_logs,
             // lib.rs (index.rs)
             index::minimize_to_tray,
         ])

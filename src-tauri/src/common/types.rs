@@ -125,6 +125,18 @@ pub agent_workdir: String,
 /// 关闭窗口时最小化到系统托盘（默认启用）
 #[serde(default = "default_true")]
 pub minimize_to_tray: bool,
+/// Agent YOLO 模式：跳过所有权限确认
+#[serde(default)]
+pub agent_yolo: bool,
+/// Agent 默认 Provider（如 "local" / "xiaomimimo" 等）
+#[serde(default)]
+pub agent_default_provider: String,
+/// Agent 推理强度（auto / low / medium / high）
+#[serde(default)]
+pub agent_reasoning_effort: String,
+/// Agent 采样温度
+#[serde(default)]
+pub agent_temperature: Option<f64>,
 }
 
 impl Default for Settings {
@@ -133,6 +145,10 @@ Self {
 launch_params: LaunchParams::default(),
 agent_workdir: String::new(),
 minimize_to_tray: true,
+agent_yolo: false,
+agent_default_provider: String::new(),
+agent_reasoning_effort: String::new(),
+agent_temperature: None,
 }
 }
 }

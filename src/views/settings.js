@@ -435,6 +435,7 @@ const MODE_MIN_CTX = { default: 25600, creative: 25600, code: 128000 };
 const invoke = () => window.__adm_invoke;
 
 function switchPanel(panelId) {
+  console.log("[settings] 切换面板:", panelId);
   document.querySelectorAll(".nav-item").forEach((el) => el.classList.remove("active"));
   document.querySelectorAll(".panel").forEach((el) => el.classList.remove("active"));
   document.querySelector('[data-panel="' + panelId + '"]').classList.add("active");
@@ -575,6 +576,7 @@ function fillFormFromParams(params) {
 
 async function saveParams() {
   const params = getParamsFromForm();
+  console.log("[settings] 保存参数:", JSON.stringify(params).substring(0, 200));
   try {
     // 加载当前设置以保留其他字段（如 agent_workdir、minimize_to_tray）
     let current = {};
@@ -586,9 +588,10 @@ async function saveParams() {
       agent_workdir: current.agent_workdir || current.agentWorkdir || "",
     };
     await invoke()("save_settings", { settings: settings });
+    console.log("[settings] 保存成功");
     showToast("设置已保存，重启模型后生效");
   } catch (e) {
-    console.error("[DEBUG] Failed to save settings:", e);
+    console.error("[settings] 保存失败:", e);
     showToast("保存失败: " + e, true);
   }
 }
@@ -733,6 +736,7 @@ function goBack() { location.hash = "#/list"; }
 export default {
   template,
   mount(root) {
+    console.log("[settings] mount()");
     root.innerHTML = template;
 
     document.getElementById("back-btn").addEventListener("click", goBack);
@@ -759,6 +763,7 @@ export default {
     (async function() {
       try {
         const settings = await invoke()("load_settings");
+        console.log("[settings] 加载设置成功, keys:", Object.keys(settings));
         const params = settings.launch_params || settings.launchParams;
         if (settings && params) fillFormFromParams(params);
         applyCtxFloor();
@@ -772,5 +777,7 @@ export default {
       loadVersionInfo();
     })();
   },
-  unmount() {}
+  unmount() {
+    console.log("[settings] unmount()");
+  }
 };

@@ -251,6 +251,7 @@ function toggleLogOverlay() {
 }
 
 function handleTauriEvent(type, payload) {
+  console.log("[model_chat] 事件:", type, "payload:", JSON.stringify(payload).substring(0, 200));
   switch (type) {
     case "model-log": {
       const logLine = payload?.line;
@@ -284,6 +285,7 @@ function goBack() {
 function init(params) {
   currentModelId = params.model_id || "未知模型";
   const port = params.port || 5678;
+  console.log("[model_chat] init() modelId:", currentModelId, "port:", port);
 
   document.getElementById("model-name").textContent = currentModelId + " - 交互界面";
   document.getElementById('log-model-id').textContent = currentModelId;
@@ -300,6 +302,7 @@ function init(params) {
   const maxRetries = 120;
 
   function checkService() {
+    console.log("[model_chat] 检查服务连接:", serverUrl, "retryCount:", retryCount);
     const xhr = new XMLHttpRequest();
     xhr.open("GET", serverUrl, true);
     xhr.timeout = 3000;
@@ -349,6 +352,7 @@ function setupListeners() {
 export default {
   template,
   mount(root, params) {
+    console.log("[model_chat] mount() params:", params);
     root.innerHTML = template;
     document.getElementById('back-btn').addEventListener('click', goBack);
     document.getElementById('log-btn').addEventListener('click', toggleLogOverlay);
@@ -357,6 +361,7 @@ export default {
     init(params);
   },
   unmount() {
+    console.log("[model_chat] unmount()");
     if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
     unlisteners.forEach(function(u) { try { if (typeof u === 'function') u(); } catch (_) {} });
     unlisteners = [];

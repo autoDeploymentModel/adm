@@ -139,8 +139,6 @@ window.__adm_state = { systemInfo, runningModelId, runningModelPort, modelList, 
 
 各视图模块统一通过 `window.__adm_invoke(...)` / `window.__adm_listen(...)` 调用 IPC，不再有 `window.parent` 回退与 `__invoke__` 代理。
 
-> **注意**：macOS WKWebView 不会将 Tauri IPC 注入 iframe，因此 **Agent 终端（`agent.html`）仍保留为独立 iframe 并自带 `window.parent` 回退**（方案 A）；其余 4 个视图已 SPA 化，直接调用主窗口 IPC。
-
 #### Event 通信流
 
 ```
@@ -163,21 +161,16 @@ window.__adm_state = { systemInfo, runningModelId, runningModelPort, modelList, 
 | `sd-started`                 | Rust `start_sd_generation()`           | `{ model_id }`                              | sd-cli 进程启动         |
 | `sd-complete`                | Rust (stdout/stderr 线程)               | `{ model_id }`                              | sd-cli 进程结束         |
 
-#### 主窗口 ↔ Agent iframe 通信（仅 agent.html，方案 A）
+#### 主窗口 ↔ Agent 视图通信（SPA 模式）
 
 ```
 Tauri Event (Rust → JS)
        │
        ▼
-index.html 监听 Tauri 事件 (agent-terminal-data / exit / ready / download-progress)
+index.html 监听 Tauri 事件 (agent-sse-event / agent-download-progress)
        │
        ▼
-#agent-frame.contentWindow.postMessage({ type, payload }, "*")
-       │
-       ▼
-agent.html 监听 window.message 事件
-
-agent.html → 主窗口：postMessage({ type: "agent-focus-me" / "agent-read-clipboard" / "navigate", ... })
+window.__adm_state 更新 + 自定义事件通知 Agent 视图
 ```
 
 ***
@@ -196,13 +189,13 @@ adm/
 │   ├── sign-macos.sh                 # macOS 代码签名
 │   └── sign-windows.ps1              # Windows 代码签名
 ├── src/                              # 前端资源 (Tauri frontendDist)
-│   ├── index.html                    # SPA 外壳（#view-root 容器 + #agent-frame + 底部硬件栏/导航 + 全局 IPC/状态 + 路由器）
+│   ├── index.html                    # SPA 外壳（#view-root 容器 + 底部硬件栏/导航 + 全局 IPC/状态 + 路由器）
 │   ├── views/                        # 4 个 ES 模块视图（CSS+JS 内联在模板字符串里）
 │   │   ├── model_list.js             # 模型列表视图（表格展示/下载/启动/停止）
 │   │   ├── model_chat.js             # 模型对话交互视图（内嵌 WebUI + 启动遮罩 + 日志面板）
 │   │   ├── model_image.js            # 文生图视图（文本输入/宽高设置/图片生成/日志）
 │   │   └── settings.js               # 设置视图（导航分栏 + 参数表单 + 版本/关于）
-│   ├── agent.html                    # Agent 终端页（方案 A：独立 iframe，#agent-frame 加载）
+│   │   └── agent.js                  # Agent 视图（会话列表 + 聊天界面 + 设置弹窗，HTTP API + SSE）
 │   └── model_types.json              # 模型类型筛选数据（fetch 读取）
 ├── src-tauri/                        # Tauri 后端 (Rust)
 │   ├── Cargo.toml                    # Rust 依赖配置
@@ -1207,28 +1200,13 @@ window.__adm_listen = window.__TAURI__?.event?.listen || window.__TAURI_INTERNAL
 
 各视图模块内统一使用 `window.__adm_invoke("cmd", args)` / `window.__adm_listen("event", handler)`，**不再有 `window.parent` 回退与 `__invoke__` 代理**。
 
-### 8.2 Agent iframe 子页面 IPC（仅 agent.html，方案 A）
-
-macOS WKWebView 不会将 Tauri IPC 注入到 iframe 中，因此 **`agent.html` 作为独立 iframe 仍保留 `window.parent` 回退**：
-
-```javascript
-const getInvoke = () =>
-  window.__TAURI_INTERNALS__?.invoke ||
-  window.__TAURI__?.core?.invoke ||
-  window.parent?.__TAURI_INTERNALS__?.invoke ||
-  window.parent?.__TAURI__?.core?.invoke;
-```
-
-### 8.3 Event 收发架构
+### 8.2 Event 收发架构
 
 ```
 Rust (emit) ──→ 前端 JS (window.__adm_listen) ──→ 视图模块 handler（mount 时绑定，unmount 时解绑）
-                                          └──→ #agent-frame.contentWindow（仅 agent 相关事件，postMessage 转发）
 ```
 
-**主框架转发逻辑**：`index.html` 仅把 Agent 相关 Tauri 事件（`agent-terminal-data` / `agent-terminal-exit` / `agent-terminal-ready` / `agent-download-progress`）通过 `postMessage` 转发给 `#agent-frame`；其余 4 个 SPA 视图**直接** `listen`，无需转发。
-
-**SPA 导航**：视图内通过 `location.hash = "#/chat?model_id=..."` 切换路由，不再使用 `postMessage({type:"navigate"})`。
+**SPA 导航**：视图内通过 `location.hash = "#/chat?model_id=..."` 切换路由。
 
 ***
 
@@ -1331,130 +1309,32 @@ python scripts/generate-icons.py
 2. 调用 `check_adm_agent` 检查本地是否已下载 `admAgent`：
    - **Windows**：默认路径为软件所在根目录（`exe` 同级目录），文件名 `admAgent.exe`。
    - **macOS**：默认路径为应用用户目录（`app_data_dir`，如 `~/Library/Application Support/com.adm.admapp`），文件名 `admAgent`。
-3. 若已存在，直接打开 `agent.html` 终端页面。
+3. 若已存在，直接进入 Agent 页面。
 4. 若不存在，弹出下载进度弹窗（`#agent-download-overlay`），调用 `download_adm_agent` 下载：
    - Windows：`http://adm.tuduoduo.top/admAgent.exe`
    - macOS：`http://adm.tuduoduo.top/admAgent`
    - 下载过程通过 `agent-download-progress` 事件向前端推送进度。
-5. 下载完成后自动进入 `agent.html` 终端页面。
+5. 下载完成后自动进入 Agent 页面。
 
-### 13.2 内嵌终端实现
+### 13.2 Agent 服务模式
 
-- `agent.html` 使用 `xterm.js`（已离线内置在 `src/vendor/xterm/`）作为终端界面。
-- `start_agent_terminal` 通过 `portable-pty` 创建 PTY：
-  - **Windows**：**直接启动 `admAgent.exe`**（不再经过 `powershell.exe`）。原因：release 版 `adm.exe` 带 `#![windows_subsystem = "windows"]`（无控制台），`portable-pty` 的 ConPTY 在「无控制台父进程」中拉起 `powershell.exe` 会触发 `0xc0000142` 初始化失败；直接以 admAgent 作为 PTY 子进程规避该问题。`--cwd` 作为参数传入。
-  - **macOS**：启动系统默认 shell（`$SHELL`，通常为 `/bin/zsh`，以 `-i` 交互模式运行），再写入启动命令运行 admAgent。
-- PTY 输出经后台线程读取后以 base64 通过 `agent-terminal-data` 事件推送到前端；前端按键经 `agent_terminal_input` 写回 PTY。
-- **会话代次 + 读取线程生命周期（防重复输出）**：每次 `start_agent_terminal` 会 bump 一个单调递增的「Agent 终端代次」(`AppState.agent_generation`)，并把该值随每帧 `agent-terminal-data` 的 payload (`{ data, gen }`) 与 `agent-terminal-ready` 的 payload (`{ gen }`) 一同下发给前端。前端 `agent.html` 在收到 `ready` 时记录 `currentAgentGen`，此后仅接受 `gen === currentAgentGen` 的数据帧，旧代次残留输出一律丢弃——从结构上杜绝「同一输出显示两遍」。
-- **读取线程回收**：`AgentSession` 保存 `reader_stop: Arc<AtomicBool>` 与 `reader_handle: JoinHandle`。(重)启动 / 停止时经 `stop_agent_session_clean` 先置位 stop、再 kill 子进程树（让阻塞 `read` 收到 EOF 唤醒）、最后 `is_finished()` 轮询 join（500ms 超时），确保旧线程在 spawn 新会话前完全退出，不会与新线程并发向同一事件推送数据。
-- 终端就绪后自动向 shell 发送启动命令运行 `admAgent` 工具（同时启动终端与 `admAgent`）。
-- **启动前自动生成 `admAgent.json`**：`ensure_adm_agent_config` 读取 ADM 配置文件（`config.json`）中 `launch_params.ctx_size` 作为上下文大小，于用户目录 `<home>/.config/admAgent/admAgent.json` 生成（或更新）配置。默认结构为 `{ "model": { "provider": "local", "model": "localModel" }, "providers": { "local": { ... } } }`；`context_window` 取该值，`default_max_tokens` 取其 30%（四舍五入）；若文件已存在则仅就地更新这两个字段，尽量保留其它内容。`ctx_size` 缺失或非法时回退默认 `context_window = 25600`。
+Agent 页面采用 HTTP API + SSE 架构，不再使用 PTY 终端或 xterm.js。
+
+**架构**：
+- `start_agent_server` 以子进程方式启动 `admAgent serve --host tcp://127.0.0.1:0`（随机端口）
+- 后端从子进程 stdout 解析监听端口
+- 前端通过 `agent_http_request` Tauri 命令代理 HTTP API 调用（`/v1/workspaces/{id}/...`）
+- SSE 事件通过 Tauri event `agent-sse-event` 转发给前端
+
+**admAgent.json 配置**：
+- `ensure_adm_agent_config` 读取 ADM 配置文件（`config.json`）中 `launch_params.ctx_size` 作为上下文大小，于用户目录 `<home>/.config/admAgent/admAgent.json` 生成（或更新）配置。默认结构为 `{ "model": { "provider": "local", "model": "localModel" }, "providers": { "local": { ... } } }`；`context_window` 取该值，`default_max_tokens` 取其 30%（四舍五入）；若文件已存在则仅就地更新这两个字段，尽量保留其它内容。`ctx_size` 缺失或非法时回退默认 `context_window = 25600`。
   - **触发时机 1（更早）**：点击 Agent 按钮时，`goAgent()` 在平台判断通过后即调用 `prepare_adm_agent_config`（早于模型运行检查与 admAgent 下载）。
-  - **触发时机 2（兜底）**：`start_agent_terminal` 创建 PTY 之前也会再调用一次，保证最终一致。
-- 支持通过 `agent_terminal_resize` 调整终端大小、`stop_agent_terminal` 关闭会话；窗口关闭时 `lib.rs` 会调用 `kill_agent_session` 清理子进程。
-- **resize 统一节流（减少 TUI 整屏重绘）**：`agent.html` 的 `scheduleFitResize(delay)` 作为唯一 fit + resize 入口（带 trailing 节流），`ResizeObserver`、`window resize`、`agent-resize` 消息、`agent-terminal-ready`、`startAgentNow` 末尾全部走该入口，避免多源重复触发 `fitAddon.fit()` + `agent_terminal_resize` 导致 ratatui 反复整屏重绘放大重复观感。首帧 / ready 时用 `delay=0` 立即执行。
-- **避免在 iframe 隐藏时创建 PTY（防止 TUI 右边栏错位 / 重复）**：`index.html` 在把 `agent-frame` 显示为 `block` 后再设置 `src`；`agent.html` 初始化时若容器尺寸为 0（仍不可见），则通过 `ResizeObserver` 与父窗口 `agent-resize` 消息延迟到真正显示后再启动终端。这样可保证 `xterm` 的 `fitAddon` 取到真实尺寸，`start_agent_terminal` 创建 PTY 时行列数正确，避免 admAgent 的 TUI 右边栏上下文按错误宽度布局，从而出现错位或重复显示。
-- **复制 / 粘贴（终端级体验）**：`agent.html` 通过 `term.attachCustomKeyEventHandler` 实现类似真实终端的 Ctrl+C / Ctrl+V：
-  - **Ctrl+C**：有文本选区时复制选区到系统剪贴板（优先 `navigator.clipboard.writeText`，失败回退 `textarea + document.execCommand('copy')`）；无选区时放行，xterm 把 `\x03`(SIGINT) 发给 admAgent，等价于终端中断。
-  - **Ctrl+V**：从系统剪贴板读取文本并经 `term.paste()` 写入 PTY。若 iframe 内 `navigator.clipboard.readText` 受限，则通过 `agent-read-clipboard` 事件委托父窗口 `index.html` 代理读取（回传 `agent-clipboard-result`）。读取失败时终端内提示「无法访问剪贴板」。
-- **中文 IME 偶发重复输入修复（三重防线）**：xterm 在 IME 合成结束时存在两条可能同时触发的发送路径——(A) `compositionend → _finalizeComposition` 用 `setTimeout(0)` 异步 `triggerDataEvent`；(B) 紧跟的 `input(insertText)` 事件在纯 IME 选词（`_keyDownSeen=false`）时同步 `triggerDataEvent`。两条路径发出同一段合成文本 → 打字重复。`agent.html` 的修复：
-  - **防线 0（源头拦截，确定性）**：document 捕获阶段监听 `input`，若事件来自 xterm 辅助 textarea、`inputType === "insertText"`、文本与刚结束的合成严格一致且距 `compositionend` 不到 500ms，`stopImmediatePropagation()` 吞掉它（先于 xterm 注册在 textarea 上的 `_inputEvent` 执行），只保留路径 A 这唯一一次发送。不依赖任何调度时延，主线程拥塞时也必然命中。
-  - **防线 1（onData 合成文本去重，安全网）**：首次见到合成文本放行；2000ms 窗口内再次见到丢弃【仅一次】并清空合成记录（每次 `compositionend` 最多只丢一个副本，后续相同内容一律放行）。窗口取 2000ms 是因为终端重启（设置工作目录 / 增删云端模型）后 TUI 首屏整帧渲染拥塞主线程，`setTimeout(0)` 可能延迟数百毫秒，更小的窗口会在该场景漏判。
-  - **防线 2（通用相邻去重，兜底）**：连续两次 `onData` 收到完全相同文本、间隔 <150ms 且 600ms 内有 IME 合成活动，判为重复丢弃。
-  - **粘贴绕过**：`term.paste` 覆写在粘贴期间置 `_suppressImeDedup`，粘贴内容不参与 IME 去重（防止粘贴文本恰好等于刚合成文本时被误丢）。
-- **启动守卫 `startRequested`（防并发启动）**：`startAgentNow()` 从进入起占用 `startRequested`，覆盖 `await start_agent_terminal` 整个异步窗口，成功后释放（运行中状态由 `terminalStarted` 表达），失败也释放。`confirmWorkdir()` / `restartAgentTerminal()` 在 `await stop_agent_terminal` 前先占用守卫。否则窗口期内 `agent-resize` / `ResizeObserver` 触发 `handleEnterAgent` / `maybeStartTerminal` 会并发发起第二次 `start_agent_terminal`，产生无法回收的孤儿 admAgent 进程；守卫在启动成功后释放，也保证了进程退出后 `handleEnterAgent` 能重新拉起。
 
-### 13.3 Windows Terminal 外部窗口模式（Windows 平台专属）
+**进程管理**：
+- 窗口关闭时 `lib.rs` 调用 `kill_agent_session` 清理 admAgent 子进程
+- Windows 下通过 `taskkill /PID /T /F` 杀进程树
 
-**特性**：Windows 平台使用 Windows Terminal 作为外部窗口运行 admAgent，提供更原生的终端体验。
-
-**优势**：
-- GPU 加速渲染，比 xterm.js 在 WebView2 中更流畅
-- 支持多标签、分屏、主题等丰富功能
-- 减少前端维护成本（无需处理 IME 去重、滚轮转发等 hack）
-
-**打包配置**：
-
-1. `src-tauri/tauri.conf.json` 配置了 `bundle.resources` 和构建钩子：
-
-```json
-"build": {
-  "beforeBuildCommand": "node build-hook.cjs"
-},
-"bundle": {
-  "resources": [
-    "terminal-resources"
-  ]
-}
-```
-
-2. `src-tauri/build-hook.cjs` 脚本在构建前执行：
-   - **Windows**：创建 `terminal-resources` 符号链接指向项目根目录的 `terminal/`
-   - **macOS/Linux**：确保不存在 `terminal-resources`，避免打包无关文件
-
-3. 安装后 Windows 上的目录结构：
-```
-ADM\
-├── ADM.exe
-├── terminal-resources\    ← Windows Terminal 文件
-│   ├── wt.exe
-│   ├── WindowsTerminal.exe
-│   ├── defaults.json
-│   └── ...
-└── ...
-```
-
-**macOS 打包不会包含 terminal 目录。**
-
-**文件结构**：`terminal/` 目录需包含 Windows Terminal 运行时文件：
-
-```
-terminal/
-├── wt.exe                    # 命令行启动器
-├── WindowsTerminal.exe       # 主程序
-├── OpenConsole.exe           # 控制台主机
-├── defaults.json             # 默认配置
-├── CascadiaCode*.ttf         # 字体文件
-├── Microsoft.Terminal.*.dll  # 核心组件
-└── ...
-```
-
-**交互流程**：
-
-```
-�─────────────────────────────────────────────────────────────┐
-│                     Windows 平台流程                          │
-├─────────────────────────────────────────────────────────────┤
-│  1. 用户点击 Agent 按钮                                       │
-│  2. goAgent() 检测平台为 Windows                              │
-│  3. 调用 invoke("launch_windows_terminal_agent")              │
-│  4. 后端执行：                                                │
-│     - 检查 admAgent.exe 是否存在                              │
-│     - 检查 terminal/wt.exe 是否存在                           │
-│     - 确保 admAgent.json 配置已生成                           │
-│     - 启动 wt.exe 并传入启动参数                              │
-│  5. Windows Terminal 作为独立窗口启动                          │
-│  6. agent.html 显示状态页面（非终端）                          │
-│     - 显示"Agent 终端已启动"                                  │
-│     - 提供"重新打开终端"按钮                                  │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**回退机制**：
-- 如果 `wt.exe` 启动失败（文件缺失或权限问题），自动回退到内置 xterm.js 终端模式
-- 用户在 agent.html 状态页面可点击「重新打开终端」重试
-
-**前端适配**：
-- `agent.html` 初始化时检测 `navigator.userAgent`
-- Windows 平台：跳过 xterm.js 初始化，显示状态页面
-- macOS 平台：继续使用原有 xterm.js + PTY 方案
-
-**命令行参数**：
-```powershell
-wt.exe --title "ADM Agent" --startingDirectory "<workdir>" powershell.exe -NoExit -Command "& '<agent_path>' --cwd '<workdir>'"
-```
-
-### 13.4 相关命令（`src-tauri/src/pages/agent.rs`）
+### 13.3 相关命令（`src-tauri/src/pages/agent.rs`）
 
 | 命令 | 说明 |
 |------|------|
@@ -1462,17 +1342,18 @@ wt.exe --title "ADM Agent" --startingDirectory "<workdir>" powershell.exe -NoExi
 | `check_adm_agent` | 检查本地 `admAgent` 是否存在，返回路径（Agent 按钮点击时优先级 2 判断本地是否已下载） |
 | `check_adm_agent_update` | 点击 Agent 按钮时触发（优先级 3）：拉取远程清单比对本地 `admAgent` 版本号，返回是否需要更新及下载地址（仅 Windows） |
 | `download_adm_agent` | 首次安装：下载 `admAgent` 工具并推送进度（Agent 按钮点击时优先级 2 调用） |
-| `download_adm_agent_update` | 版本更新用：从 `check_adm_agent_update` 下发的地址下载并替换 `admAgent`（仅 Windows，推送 `adm-agent-update-progress`）。**替换前会自动停掉仍在运行的 Agent 终端**以释放 Windows 文件锁，避免「Agent 页未关闭时回到首页再进入触发更新 → 升级失败」的问题 |
-| `launch_windows_terminal_agent` | **Windows 专属**：启动 Windows Terminal 外部窗口运行 admAgent |
-| `start_agent_terminal` | 启动内嵌 PTY 终端并自动运行 `admAgent`（macOS 或 WT 回退时使用） |
-| `agent_terminal_input` | 向前端按键写入 PTY |
-| `agent_terminal_resize` | 调整终端行列 |
-| `stop_agent_terminal` | 关闭终端会话 |
+| `download_adm_agent_update` | 版本更新用：从 `check_adm_agent_update` 下发的地址下载并替换 `admAgent`（仅 Windows，推送 `adm-agent-update-progress`）。**替换前会自动停掉仍在运行的 Agent 会话**以释放 Windows 文件锁 |
+| `start_agent_server` | 启动 admAgent server 模式（子进程 `serve --host tcp://127.0.0.1:0`），从 stdout 解析端口 |
+| `stop_agent_server` | 停止 admAgent server 子进程 |
+| `get_agent_server_status` | 获取 admAgent server 运行状态 |
+| `agent_http_request` | 代理前端 HTTP API 请求到 admAgent server |
+| `agent_subscribe_events` / `agent_unsubscribe_events` | SSE 事件订阅/取消订阅 |
 | `add_cloud_provider` | 新增云端模型 Provider：写入 `admAgent.json` 的 `providers` 分支（`type=openai-compat`，含 `models` 数组）。写入前先 `ensure_adm_agent_config` 保证文件含合法 `providers.local`，避免后续启动 Agent 时被默认结构覆盖。provider key 与 model id 由模型名称派生（slugify），原子写入。上下文大小 `256K=256000`（K×1000、M×1000000） |
-| `list_cloud_providers` | 列出 `admAgent.json` 中已添加的云端模型 Provider（排除自动管理的 `local`），返回每项 `key/name/base_url/api_key/context_window`，供「模型管理」弹窗列表展示与编辑回填 |
+| `list_cloud_providers` | 列出 `admAgent.json` 中已添加的云端模型 Provider（排除自动管理的 `local`），返回每项 `key/name/base_url/api_key/context_window/model_id`（`model_id` 取 `models[0].id`，缺失时按 slugify 派生），供「模型管理」弹窗列表展示、编辑回填与切换模型时调用服务端 `/config/model` |
 | `update_cloud_provider` | 按 `key` 定位并更新指定 Provider 的全部参数；模型名称变更时同步重派生 model id，保留同一 key 以免产生孤儿条目 |
 
-- **云端模型管理（前端 `agent.html`）**：顶部栏「添加云端模型」弹出表单（模型名称 / Base URL / API Key / 上下文大小，默认 256000），「模型管理」弹出已添加模型列表，每项带「编辑」按钮，编辑复用同一表单并回填参数。
+- **云端模型管理（前端 `agent.js`）**：顶部栏「添加云端模型」弹出表单（模型名称 / Base URL / API Key / 上下文大小，默认 256000），「模型管理」弹出已添加模型列表，每项带「编辑」按钮，编辑复用同一表单并回填参数。
+- **切换模型（`switchModel`）**：`agent_default_provider` 只存在 ADM 自己的 `config.json`，admAgent 服务端不读它。因此切换时必须先调服务端 `POST /v1/workspaces/{id}/config/model`（`scope=0`，携带 `provider`/`model`，可选 `reasoning_effort`/`temperature`）把首选模型写进 admAgent 配置，再调 `POST .../agent/update` 重载，否则服务端会一直使用 `admAgent.json` 里旧的 `model` 字段（表现为选什么模型都显示旧模型）。本地模型（`local` / `local:xxx`）统一映射为 `provider=local, model=localModel`；云端模型用 `list_cloud_providers` 返回的 `model_id`。
 - **云端 provider 不被覆盖**：`add_cloud_provider` / `update_cloud_provider` 均保持 `providers.local` 存在；由于 `ensure_adm_agent_config` 仅原地更新 `providers.local`，用户新增 / 编辑的云端 provider 在改上下文大小、重进 Agent 页等场景下均被保留。
 
 ---

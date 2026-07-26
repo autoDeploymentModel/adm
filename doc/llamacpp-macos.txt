@@ -1,3 +1,4 @@
+.\llama-server.exe --help
 ----- common params -----
 
 -h,    --help, --usage                  print usage and exit

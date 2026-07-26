@@ -1,6 +1,6 @@
-// agent.html 对应逻辑（Agent 终端：本地 admAgent 工具检测 / 下载 / 内嵌终端）
+// Agent 页面后端逻辑：admAgent server 模式管理 + HTTP API 代理
 
-use crate::app_state::{AppState, AgentSession};
+use crate::app_state::{AppState, AgentServerSession};
 use crate::common::config;
 use crate::common::types::Settings;
 use crate::common::types::AdmAgentUpdateCheck;
@@ -9,10 +9,7 @@ use crate::common::error::AppError;
 use crate::bail;
 use crate::pages::index::fetch_update_info;
 
-use base64::Engine;
-use portable_pty::{native_pty_system, Child, CommandBuilder, PtySize};
 use serde::{Deserialize, Serialize};
-use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -300,8 +297,7 @@ fn write_json_atomic(path: &std::path::Path, value: &serde_json::Value) -> Resul
 }
 
 /// 点击 Agent 按钮时的「更早时机」调用：仅生成 / 更新 admAgent.json 配置，
-/// 不依赖模型是否已启动或 admAgent 是否已下载。供前端在 goAgent() 阶段提前调用，
-/// 早于真正启动终端（start_agent_terminal 内部也会再调用一次以保证最终一致）。
+/// 不依赖模型是否已启动或 admAgent 是否已下载。供前端在 goAgent() 阶段提前调用。
 #[tauri::command]
 pub async fn prepare_adm_agent_config(app: tauri::AppHandle) -> Result<(), AppError> {
     ensure_adm_agent_config(&app)
@@ -366,6 +362,9 @@ pub struct CloudProviderInput {
     pub api_key: String,
     /// 上下文大小（tokens）。例如 256000（即 256K）
     pub context_window: u32,
+    /// 用户指定的模型ID（可选）。为空时自动从 name 派生
+    #[serde(default)]
+    pub model_id: Option<String>,
 }
 
 /// 新增一个云端模型 Provider 到 admAgent.json 的 `providers` 分支下。
@@ -404,7 +403,9 @@ pub async fn add_cloud_provider(
 
     // 3) 派生 key / model id 并构造 provider
     let key = slugify_provider_key(&input.name);
-    let model_id = slugify_model_id(&input.name);
+    let model_id = input.model_id
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| slugify_model_id(&input.name));
 
     let provider = serde_json::json!({
         "name": input.name,
@@ -436,6 +437,8 @@ pub struct CloudProviderView {
     pub base_url: String,
     pub api_key: String,
     pub context_window: u32,
+    /// models[0].id，供前端调用服务端 `/config/model` 切换模型时使用
+    pub model_id: String,
 }
 
 /// 列出 admAgent.json 中已添加的全部云端模型 Provider（排除自动管理的 `local`）。
@@ -482,12 +485,20 @@ pub async fn list_cloud_providers(
                 .and_then(|m0| m0.get("context_window"))
                 .and_then(|c| c.as_u64())
                 .unwrap_or(0) as u32;
+            let model_id = prov
+                .get("models")
+                .and_then(|m| m.get(0))
+                .and_then(|m0| m0.get("id"))
+                .and_then(|i| i.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| slugify_model_id(&name));
             out.push(CloudProviderView {
                 key: key.clone(),
                 name,
                 base_url,
                 api_key,
                 context_window,
+                model_id,
             });
         }
     }
@@ -553,7 +564,9 @@ pub async fn update_cloud_provider(
         bail!("未找到 provider: {}", key);
     }
 
-    let model_id = slugify_model_id(&input.name);
+    let model_id = input.model_id
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| slugify_model_id(&input.name));
     let new_provider = serde_json::json!({
         "name": input.name,
         "base_url": input.base_url,
@@ -620,17 +633,8 @@ pub async fn download_adm_agent(
     let dir = adm_agent_target_dir(&app)?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("创建目录失败: {}", e))?;
 
-    // 2. 下载前先停掉正在运行的 admAgent，释放 Windows 上的文件锁
-    let old_session = {
-        let mut s = state
-            .agent_session
-            .lock()
-            .map_err(|e| e.to_string())?;
-        s.take()
-    };
-    if let Some(mut sess) = old_session {
-        stop_agent_session_clean(&mut sess);
-    }
+    // 2. 下载前先停掉正在运行的 admAgent server，释放 Windows 上的文件锁
+    stop_agent_server_internal(&state).ok();
 
     let archive_path = dir.join(&archive_name);
     app.emit(
@@ -835,6 +839,12 @@ pub fn get_adm_agent_local_version(app: &tauri::AppHandle) -> Result<Option<Stri
     Ok(parse_adm_agent_version_output(&combined))
 }
 
+/// 获取 admAgent 版本号（供前端调用）
+#[tauri::command]
+pub async fn get_adm_agent_version(app: tauri::AppHandle) -> Result<Option<String>, AppError> {
+    get_adm_agent_local_version(&app)
+}
+
 /// 下载并替换 admAgent 工具（版本更新用）。
 /// 使用服务端下发的下载地址（压缩包），下载到 admAgent 默认存放路径解压并覆盖旧版本。
 #[tauri::command]
@@ -921,17 +931,8 @@ pub async fn download_adm_agent_update(
     )
     .ok();
 
-    // 解压前先停掉正在运行的 Agent 终端，释放被 Windows 锁定的 admAgent.exe。
-    let old_session = {
-        let mut s = state
-            .agent_session
-            .lock()
-            .map_err(|e| e.to_string())?;
-        s.take()
-    };
-    if let Some(mut sess) = old_session {
-        stop_agent_session_clean(&mut sess);
-    }
+    // 解压前先停掉正在运行的 admAgent server，释放被 Windows 锁定的 admAgent.exe。
+    stop_agent_server_internal(&state).ok();
 
     // 先尝试删除旧文件（进程刚结束可能仍有极短占用，故带重试）
     let dest = adm_agent_path(&app)?;
@@ -1104,320 +1105,26 @@ pub async fn set_agent_workdir(app: tauri::AppHandle, workdir: String) -> Result
     save_agent_workdir(&app, workdir.trim())
 }
 
-/// Agent 终端当前状态：进程是否仍在运行 + 当前模型代次。
-/// 供前端每次进入 Agent 页时判断是否需要 (重)启动 admAgent：
-/// - `running=false`：进程已退出（含崩溃），需要重新拉起；
-/// - `model_generation` 与启动时记录的不一致：模型被重启过，旧 admAgent 仍连着旧模型实例，需要重启；
-/// - 两者都没变：保持原状，不自动退出（哪怕只是切换页面，或仅改了上下文配置但没重启模型）。
+// ===== admAgent Server 模式 =====
+
+/// admAgent server 启动信息
 #[derive(Serialize)]
-pub struct AgentStatus {
+pub struct AgentServerInfo {
+    pub port: u16,
+    pub workspace_id: String,
+    pub client_id: String,
+}
+
+/// admAgent server 状态
+#[derive(Serialize)]
+pub struct AgentServerStatus {
     pub running: bool,
-    pub model_generation: u64,
+    pub port: Option<u16>,
+    pub workspace_id: Option<String>,
 }
 
-#[tauri::command]
-pub async fn get_agent_status(
-    state: tauri::State<'_, AppState>,
-) -> Result<AgentStatus, AppError> {
-    let mut s = state
-        .agent_session
-        .lock()
-        .map_err(|e| e.to_string())?;
-    // try_wait 返回 Ok(None) 表示仍在运行；Ok(Some(_)) 表示已退出；Err 视为不可知 → 视为未运行
-    let running = match s.as_mut() {
-        Some(sess) => match sess.child.try_wait() {
-            Ok(None) => true,
-            _ => false,
-        },
-        None => false,
-    };
-    let model_generation = *state
-        .model_generation
-        .lock()
-        .map_err(|e| e.to_string())?;
-    Ok(AgentStatus {
-        running,
-        model_generation,
-    })
-}
-
-/// 启动内嵌终端（Windows 调用 powershell，macOS 调用系统默认 shell），并自动启动 admAgent 工具
-/// `rows` / `cols` 为前端 xterm 当前真实尺寸：必须用真实尺寸创建 PTY，否则 admAgent 启动时会按
-/// PTY 默认宽度（120 列）布局其 TUI（右边栏上下文实时统计等），而实际显示宽度不同，导致错位/刷新异常。
-#[tauri::command]
-pub async fn start_agent_terminal(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
-    rows: u16,
-    cols: u16,
-) -> Result<(), AppError> {
-    // 若已有会话：先彻底回收旧读取线程（置位 stop + kill 子进程 + join），
-    // 确保旧线程不会与新线程并发向同一 `agent-terminal-data` 事件推送数据。
-    // 重要：仅在锁内做 take（O(1)），把 join 和 kill 移到锁外执行；
-    // stop_agent_session_clean 可能阻塞最多 500ms，不能一直持锁。
-    let old_session = {
-        let mut s = state
-            .agent_session
-            .lock()
-            .map_err(|e| e.to_string())?;
-        s.take()
-    };
-    if let Some(mut old) = old_session {
-        stop_agent_session_clean(&mut old);
-    }
-
-    // 本会话的 Agent 终端代次（+1）。读取线程把该值随每帧数据 emit 给前端，
-    // 前端按代次过滤旧会话残留输出，结构上杜绝「同一输出显示两遍」。
-    let generation = state.bump_agent_generation();
-    let reader_stop = Arc::new(AtomicBool::new(false));
-
-    // 用前端真实尺寸创建 PTY；缺失时回退到合理默认（避免 admAgent 以固定 120 列布局 TUI 错位）
-    let rows = if rows > 0 { rows } else { 30 };
-    let cols = if cols > 0 { cols } else { 120 };
-
-    // 启动前：读取配置文件中的上下文大小（ctx_size），生成 / 更新 admAgent.json
-    if let Err(e) = ensure_adm_agent_config(&app) {
-        eprintln!("[admAgent] 生成 admAgent.json 配置失败: {}", e);
-    }
-
-    let agent_path = adm_agent_path(&app)?;
-    if !agent_path.exists() {
-        bail!("未找到 admAgent 工具: {}", agent_path.display());
-    }
-
-    // 创建 PTY（使用前端真实尺寸）
-    let pty_system = native_pty_system();
-    let pair = pty_system
-        .openpty(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|e| format!("创建终端失败: {}", e))?;
-
-    // 读取工作目录（Windows 直接作为 admAgent 的 --cwd 参数；macOS 走 zsh 启动命令时使用）
-    let workdir = load_agent_workdir(&app);
-
-    // 构造要启动的命令。
-    // Windows：直接启动 admAgent.exe，不再经过 powershell.exe。
-    // 原因：release 版 adm.exe 带 #![windows_subsystem = "windows"]（无控制台），
-    // portable-pty 的 ConPTY 在「无控制台父进程」中启动 powershell 时，powershell
-    // 初始化失败并弹 0xc0000142 错误。直接以 admAgent 作为 PTY 子进程即可规避。
-    let mut cmd = if cfg!(target_os = "windows") {
-        let mut c = CommandBuilder::new(agent_path.clone());
-        if !workdir.is_empty() {
-            c.arg("--cwd");
-            c.arg(&workdir);
-        }
-        c
-    } else {
-        let shell = std::env::var("SHELL")
-            .ok()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/bin/zsh"));
-        let mut c = CommandBuilder::new(shell);
-        c.arg("-i"); // 交互式 shell
-        c
-    };
-    // 设置 TERM，提升 admAgent 等 TUI 程序的终端能力识别（如真彩色、清行序列）
-    cmd.env("TERM", "xterm-256color");
-    if let Some(parent) = agent_path.parent() {
-        cmd.cwd(parent);
-    }
-
-    let child = pair
-        .slave
-        .spawn_command(cmd)
-        .map_err(|e| format!("启动终端失败: {}", e))?;
-
-    let mut reader = pair
-        .master
-        .try_clone_reader()
-        .map_err(|e| format!("获取终端读取失败: {}", e))?;
-    let writer = pair
-        .master
-        .take_writer()
-        .map_err(|e| format!("获取终端写入失败: {}", e))?;
-
-    // 启动后台读取线程，将 PTY 输出流式推送到前端。
-    // 每帧 payload 携带本会话的代次 `gen`，前端按代次过滤旧会话残留输出。
-    // 线程在 stop 标志置位 / EOF / 错误时退出；(重)启动时由 stop_agent_session_clean
-    // 先置位 stop + kill 子进程（产生 EOF）再 join，避免新旧线程并发 emit。
-    let app2 = app.clone();
-    let stop_for_thread = reader_stop.clone();
-    let reader_handle = std::thread::spawn(move || {
-        let mut buf = [0u8; 8192];
-        loop {
-            // 每次 read 前后都检查 stop：read 返回后检查可避免 emit 旧进程残留数据
-            if stop_for_thread.load(Ordering::Relaxed) {
-                break;
-            }
-            match reader.read(&mut buf) {
-                Ok(0) => break, // EOF
-                Ok(n) => {
-                    // read 返回后再检查一次 stop：若已被要求停止则丢弃这帧（不 emit）
-                    if stop_for_thread.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    let encoded =
-                        base64::engine::general_purpose::STANDARD.encode(&buf[..n]);
-                    let _ = app2.emit(
-                        "agent-terminal-data",
-                        serde_json::json!({ "data": encoded, "gen": generation }),
-                    );
-                }
-                Err(_) => break,
-            }
-        }
-        // 仅在本线程是「自然退出」（非被 stop）时才发 exit 事件；
-        // 被 stop_agent_session_clean 置位 stop 后退出的情形属于重启/停止流程，
-        // 前端会通过新会话的 ready 事件接管，不需要 exit 提示。
-        if !stop_for_thread.load(Ordering::Relaxed) {
-            let _ = app2.emit("agent-terminal-exit", serde_json::json!({}));
-        }
-    });
-
-    // 保存会话（含本会话代次与读取线程句柄，供后续 (重)启动 / 停止时回收）
-    {
-        let mut s = state
-            .agent_session
-            .lock()
-            .map_err(|e| e.to_string())?;
-        *s = Some(AgentSession {
-            master: pair.master,
-            writer,
-            child,
-            generation,
-            reader_stop,
-            reader_handle: Some(reader_handle),
-        });
-    }
-
-    // 自动在终端中启动 admAgent 工具。
-    // Windows：上面已直接以 admAgent 作为 PTY 子进程启动，无需再向 shell 写启动命令。
-    // macOS：走 zsh -i，需要显式写入启动命令。
-    #[cfg(target_os = "macos")]
-    {
-        let launch = if workdir.is_empty() {
-            format!("\"{}\"\r\n", agent_path.display())
-        } else {
-            format!("\"{}\" --cwd \"{}\"\r\n", agent_path.display(), workdir)
-        };
-        let mut s = state
-            .agent_session
-            .lock()
-            .map_err(|e| e.to_string())?;
-        if let Some(ref mut sess) = *s {
-            let _ = sess.writer.write_all(launch.as_bytes());
-            let _ = sess.writer.flush();
-        }
-    }
-
-    // ready 事件携带本会话代次：前端据此设置 currentAgentGen，后续 data 事件按该值过滤。
-    app.emit("agent-terminal-ready", serde_json::json!({ "gen": generation }))
-        .ok();
-    Ok(())
-}
-
-/// 向终端写入输入（前端按键）
-#[tauri::command]
-pub async fn agent_terminal_input(
-    state: tauri::State<'_, AppState>,
-    data: String,
-) -> Result<(), AppError> {
-    let decoded = base64::engine::general_purpose::STANDARD
-        .decode(&data)
-        .map_err(|e| format!("解码输入失败: {}", e))?;
-    let mut s = state
-        .agent_session
-        .lock()
-        .map_err(|e| e.to_string())?;
-    if let Some(ref mut sess) = *s {
-        sess.writer
-            .write_all(&decoded)
-            .map_err(|e| e.to_string())?;
-        sess.writer.flush().map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-/// 调整终端大小
-#[tauri::command]
-pub async fn agent_terminal_resize(
-    state: tauri::State<'_, AppState>,
-    rows: u16,
-    cols: u16,
-) -> Result<(), AppError> {
-    let s = state
-        .agent_session
-        .lock()
-        .map_err(|e| e.to_string())?;
-    if let Some(ref sess) = *s {
-        sess.master
-            .resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .map_err(|e| format!("调整终端大小失败: {}", e))?;
-    }
-    Ok(())
-}
-
-/// 终止 Agent 终端进程及其整个进程树。
-/// admAgent 是在 shell（powershell）内部以 `& "路径"` 启动的，属于 shell 的子进程；
-/// Windows 上仅 kill 直接子进程（shell）不会连带结束 admAgent（会变为孤儿进程残留）。
-/// 因此用 `taskkill /PID <pid> /T /F` 杀掉整棵进程树，确保 admAgent 一并退出。
-#[cfg(target_os = "windows")]
-fn kill_agent_child_tree(child: &mut Box<dyn Child + Send>) {
-    if let Some(pid) = child.process_id() {
-        let pid_str = pid.to_string();
-        let _ = platform::create_hidden_command("taskkill")
-            .args(["/PID", &pid_str, "/T", "/F"])
-            .spawn();
-    }
-    // 兜底：直接 kill 一次
-    let _ = child.kill();
-}
-
-#[cfg(not(target_os = "windows"))]
-fn kill_agent_child_tree(child: &mut Box<dyn Child + Send>) {
-    let _ = child.kill();
-}
-
-/// 停止并回收一个 Agent 会话的读取线程，再杀掉子进程树。
-/// 顺序很重要：
-///   1) 先置位 stop 标志——读取线程在 read 返回后会检查该标志，若已停止则不 emit 直接退出；
-///   2) 再 kill 子进程树——让 PTY master 的阻塞 read 收到 EOF 从而唤醒线程；
-///   3) 最后 join（带超时轮询）确保线程真的退出。
-/// 这样可以避免「旧读取线程仍在 emit 旧进程残留输出」与「新会话的输出」同时进入
-/// 同一个 `agent-terminal-data` 事件导致前端重复显示。
-/// 超时（500ms）后不再阻塞调用方——线程最终会在 EOF/Err 后自行退出。
-fn stop_agent_session_clean(sess: &mut AgentSession) {
-    // 1) 通知读取线程停止（此后线程即使读到数据也不再 emit）
-    sess.reader_stop.store(true, Ordering::Relaxed);
-    // 2) 杀掉子进程树：让阻塞中的 read 收到 EOF 唤醒，线程得以检查 stop 并退出
-    kill_agent_child_tree(&mut sess.child);
-    // 3) 等待读取线程退出（带超时轮询，避免极端情况下永久阻塞调用方）
-    if let Some(handle) = sess.reader_handle.take() {
-        let deadline = std::time::Instant::now() + Duration::from_millis(500);
-        while std::time::Instant::now() < deadline {
-            if handle.is_finished() {
-                let _ = handle.join();
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        // 超时仍未退出：放弃 join，线程最终会自行退出（读到了 EOF 或 Err）
-        // 句柄 drop 后 detached，不会泄漏进程，仅理论上的极小资源窗口。
-    }
-}
-
-/// 关闭终端会话
-#[tauri::command]
-pub async fn stop_agent_terminal(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
+/// 内部函数：停止 admAgent server 并清理会话
+fn stop_agent_server_internal(state: &tauri::State<'_, AppState>) -> Result<(), AppError> {
     let old = {
         let mut s = state
             .agent_session
@@ -1426,122 +1133,423 @@ pub async fn stop_agent_terminal(state: tauri::State<'_, AppState>) -> Result<()
         s.take()
     };
     if let Some(mut sess) = old {
-        stop_agent_session_clean(&mut sess);
+        sess.sse_stop.store(true, Ordering::Relaxed);
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(pid) = sess.child.id() {
+                let pid_str = pid.to_string();
+                let _ = platform::create_hidden_command("taskkill")
+                    .args(["/PID", &pid_str, "/T", "/F"])
+                    .spawn();
+            }
+        }
+        let _ = sess.child.start_kill();
     }
     Ok(())
 }
 
-/// Windows 平台：使用 Windows Terminal 启动 admAgent（外部窗口模式）
-/// 通过 wt.exe 启动一个新的 Windows Terminal 窗口运行 admAgent，
-/// 不经过 PTY，直接作为独立应用运行。
-#[cfg(target_os = "windows")]
+/// 启动 admAgent server 模式
 #[tauri::command]
-pub async fn launch_windows_terminal_agent(
+pub async fn start_agent_server(
     app: tauri::AppHandle,
-) -> Result<(), AppError> {
-    use std::path::PathBuf;
-    use std::os::windows::process::CommandExt;
+    state: tauri::State<'_, AppState>,
+) -> Result<AgentServerInfo, AppError> {
+    stop_agent_server_internal(&state)?;
+
+    if let Err(e) = ensure_adm_agent_config(&app) {
+        eprintln!("[admAgent] 生成 admAgent.json 配置失败: {}", e);
+    }
+
     let agent_path = adm_agent_path(&app)?;
     if !agent_path.exists() {
         bail!("未找到 admAgent 工具: {}", agent_path.display());
     }
 
-    // 获取工作目录
     let workdir = load_agent_workdir(&app);
 
-    // 获取 wt.exe 路径（位于 terminal-resources/ 目录下，仅 Windows 打包时存在）
-    let exe_dir = config::get_exe_dir()?;
-    let wt_path = exe_dir.join("terminal-resources").join("wt.exe");
-    if !wt_path.exists() {
-        bail!("未找到 Windows Terminal: {}", wt_path.display());
+    // 预分配一个可用端口：绑定 127.0.0.1:0 让 OS 分配，读取后立即关闭。
+    // 存在极小竞争窗口，但对于本地进程而言可接受，远比从 stdout 解析端口可靠。
+    let port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")
+            .map_err(|e| format!("寻找可用端口失败: {}", e))?;
+        let p = listener
+            .local_addr()
+            .map_err(|e| format!("获取端口信息失败: {}", e))?
+            .port();
+        drop(listener);
+        p
+    };
+    eprintln!("[admAgent] 使用端口 {} 启动 server 模式", port);
+
+    let mut cmd = tokio::process::Command::new(&agent_path);
+    cmd.arg("server");
+    cmd.arg("--host").arg(format!("tcp://127.0.0.1:{}", port));
+    if !workdir.is_empty() {
+        cmd.arg("--cwd").arg(&workdir);
+    }
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    if let Some(parent) = agent_path.parent() {
+        cmd.current_dir(parent);
     }
 
-    // 确保 admAgent.json 配置已生成
-    if let Err(e) = ensure_adm_agent_config(&app) {
-        eprintln!("[admAgent] 生成 admAgent.json 配置失败: {}", e);
+    #[cfg(target_os = "windows")]
+    {
+        #[allow(unused_imports)]
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
     }
 
-    // 构造 wt.exe 命令行参数
-    // wt.exe --title "ADM Agent" --startingDirectory "workdir" powershell.exe -NoExit -Command "& 'agent_path' --cwd 'workdir'"
-    let agent_path_str = agent_path.to_string_lossy().to_string();
-    
-    let mut cmd = std::process::Command::new(&wt_path);
-    cmd.arg("--title");
-    cmd.arg("ADM Agent");
-    
-    // 设置启动目录
-    let starting_dir = if workdir.is_empty() {
-        exe_dir.clone()
-    } else {
-        PathBuf::from(&workdir)
-    };
-    cmd.arg("--startingDirectory");
-    cmd.arg(starting_dir.to_string_lossy().to_string());
-    
-    // 使用 powershell 启动 admAgent
-    cmd.arg("powershell.exe");
-    cmd.arg("-NoExit");
-    cmd.arg("-Command");
-    
-    let ps_command = if workdir.is_empty() {
-        format!("\"{}\"", agent_path_str)
-    } else {
-        format!("\"{}\" --cwd \"{}\"", agent_path_str, workdir)
-    };
-    cmd.arg(ps_command);
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("启动 admAgent server 失败: {}", e))?;
 
-    // 启动进程（隐藏窗口，因为 WT 会自己显示）
-    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    
-    cmd.spawn()
-        .map_err(|e| format!("启动 Windows Terminal 失败: {}", e))?;
+    // 后台读取 stdout/stderr 用于日志记录，同时 emit "model-log" 事件到全局启动日志
+    let app_for_stdout = app.clone();
+    if let Some(stdout) = child.stdout.take() {
+        tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let mut stdout = stdout;
+            let mut buf = [0u8; 4096];
+            loop {
+                match stdout.read(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let text = String::from_utf8_lossy(&buf[..n]);
+                        for line in text.lines() {
+                            if line.is_empty() { continue; }
+                            eprintln!("[admAgent server] {}", line);
+                            app_for_stdout.emit("model-log",
+                                serde_json::json!({ "line": format!("[Agent] {}", line), "source": "stdout" })).ok();
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+    }
+    let app_for_stderr = app.clone();
+    if let Some(stderr) = child.stderr.take() {
+        tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let mut stderr = stderr;
+            let mut buf = [0u8; 4096];
+            loop {
+                match stderr.read(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let text = String::from_utf8_lossy(&buf[..n]);
+                        for line in text.lines() {
+                            if line.is_empty() { continue; }
+                            eprintln!("[admAgent server ERROR] {}", line);
+                            app_for_stderr.emit("model-log",
+                                serde_json::json!({ "line": format!("[Agent] {}", line), "source": "stderr" })).ok();
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+    }
+
+    // 轮询健康检查端点，等待 server 就绪（同时检测子进程是否已崩溃退出）
+    {
+        let health_url = format!("http://127.0.0.1:{}/v1/health", port);
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            if tokio::time::Instant::now() > deadline {
+                bail!("等待 admAgent server 启动超时（15秒），请检查 admAgent 是否正常");
+            }
+            // 检查子进程是否已退出
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    bail!("admAgent server 进程已意外退出，退出码: {:?}", status);
+                }
+                Ok(None) => {} // 仍在运行
+                Err(_) => {
+                    bail!("无法检查 admAgent server 进程状态");
+                }
+            }
+            // 尝试健康检查
+            match client.get(&health_url).send().await {
+                Ok(resp) if resp.status().is_success() => break,
+                _ => {
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                }
+            }
+        }
+    }
+
+    let client_id = format!(
+        "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+        rand::random::<u32>(),
+        rand::random::<u16>(),
+        rand::random::<u16>(),
+        rand::random::<u16>(),
+        rand::random::<u64>() & 0xFFFFFFFFFFFF
+    );
+
+    let workspace_id = {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+
+        let workdir_for_api = if workdir.is_empty() {
+            std::env::current_dir()
+                .map(|d| d.to_string_lossy().to_string())
+                .unwrap_or_else(|_| ".".to_string())
+        } else {
+            workdir.clone()
+        };
+
+        let resp = client
+            .post(format!("http://127.0.0.1:{}/v1/workspaces", port))
+            .json(&serde_json::json!({ "path": workdir_for_api, "client_id": &client_id }))
+            .send().await
+            .map_err(|e| format!("创建工作区失败: {}", e))?;
+
+        let body: serde_json::Value = resp.json().await
+            .map_err(|e| format!("解析工作区响应失败: {}", e))?;
+
+        body.get("id").and_then(|v| v.as_str())
+            .map(|s| s.to_string()).unwrap_or_else(|| "default".to_string())
+    };
+
+    let sse_stop = Arc::new(AtomicBool::new(false));
+
+    {
+        let mut s = state.agent_session.lock().map_err(|e| e.to_string())?;
+        *s = Some(AgentServerSession {
+            child, port, sse_stop: sse_stop.clone(),
+            workspace_id: workspace_id.clone(),
+            client_id: client_id.clone(),
+        });
+    }
+
+    let app2 = app.clone();
+    let ws_id = workspace_id.clone();
+    let cid = client_id.clone();
+    tokio::spawn(async move {
+        let _ = forward_sse_events(&app2, port, &ws_id, &cid, sse_stop).await;
+    });
+
+    app.emit("agent-server-ready",
+        serde_json::json!({ "port": port, "workspace_id": &workspace_id })).ok();
+
+    Ok(AgentServerInfo { port, workspace_id, client_id })
+}
+
+async fn forward_sse_events(
+    app: &tauri::AppHandle, port: u16, workspace_id: &str, client_id: &str, stop: Arc<AtomicBool>,
+) -> Result<(), AppError> {
+    let url = format!(
+        "http://127.0.0.1:{}/v1/workspaces/{}/events?client_id={}",
+        port, workspace_id, client_id
+    );
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(3600)).build()
+        .map_err(|e| format!("创建 SSE 客户端失败: {}", e))?;
+
+    loop {
+        if stop.load(Ordering::Relaxed) { return Ok(()); }
+        let resp = match client.get(&url).send().await {
+            Ok(r) => r,
+            Err(_) => { tokio::time::sleep(Duration::from_secs(3)).await; continue; }
+        };
+        if !resp.status().is_success() {
+            tokio::time::sleep(Duration::from_secs(3)).await; continue;
+        }
+
+        use futures_util::StreamExt;
+        let mut stream = resp.bytes_stream();
+        let mut buffer = String::new();
+
+        while let Some(chunk_result) = stream.next().await {
+            if stop.load(Ordering::Relaxed) { return Ok(()); }
+            let chunk = match chunk_result { Ok(c) => c, Err(_) => break };
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+            while let Some(pos) = buffer.find("\n\n") {
+                let event_text = buffer[..pos].to_string();
+                buffer = buffer[pos + 2..].to_string();
+                let mut event_type = String::new();
+                let mut event_data = String::new();
+                for line in event_text.lines() {
+                    if let Some(d) = line.strip_prefix("event: ") { event_type = d.to_string(); }
+                    else if let Some(d) = line.strip_prefix("data: ") { event_data = d.to_string(); }
+                }
+                if !event_data.is_empty() {
+                    let payload: serde_json::Value = serde_json::from_str(&event_data)
+                        .unwrap_or(serde_json::json!({ "raw": event_data }));
+                    let _ = app.emit("agent-sse-event", serde_json::json!({ "type": event_type, "data": payload }));
+                }
+            }
+        }
+        if !stop.load(Ordering::Relaxed) { tokio::time::sleep(Duration::from_secs(3)).await; }
+    }
+}
+
+#[tauri::command]
+pub async fn stop_agent_server(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
+    stop_agent_server_internal(&state)
+}
+
+#[tauri::command]
+pub async fn get_agent_server_status(state: tauri::State<'_, AppState>) -> Result<AgentServerStatus, AppError> {
+    let mut s = state.agent_session.lock().map_err(|e| e.to_string())?;
+    match s.as_mut() {
+        Some(sess) => {
+            let running = match sess.child.try_wait() { Ok(None) => true, _ => false };
+            Ok(AgentServerStatus { running, port: Some(sess.port), workspace_id: Some(sess.workspace_id.clone()) })
+        }
+        None => Ok(AgentServerStatus { running: false, port: None, workspace_id: None }),
+    }
+}
+
+#[tauri::command]
+pub async fn agent_http_request(
+    state: tauri::State<'_, AppState>, method: String, path: String, body: Option<serde_json::Value>,
+) -> Result<serde_json::Value, AppError> {
+    let port = {
+        let mut s = state.agent_session.lock().map_err(|e| e.to_string())?;
+        match s.as_mut() {
+            Some(sess) => {
+                let running = sess.child.try_wait().ok().flatten().is_none();
+                if running { sess.port } else { bail!("admAgent server 未运行"); }
+            }
+            None => bail!("admAgent server 未运行"),
+        }
+    };
+    let url = format!("http://127.0.0.1:{}{}", port, path);
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(120)).build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+    let req = match method.to_uppercase().as_str() {
+        "GET" => client.get(&url), "POST" => client.post(&url),
+        "PUT" => client.put(&url), "DELETE" => client.delete(&url),
+        "PATCH" => client.patch(&url), _ => bail!("不支持的 HTTP 方法: {}", method),
+    };
+    let req = if let Some(b) = body { req.json(&b) } else { req };
+    let resp = req.send().await.map_err(|e| format!("HTTP 请求失败: {}", e))?;
+    let status = resp.status();
+
+    // 无响应体的状态码直接返回空 JSON 对象
+    // 202 Accepted: /agent 发送消息（fire-and-forget）
+    // 204 No Content: 删除等操作
+    if status.as_u16() == 202 || status.as_u16() == 204 {
+        return Ok(serde_json::json!({}));
+    }
+
+    // 对于 200 OK，尝试解析 JSON；如果解析失败（空 body），返回空对象
+    // 这适用于 /agent/update 等成功但无 body 的接口
+    if status.as_u16() == 200 {
+        // 先尝试解析 JSON
+        match resp.json::<serde_json::Value>().await {
+            Ok(result) => return Ok(result),
+            Err(_) => return Ok(serde_json::json!({})), // 空 body 返回 {}
+        }
+    }
+
+    let result: serde_json::Value = resp.json().await
+        .map_err(|e| format!("解析响应失败: {} (HTTP {})", e, status))?;
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn agent_subscribe_events(_state: tauri::State<'_, AppState>) -> Result<(), AppError> {
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn agent_unsubscribe_events(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
+    let s = state.agent_session.lock().map_err(|e| e.to_string())?;
+    if let Some(sess) = s.as_ref() { sess.sse_stop.store(true, Ordering::Relaxed); }
+    Ok(())
+}
+
+pub fn kill_agent_session(state: &AppState) {
+    let old = if let Ok(mut s) = state.agent_session.lock() { s.take() } else { None };
+    if let Some(mut sess) = old {
+        sess.sse_stop.store(true, Ordering::Relaxed);
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(pid) = sess.child.id() {
+                let pid_str = pid.to_string();
+                let _ = platform::create_hidden_command("taskkill").args(["/PID", &pid_str, "/T", "/F"]).spawn();
+            }
+        }
+        let _ = sess.child.start_kill();
+    }
+}
+
+// ===== 日志管理 =====
+
+/// 获取 admAgent 日志文件路径（agent_dir/.admAgent/logs/admAgent.log）
+/// agent_dir 是 admAgent.exe 所在的目录，admAgent 使用该目录作为数据目录
+fn get_adm_agent_log_path(agent_dir: &std::path::Path) -> PathBuf {
+    agent_dir.join(".admAgent").join("logs").join("admAgent.log")
+}
+
+/// 读取 admAgent 日志文件内容（返回最后 N 行，默认 2000 行）
+#[tauri::command]
+pub async fn get_adm_agent_logs(app: tauri::AppHandle, tail: Option<usize>) -> Result<String, AppError> {
+    let agent_path = adm_agent_path(&app)?;
+    let agent_dir = agent_path.parent().unwrap_or(std::path::Path::new("."));
+    let log_path = get_adm_agent_log_path(agent_dir);
+    if !log_path.exists() {
+        return Ok("（admAgent 日志文件不存在: {}）".to_string().replace("{}", &log_path.display().to_string()));
+    }
+
+    let content = tokio::fs::read_to_string(&log_path)
+        .await
+        .map_err(|e| format!("读取日志文件失败: {}", e))?;
+
+    let tail_n = tail.unwrap_or(2000);
+    if tail_n > 0 {
+        let lines: Vec<&str> = content.lines().collect();
+        let start = if lines.len() > tail_n { lines.len() - tail_n } else { 0 };
+        Ok(lines[start..].join("\n"))
+    } else {
+        Ok(content)
+    }
+}
+
+/// 导出 admAgent 日志到用户指定的文件路径
+#[tauri::command]
+pub async fn export_agent_logs(app: tauri::AppHandle) -> Result<(), AppError> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let agent_path = adm_agent_path(&app)?;
+    let agent_dir = agent_path.parent().unwrap_or(std::path::Path::new("."));
+    let log_path = get_adm_agent_log_path(agent_dir);
+    if !log_path.exists() {
+        bail!("admAgent 日志文件不存在: {}", log_path.display());
+    }
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+
+    app.dialog()
+        .file()
+        .add_filter("日志文件", &["log", "txt"])
+        .add_filter("所有文件", &["*"])
+        .set_file_name("admAgent.log")
+        .save_file(move |file_path| {
+            let _ = tx.send(file_path);
+        });
+
+    let file_path = rx.await.map_err(|_| "保存对话框失败".to_string())?;
+    let file_path = file_path.ok_or_else(|| "用户取消了保存".to_string())?;
+
+    let dest_path = file_path
+        .as_path()
+        .ok_or_else(|| "无法获取保存路径".to_string())?;
+
+    tokio::fs::copy(&log_path, dest_path)
+        .await
+        .map_err(|e| format!("导出日志失败: {}", e))?;
 
     Ok(())
 }
 
-/// Windows 平台：关闭 Windows Terminal 外部窗口及其中运行的 admAgent 进程。
-/// 通过 taskkill 按进程名强杀整棵进程树（wt.exe → powershell.exe → admAgent.exe）。
-#[cfg(target_os = "windows")]
-#[tauri::command]
-pub async fn stop_windows_terminal_agent() -> Result<(), AppError> {
-    // 先杀 admAgent.exe（它在 WT 内部的 powershell 中运行），
-// 再杀 WindowsTerminal.exe（关闭 WT 窗口）。
-// taskkill /T /F 会连带子进程一起杀掉。
-let _ = platform::create_hidden_command("taskkill")
-    .args(["/IM", "admAgent.exe", "/T", "/F"])
-    .spawn();
-
-let _ = platform::create_hidden_command("taskkill")
-    .args(["/IM", "WindowsTerminal.exe", "/T", "/F"])
-    .spawn();
-
-Ok(())
-}
-
-/// 非 Windows 平台：返回未实现错误
-#[cfg(not(target_os = "windows"))]
-#[tauri::command]
-pub async fn stop_windows_terminal_agent() -> Result<(), AppError> {
-Ok(())
-}
-
-/// 非 Windows 平台：返回未实现错误
-#[cfg(not(target_os = "windows"))]
-#[tauri::command]
-pub async fn launch_windows_terminal_agent(
-    _app: tauri::AppHandle,
-) -> Result<(), AppError> {
-    bail!("Windows Terminal 模式仅在 Windows 平台上可用")
-}
-
-/// 窗口关闭时清理 Agent 会话（供 lib.rs 调用）
-pub fn kill_agent_session(state: &AppState) {
-    let old = if let Ok(mut s) = state.agent_session.lock() {
-        s.take()
-    } else {
-        None
-    };
-    if let Some(mut sess) = old {
-        stop_agent_session_clean(&mut sess);
-    }
-}

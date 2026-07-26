@@ -430,6 +430,7 @@ async function startDownload() {
 }
 
 async function initPage() {
+  console.log("[model_image] initPage() 检测 SD 状态");
   try {
     document.getElementById('sd-status').textContent = '检测中...';
     const status = await invoke()("get_sd_status");
@@ -452,6 +453,7 @@ async function initPage() {
 
 async function handleGenerate() {
   const prompt = document.getElementById('prompt-input').value.trim();
+  console.log("[model_image] 开始生成图片, prompt:", prompt.substring(0, 50) + "...");
   if (!prompt) { showToast("请输入提示词"); return; }
 
   const width = parseInt(document.getElementById('width-input').value) || 1080;
@@ -494,6 +496,7 @@ async function handleGenerate() {
       return;
     }
 
+    console.log("[model_image] invoke start_sd_generation");
     await invoke()("start_sd_generation", {
       modelId: modelId,
       prompt: prompt,
@@ -522,6 +525,7 @@ async function saveAsImage() {
 }
 
 function handleTauriEvent(type, payload) {
+  console.log("[model_image] 事件:", type, "payload:", JSON.stringify(payload).substring(0, 200));
   switch (type) {
     case "sd-download-progress":
       updateProgressUI(payload.progress, payload.status);
@@ -577,6 +581,7 @@ function setupListeners() {
 export default {
   template,
   mount(root, params) {
+    console.log("[model_image] mount() params:", params);
     root.innerHTML = template;
     modelId = params.model_id || '';
     isGenerating = false;
@@ -592,6 +597,7 @@ export default {
     initPage();
   },
   unmount() {
+    console.log("[model_image] unmount()");
     stopProgressPoll();
     unlisteners.forEach(function(u) { try { if (typeof u === 'function') u(); } catch (_) {} });
     unlisteners = [];

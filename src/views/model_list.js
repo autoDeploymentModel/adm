@@ -607,6 +607,7 @@ function bindRowEvents() {
 async function handleDownload(btn) {
   const modelId = btn.dataset.modelId;
   const modelUrl = btn.dataset.modelUrl;
+  console.log("[model_list] 开始下载模型:", modelId, "URL:", modelUrl);
   const modelMmproj = btn.dataset.modelMmproj || null;
   const modelDiffusion = btn.dataset.modelDiffusion || null;
   const modelVae = btn.dataset.modelVae || null;
@@ -619,7 +620,9 @@ async function handleDownload(btn) {
 
   try {
     await invoke()("download_model", { modelId: modelId, modelUrl: modelUrl, modelMmproj: modelMmproj, modelDiffusion: modelDiffusion, modelVae: modelVae, modelType: modelType });
+    console.log("[model_list] 下载模型 invoke 完成:", modelId);
   } catch (e) {
+    console.error("[model_list] 下载失败:", e);
     showToast("下载失败: " + e);
     if (btn) {
       btn.textContent = "下载";
@@ -630,6 +633,7 @@ async function handleDownload(btn) {
 
 async function handleStart(btn) {
   const modelId = btn.dataset.startBtn;
+  console.log("[model_list] 启动模型:", modelId);
   try {
     const settings = await invoke()("load_settings");
     const params = settings.launch_params || settings.launchParams;
@@ -646,13 +650,16 @@ async function handleStart(btn) {
     btn.disabled = true;
 
     await invoke()("start_model", { modelId: modelId, params: params, supportImages: supportImages, modelFilename: modelFilename });
+    console.log("[model_list] 启动模型 invoke 完成:", modelId);
   } catch (e) {
+    console.error("[model_list] 启动失败:", e);
     showToast("启动失败: " + e);
     renderModelTable();
   }
 }
 
 async function handleStop(btn) {
+  console.log("[model_list] 停止模型");
   try {
     await invoke()("stop_model");
     S().runningModelId = null;
@@ -673,6 +680,7 @@ function goModel(modelId) {
 }
 
 function handleTauriEvent(type, payload) {
+  console.log("[model_list] 事件:", type, "payload:", JSON.stringify(payload).substring(0, 200));
   const st = S();
   const { model_id, progress, error, port } = payload || {};
 
@@ -813,6 +821,7 @@ case "model-started": {
 }
 
 async function init() {
+  console.log("[model_list] init() 开始");
   const st = S();
   if (!st.systemInfo) {
     try {
@@ -870,6 +879,7 @@ if (status.running) {
 
   await populateTypeFilter();
   renderModelTable();
+  console.log("[model_list] init() 完成, 模型数量:", st.modelList.length);
 }
 
 function setupListeners() {
@@ -887,6 +897,7 @@ function setupListeners() {
 export default {
   template,
   mount(root) {
+    console.log("[model_list] mount()");
     root.innerHTML = template;
 S().currentTypeFilter = "all";
   S().currentLogModelId = null;
@@ -895,6 +906,7 @@ S().currentTypeFilter = "all";
     init();
   },
   unmount() {
+    console.log("[model_list] unmount()");
     unlisteners.forEach(function(u) { try { if (typeof u === 'function') u(); } catch (_) {} });
     unlisteners = [];
   }

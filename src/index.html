@@ -37,14 +37,6 @@
       background: #1a1a2e;
     }
 
-    #agent-frame {
-      flex: 1;
-      width: 100%;
-      border: none;
-      background: #1a1a2e;
-      display: none;
-    }
-    #agent-frame.show { display: block; }
     #view-root.hidden { display: none; }
 
     #hardware-bar {
@@ -311,6 +303,45 @@
     .llp-line.success { color: #56d364; }
     .llp-line.debug { color: #58a6ff; }
     .llp-line.timestamp { color: #6e7681; }
+
+    /* ===== 日志 Tab 样式 ===== */
+    .llp-tabs {
+      display: flex;
+      gap: 2px;
+      padding: 6px 14px 0;
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+      flex-shrink: 0;
+    }
+    .llp-tab {
+      background: rgba(255,255,255,0.06);
+      border: 1px solid transparent;
+      border-bottom: none;
+      color: #8b949e;
+      padding: 6px 16px;
+      border-radius: 6px 6px 0 0;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+      position: relative;
+      bottom: -1px;
+    }
+    .llp-tab:hover { background: rgba(255,255,255,0.12); color: #e0e0e0; }
+    .llp-tab.active { background: #0d1117; color: #e0e0e0; border-color: #30363d; border-bottom-color: #0d1117; }
+    .llp-tab-badge {
+      display: inline-block;
+      min-width: 16px;
+      height: 16px;
+      line-height: 16px;
+      text-align: center;
+      background: #30363d;
+      color: #8b949e;
+      border-radius: 8px;
+      font-size: 10px;
+      margin-left: 4px;
+      padding: 0 4px;
+    }
+    .llp-tab.active .llp-tab-badge { background: #6c63ff; color: #fff; }
   </style>
 </head>
 <body>
@@ -336,7 +367,6 @@
 
   <div id="app">
     <div id="view-root"></div>
-    <iframe id="agent-frame"></iframe>
     <div id="hardware-bar">
       <div id="home-btn" onclick="location.hash='#/list'">
         <span class="btn-icon">&#8962;</span>
@@ -384,6 +414,14 @@
           <button class="llp-btn llp-btn-close" onclick="toggleLaunchLogPanel()">关闭</button>
         </div>
       </div>
+      <div class="llp-tabs">
+        <button class="llp-tab active" id="llp-tab-model" data-tab="model" onclick="switchLogTab('model')">
+          模型日志 <span class="llp-tab-badge" id="llp-badge-model">0</span>
+        </button>
+        <button class="llp-tab" id="llp-tab-agent" data-tab="agent" onclick="switchLogTab('agent')">
+          Agent 日志 <span class="llp-tab-badge" id="llp-badge-agent">0</span>
+        </button>
+      </div>
       <div class="llp-content" id="llp-content"></div>
     </div>
   </div>
@@ -430,49 +468,107 @@
     let launchLogPanelVisible = false;
     let launchLogUnreadCount = 0;
     let launchLogCurrentModel = null;
+    let currentLogTab = 'model'; // 'model' | 'agent'
+    const LOG_TABS = {
+      model: { name: '模型日志', badge: 0 },
+      agent: { name: 'Agent 日志', badge: 0 }
+    };
 
-    function addLaunchLog(line, type) {
+    function addLaunchLog(line, type, category) {
       type = type || 'info';
+      category = category || 'model'; // 'model' | 'agent'
       const ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-      const entry = { ts: ts, line: line, type: type };
+      const entry = { ts: ts, line: line, type: type, category: category };
       launchLogs.push(entry);
-      if (launchLogs.length > 2000) launchLogs.shift();
+      if (launchLogs.length > 5000) launchLogs.shift();
 
+      // 更新 badge 计数
+      LOG_TABS[category].badge++;
+      updateLogBadges();
 
-      var content = document.getElementById('llp-content');
-      if (content) {
-        var div = document.createElement('div');
-        div.className = 'llp-line ' + type;
-        div.textContent = '[' + ts + '] ' + line;
-        content.appendChild(div);
-        content.scrollTop = content.scrollHeight;
+      // 如果当前 tab 匹配，追加到内容区
+      if (category === currentLogTab) {
+        var content = document.getElementById('llp-content');
+        if (content) {
+          var div = document.createElement('div');
+          div.className = 'llp-line ' + type;
+          div.textContent = '[' + ts + '] ' + line;
+          content.appendChild(div);
+          content.scrollTop = content.scrollHeight;
+        }
       }
+    }
+
+    function updateLogBadges() {
+      var badgeModel = document.getElementById('llp-badge-model');
+      var badgeAgent = document.getElementById('llp-badge-agent');
+      if (badgeModel) badgeModel.textContent = LOG_TABS.model.badge > 99 ? '99+' : LOG_TABS.model.badge;
+      if (badgeAgent) badgeAgent.textContent = LOG_TABS.agent.badge > 99 ? '99+' : LOG_TABS.agent.badge;
+    }
+
+    function switchLogTab(tabName) {
+      currentLogTab = tabName;
+      // 更新 tab 样式
+      document.querySelectorAll('.llp-tab').forEach(function(t) {
+        t.classList.toggle('active', t.dataset.tab === tabName);
+      });
+      // 重新渲染当前 tab 的日志
+      renderCurrentTabLogs();
+    }
+
+    function renderCurrentTabLogs() {
+      var content = document.getElementById('llp-content');
+      if (!content) return;
+      content.innerHTML = '';
+      var filteredLogs = launchLogs.filter(function(e) { return e.category === currentLogTab; });
+      if (filteredLogs.length === 0) {
+        var empty = document.createElement('div');
+        empty.className = 'llp-line info';
+        empty.textContent = '（暂无' + LOG_TABS[currentLogTab].name + '）';
+        content.appendChild(empty);
+        return;
+      }
+      filteredLogs.forEach(function(entry) {
+        var div = document.createElement('div');
+        div.className = 'llp-line ' + entry.type;
+        div.textContent = '[' + entry.ts + '] ' + entry.line;
+        content.appendChild(div);
+      });
+      content.scrollTop = content.scrollHeight;
     }
 
     function toggleLaunchLogPanel() {
       launchLogPanelVisible = !launchLogPanelVisible;
       var panel = document.getElementById('launch-log-panel');
       if (panel) panel.classList.toggle('show', launchLogPanelVisible);
-if (launchLogPanelVisible) {
-var content = document.getElementById('llp-content');
+      if (launchLogPanelVisible) {
+        var content = document.getElementById('llp-content');
         if (content) content.scrollTop = content.scrollHeight;
       }
     }
 
     function clearLaunchLogs() {
-      launchLogs.length = 0;
-      var content = document.getElementById('llp-content');
-      if (content) content.innerHTML = '';
+      // 只清除当前 tab 的日志
+      var tabName = currentLogTab;
+      for (var i = launchLogs.length - 1; i >= 0; i--) {
+        if (launchLogs[i].category === tabName) {
+          launchLogs.splice(i, 1);
+        }
+      }
+      LOG_TABS[tabName].badge = 0;
+      updateLogBadges();
+      renderCurrentTabLogs();
     }
 
     function exportLaunchLogs() {
-      if (launchLogs.length === 0) return;
-      var text = launchLogs.map(function(e) { return '[' + e.ts + '] [' + e.type + '] ' + e.line; }).join('\\n');
+      var filteredLogs = launchLogs.filter(function(e) { return e.category === currentLogTab; });
+      if (filteredLogs.length === 0) return;
+      var text = filteredLogs.map(function(e) { return '[' + e.ts + '] [' + e.type + '] ' + e.line; }).join('\\n');
       var blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
       var url = URL.createObjectURL(blob);
       var a = document.createElement('a');
       a.href = url;
-      a.download = 'launch-log-' + Date.now() + '.txt';
+      a.download = 'launch-log-' + (currentLogTab === 'agent' ? 'agent' : 'model') + '-' + Date.now() + '.txt';
       a.click();
       URL.revokeObjectURL(url);
     }
@@ -489,10 +585,12 @@ var content = document.getElementById('llp-content');
     }
 
     function setupGlobalLaunchLogListener() {
-      if (typeof listen !== "function") return;
+      if (typeof listen !== "function") { console.warn("[index] listen 不是函数"); return; }
+      console.log("[index] 设置全局启动日志监听器");
       try {
         listen("model-log", function(event) {
           var payload = event.payload || {};
+          console.log("[model-log]", payload.line, "source:", payload.source);
           var line = payload.line;
           var source = payload.source || 'stdout';
           if (!line) return;
@@ -502,17 +600,19 @@ var content = document.getElementById('llp-content');
           else if (/warning|Warning|WARN/.test(line)) type = 'warning';
           else if (/success|Success|listening|started|ready/.test(line)) type = 'success';
           else if (/^\[DEBUG\]|^\[WARN\]/.test(line)) type = 'debug';
-          addLaunchLog(line, type);
+          // admAgent 日志带 [Agent] 前缀，归类到 agent tab
+          var category = line.indexOf('[Agent]') === 0 ? 'agent' : 'model';
+          addLaunchLog(line, type, category);
         });
         listen("model-started", function(event) {
           var payload = event.payload || {};
           launchLogCurrentModel = payload.model_id || launchLogCurrentModel;
           setLaunchLogStatus(true, launchLogCurrentModel);
-          addLaunchLog('✅ 模型启动成功! 端口: ' + (payload.port || ''), 'success');
+          addLaunchLog('✅ 模型启动成功! 端口: ' + (payload.port || ''), 'success', 'model');
         });
         listen("model-stopped", function(event) {
           setLaunchLogStatus(false, null);
-          addLaunchLog('⏹️ 模型已停止', 'info');
+          addLaunchLog('⏹️ 模型已停止', 'info', 'model');
         });
       } catch(e) { console.error('启动日志监听失败:', e); }
     }
@@ -520,6 +620,8 @@ var content = document.getElementById('llp-content');
     window.toggleLaunchLogPanel = toggleLaunchLogPanel;
     window.clearLaunchLogs = clearLaunchLogs;
     window.exportLaunchLogs = exportLaunchLogs;
+    window.addLaunchLog = addLaunchLog;
+    window.switchLogTab = switchLogTab;
 
     // ===== 导航激活态 =====
     function setActiveNav(id) {
@@ -834,51 +936,12 @@ var content = document.getElementById('llp-content');
       } catch (_) {}
     }
 
-    // ===== Agent 终端（方案 A：保留 iframe）=====
-    let agentFrameLoaded = false;
-
-    function showAgentFrame() {
-      const cf = document.getElementById("view-root");
-      const af = document.getElementById("agent-frame");
-      if (cf) cf.classList.add("hidden");
-      if (af) {
-        af.classList.add("show");
-        setActiveNav("agent-btn");
-        try { af.focus(); } catch (_) {}
-        if (!agentFrameLoaded) {
-          af.src = "agent.html";
-          agentFrameLoaded = true;
-          af.onload = function () {
-            af.onload = null;
-            setTimeout(function () {
-              if (af && af.contentWindow) af.contentWindow.postMessage({ type: "agent-resize" }, "*");
-            }, 60);
-          };
-          return;
-        }
-      }
-      setTimeout(function () {
-        if (af && af.contentWindow) af.contentWindow.postMessage({ type: "agent-resize" }, "*");
-      }, 60);
-    }
-
-    function hideAgentFrame() {
-      const cf = document.getElementById("view-root");
-      const af = document.getElementById("agent-frame");
-      if (cf) cf.classList.remove("hidden");
-      if (af) af.classList.remove("show");
-    }
-
+    // ===== Agent 入口 =====
     async function goAgent() {
       try {
         const osName = String(await invoke("get_platform_os")).toLowerCase();
-        // 仅支持 Windows 和 macOS (arm64 / aarch64)
         const supported = osName === "windows" || osName === "macos";
-        if (!supported) {
-          showComingSoon();
-          return;
-        }
-        // macOS 仅支持 ARM 架构（M 系列）
+        if (!supported) { showComingSoon(); return; }
         if (osName === "macos") {
           const arch = String(await invoke("get_platform_arch")).toLowerCase();
           if (arch !== "aarch64" && arch !== "arm64") {
@@ -901,8 +964,6 @@ var content = document.getElementById('llp-content');
           startAdmAgentUpdate(upd, function () { location.hash = "#/agent"; });
           return;
         }
-        
-        // 所有平台统一导航到 #/agent，WT 的启动由 agent.html 负责
         location.hash = "#/agent";
       } catch (e) {
         hideAgentDownloadDialog();
@@ -959,18 +1020,7 @@ var content = document.getElementById('llp-content');
       } catch (_) {}
     }
 
-    function setupAgentTerminalEventForwarding() {
-      if (typeof listen !== "function") return;
-      const forward = (name) => {
-        try {
-          listen(name, function (event) {
-            const frame = document.getElementById("agent-frame");
-            if (frame && frame.contentWindow) frame.contentWindow.postMessage({ type: name, payload: event.payload }, "*");
-          });
-        } catch (_) {}
-      };
-      ["agent-terminal-data", "agent-terminal-exit", "agent-terminal-ready"].forEach(forward);
-    }
+    // goAgent 保留供底部栏调用
 
     // 暴露给视图模块（如 settings 调用）
     window.ADM = {
@@ -1017,12 +1067,14 @@ var content = document.getElementById('llp-content');
       "/chat":     { load: () => import("./views/model_chat.js"),     nav: "home-btn" },
       "/image":    { load: () => import("./views/model_image.js"),    nav: "home-btn" },
       "/settings": { load: () => import("./views/settings.js"),       nav: "settings-btn" },
+      "/agent":    { load: () => import("./views/agent.js"),          nav: "agent-btn" },
     };
 
     let currentView = null;
 
     async function renderRoute() {
       const hash = location.hash || "#/list";
+      console.log("[index] renderRoute() hash:", hash);
       const clean = hash.replace(/^#/, "");
       const qIndex = clean.indexOf("?");
       const path = qIndex >= 0 ? clean.substring(0, qIndex) : clean;
@@ -1037,15 +1089,12 @@ var content = document.getElementById('llp-content');
         });
       }
 
-      // Agent 路由（方案 A）：不加载视图模块，显隐 iframe
+      // Agent 路由：加载 agent.js 视图模块
       if (path === "/agent") {
-        if (currentView) { currentView.unmount && currentView.unmount(); currentView = null; }
-        showAgentFrame();
-        return;
+        // 确保不隐藏 view-root
       }
 
-      // 非 agent 路由：确保 view-root 可见、agent 隐藏
-      hideAgentFrame();
+      // 非 agent 路由：确保 view-root 可见
 
       const route = routes[path] || routes["/list"];
       setActiveNav(route.nav);
@@ -1059,50 +1108,33 @@ var content = document.getElementById('llp-content');
         const mod = await route.load();
         const view = mod.default;
         currentView = view;
+        console.log("[index] 加载视图模块:", path);
         view.mount(root, params);
+        console.log("[index] 视图已挂载:", path);
       } catch (e) {
-        console.error("加载视图失败:", e);
+        console.error("[index] 加载视图失败:", e);
         root.innerHTML = '<div style="padding:40px;color:#ff6b6b;">页面加载失败: ' + e + '</div>';
       }
     }
 
     window.addEventListener("hashchange", renderRoute);
 
-    // 接收 Agent 独立 iframe (agent.html) 的消息（方案 A 保留 iframe）
+    // 接收 Agent 视图模块的导航请求
     window.addEventListener("message", function (event) {
       const data = event.data;
       if (!data || !data.type) return;
-      // agent 内"返回"按钮：原 postMessage({type:"navigate", page:"model_list.html"})
       if (data.type === "navigate") {
         location.hash = "#/list";
-      }
-      // agent 终端请求父窗口把键盘焦点交给 iframe
-      if (data.type === "agent-focus-me") {
-        const f = document.getElementById("agent-frame");
-        if (f) { try { f.focus(); } catch (_) {} try { if (f.contentWindow) f.contentWindow.focus(); } catch (_) {} }
-      }
-      // agent 内剪贴板受限时由父窗口代理读取
-      if (data.type === "agent-read-clipboard") {
-        const id = data.id;
-        const frame = document.getElementById("agent-frame");
-        const send = function (text, error) {
-          if (frame && frame.contentWindow) frame.contentWindow.postMessage({ type: "agent-clipboard-result", id: id, text: text, error: error }, "*");
-        };
-        if (navigator.clipboard && navigator.clipboard.readText) {
-          navigator.clipboard.readText().then(function (t) { send(t, null); }).catch(function (err) { send(null, String(err)); });
-        } else {
-          send(null, "剪贴板不可用");
-        }
       }
     });
 
     // ===== 初始化 =====
     async function init() {
+      console.log("[index] init() 开始初始化");
       try {
         setupLlamacppProgressListener();
         setupAdmAgentUpdateProgressListener();
-setupAgentDownloadListener();
-setupAgentTerminalEventForwarding();
+        setupAgentDownloadListener();
 setupGlobalLaunchLogListener();
 
 systemInfo = await invoke("get_system_info");
@@ -1123,10 +1155,12 @@ systemInfo = await invoke("get_system_info");
 
         updateHardwareBar();
         setActiveNav("home-btn");
+        console.log("[index] 系统信息获取完成:", systemInfo);
       } catch (e) {
-        console.error("获取系统信息失败:", e);
+        console.error("[index] 获取系统信息失败:", e);
         document.getElementById("ram-info").textContent = "加载失败";
       }
+      console.log("[index] init() 完成");
     }
 
     setTimeout(() => { checkForUpdate(true); }, 3000);
