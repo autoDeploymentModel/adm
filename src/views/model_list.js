@@ -44,73 +44,108 @@ const template = `
     overflow-x: hidden;
   }
 
-  .table-wrapper {
-    border-radius: 8px;
-    overflow: visible;
-    clip-path: inset(0 round 8px);
+  .card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 16px;
     margin: 0 20px 20px;
   }
 
-  table {
-    width: 100%;
-    border-collapse: separate;
-    border-spacing: 0;
+  .model-card {
+    position: relative;
     background: #16213e;
+    border: 1px solid #2a2a4e;
+    border-radius: 10px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow: hidden;
+    transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
   }
 
-  thead {
-    position: sticky;
-    top: 0;
-    z-index: 2;
-    background: #0f3460;
+  .model-card:hover {
+    border-color: #6c63ff;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
   }
 
-  th {
-    padding: 12px 16px;
-    text-align: left;
-    font-weight: 600;
-    font-size: 13px;
-    color: #a0a0c0;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    position: sticky;
-    top: 0;
-    z-index: 2;
-    background: #0f3460;
+  .model-card.card-running {
+    border-color: rgba(33, 150, 243, 0.5);
+    box-shadow: inset 3px 0 0 #2196f3;
   }
 
-  th:last-child {
-    text-align: center;
+  .model-card.card-running:hover {
+    box-shadow: inset 3px 0 0 #2196f3, 0 6px 20px rgba(0, 0, 0, 0.3);
   }
 
-  td {
-    padding: 12px 16px;
-    border-top: 1px solid #1a1a3e;
-    font-size: 14px;
+  .model-card.card-unavailable {
+    opacity: 0.6;
   }
 
-  td:last-child {
-    text-align: center;
+  .card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
   }
 
-  tbody tr:hover {
-    background: #1a2744;
+  .card-header .status-badge {
+    flex-shrink: 0;
   }
 
   .model-name {
-    font-weight: 500;
+    font-weight: 600;
+    font-size: 15px;
     color: #ffffff;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
   }
 
-  .model-type {
+  .card-meta {
+    font-size: 13px;
     color: #a0a0c0;
   }
 
-  .model-size {
-    color: #a0a0c0;
+  .card-features {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
   }
 
-  .ram-need {
+  .card-actions {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    border-top: 1px solid #1a1a3e;
+    padding-top: 12px;
+    margin-top: auto;
+  }
+
+  .card-progress {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 3px;
+    background: rgba(108, 99, 255, 0.15);
+  }
+
+  .card-progress-fill {
+    height: 100%;
+    width: 0;
+    background: #6c63ff;
+    transition: width 0.3s ease;
+  }
+
+  .grid-message {
+    grid-column: 1 / -1;
+    text-align: center;
+    padding: 40px;
     color: #a0a0c0;
   }
 
@@ -126,12 +161,6 @@ const template = `
     background: rgba(76, 175, 80, 0.15);
     color: #4caf50;
     border: 1px solid rgba(76, 175, 80, 0.3);
-  }
-
-  .feature-unsupported {
-    background: rgba(150, 150, 150, 0.1);
-    color: #808080;
-    border: 1px solid rgba(150, 150, 150, 0.2);
   }
 
   .status-badge {
@@ -169,7 +198,6 @@ const template = `
     font-weight: 500;
     cursor: pointer;
     transition: all 0.2s;
-    margin: 0 3px;
   }
 
   .btn:disabled {
@@ -288,11 +316,8 @@ const template = `
     background: #d32f2f;
   }
 
-  .actions-cell {
-    white-space: nowrap;
-  }
-
   .empty-state {
+    grid-column: 1 / -1;
     text-align: center;
     padding: 60px 20px;
     color: #606080;
@@ -410,28 +435,11 @@ const template = `
   <span class="model-desc-text" id="model-desc-text"></span>
 </div>
 <main>
-  <div class="table-wrapper"><table id="model-table">
-    <thead>
-      <tr>
-        <th>模型名称</th>
-        <th>模型类型</th>
-        <th>模型大小</th>
-        <th>内存需求</th>
-        <th>工具调用</th>
-        <th>推理</th>
-        <th>图片识别</th>
-        <th>状态</th>
-        <th>操作</th>
-      </tr>
-    </thead>
-    <tbody id="model-tbody">
-      <tr>
-        <td colspan="9" style="text-align:center; padding:40px;">
-          <span class="loading-spinner"></span>正在加载模型列表...
-        </td>
-      </tr>
-    </tbody>
-  </table></div>
+  <div class="card-grid" id="model-grid">
+    <div class="grid-message">
+      <span class="loading-spinner"></span>正在加载模型列表...
+    </div>
+  </div>
 </main>
 <div id="delete-modal" class="modal-overlay" style="display:none;">
   <div class="modal-box">
@@ -551,23 +559,24 @@ async function populateTypeFilter() {
 }
 
 function renderModelTable() {
-  const tbody = document.getElementById("model-tbody");
+  const grid = document.getElementById("model-grid");
   const filteredList = getFilteredModelList();
   const st = S();
 
   if (filteredList.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="9" class="empty-state"><p>暂无可用模型</p></td></tr>';
+    grid.innerHTML = '<div class="empty-state"><p>暂无可用模型</p></div>';
     return;
   }
 
-  tbody.innerHTML = "";
+  grid.innerHTML = "";
 
   filteredList.forEach((model) => {
     const available = isModelAvailable(model.need_ram);
     const downloaded = isModelDownloaded(model.model_id);
     const isRunning = st.runningModelId === model.model_id;
 
-    const tr = document.createElement("tr");
+    const card = document.createElement("div");
+    card.className = "model-card" + (isRunning ? " card-running" : (!available ? " card-unavailable" : ""));
 
     let statusHtml = "";
     if (isRunning) {
@@ -620,30 +629,26 @@ actionsHtml = '<button class="btn btn-view" id="view-' + safeModelId + '">查看
       actionsHtml += '<button class="btn btn-delete" data-delete-btn="' + safeModelId + '">删除</button>';
     }
 
-    const toolsBadge = model.support_tools
-      ? '<span class="feature-badge feature-supported">支持</span>'
-      : '<span class="feature-badge feature-unsupported">不支持</span>';
+    const features = [];
+    if (model.support_tools) features.push('<span class="feature-badge feature-supported">工具调用</span>');
+    if (model.support_reasoning) features.push('<span class="feature-badge feature-supported">推理</span>');
+    if (model.support_images) features.push('<span class="feature-badge feature-supported">图片识别</span>');
+    const featuresHtml = features.length > 0 ? '<div class="card-features">' + features.join('') + '</div>' : '';
 
-    const reasoningBadge = model.support_reasoning
-      ? '<span class="feature-badge feature-supported">支持</span>'
-      : '<span class="feature-badge feature-unsupported">不支持</span>';
+    const isDownloadingPhase = isDownloadingMmproj || isDownloadingDiffusion || isDownloadingVae;
+    const progressVisible = downloadingProgress !== undefined || isDownloadingPhase;
+    const progressValue = downloadingProgress !== undefined ? downloadingProgress : 0;
 
-    const imagesBadge = model.support_images
-      ? '<span class="feature-badge feature-supported">支持</span>'
-      : '<span class="feature-badge feature-unsupported">不支持</span>';
+    card.innerHTML =
+      '<div class="card-header"><span class="model-name" title="' + safeModelId + '">' + model.model_id + '</span>' + statusHtml + '</div>' +
+      '<div class="card-meta">' + (model.model_type || '-') + ' · ' + model.model_size + ' · 需内存 ' + model.need_ram + ' GB</div>' +
+      featuresHtml +
+      '<div class="card-actions">' + downloadBtnHtml + actionsHtml + '</div>' +
+      '<div class="card-progress" data-progress-wrap="' + safeModelId + '" style="display:' + (progressVisible ? 'block' : 'none') + ';">' +
+        '<div class="card-progress-fill" data-progress-bar="' + safeModelId + '" style="width:' + progressValue + '%;"></div>' +
+      '</div>';
 
-    tr.innerHTML =
-      '<td class="model-name">' + model.model_id + '</td>' +
-      '<td class="model-type">' + (model.model_type || '-') + '</td>' +
-      '<td class="model-size">' + model.model_size + '</td>' +
-      '<td class="ram-need">' + model.need_ram + ' GB</td>' +
-      '<td>' + toolsBadge + '</td>' +
-      '<td>' + reasoningBadge + '</td>' +
-      '<td>' + imagesBadge + '</td>' +
-      '<td>' + statusHtml + '</td>' +
-      '<td class="actions-cell">' + downloadBtnHtml + ' ' + actionsHtml + '</td>';
-
-    tbody.appendChild(tr);
+    grid.appendChild(card);
   });
 
   bindRowEvents();
@@ -651,33 +656,33 @@ actionsHtml = '<button class="btn btn-view" id="view-' + safeModelId + '">查看
 
 function bindRowEvents() {
   const st = S();
-  const dlBtns = document.querySelectorAll('#model-tbody .btn-download:not(.downloaded):not([disabled])');
+  const dlBtns = document.querySelectorAll('#model-grid .btn-download:not(.downloaded):not([disabled])');
   dlBtns.forEach(function(btn) {
     btn.addEventListener('click', function() { handleDownload(btn); });
   });
-  const startBtns = document.querySelectorAll('#model-tbody .btn-start[data-start-btn]');
+  const startBtns = document.querySelectorAll('#model-grid .btn-start[data-start-btn]');
   startBtns.forEach(function(btn) {
     btn.addEventListener('click', function() { handleStart(btn); });
   });
-  const stopBtns = document.querySelectorAll('#model-tbody .btn-stop[data-stop-btn]');
+  const stopBtns = document.querySelectorAll('#model-grid .btn-stop[data-stop-btn]');
   stopBtns.forEach(function(btn) {
     btn.addEventListener('click', function() { handleStop(btn); });
   });
-  const viewBtns = document.querySelectorAll('#model-tbody .btn-view');
+  const viewBtns = document.querySelectorAll('#model-grid .btn-view');
   viewBtns.forEach(function(btn) {
     btn.addEventListener('click', function() {
       const modelId = btn.id.replace('view-', '');
       goModel(modelId);
     });
   });
-  const imgBtns = document.querySelectorAll('#model-tbody .btn-start[id^="img-"]');
+  const imgBtns = document.querySelectorAll('#model-grid .btn-start[id^="img-"]');
   imgBtns.forEach(function(btn) {
     btn.addEventListener('click', function() {
       const modelId = btn.id.replace('img-', '');
       openImageGen(modelId);
     });
   });
-  const deleteBtns = document.querySelectorAll('#model-tbody .btn-delete[data-delete-btn]');
+  const deleteBtns = document.querySelectorAll('#model-grid .btn-delete[data-delete-btn]');
   deleteBtns.forEach(function(btn) {
     btn.addEventListener('click', function() {
       const modelId = btn.dataset.deleteBtn;
@@ -784,6 +789,13 @@ async function handleDelete(modelId) {
   }
 }
 
+function updateProgressBar(modelId, progress) {
+  const wrap = document.querySelector('[data-progress-wrap="' + modelId + '"]');
+  if (wrap) wrap.style.display = "block";
+  const bar = document.querySelector('[data-progress-bar="' + modelId + '"]');
+  if (bar) bar.style.width = progress + "%";
+}
+
 function handleTauriEvent(type, payload) {
   console.log("[model_list] 事件:", type, "payload:", JSON.stringify(payload).substring(0, 200));
   const st = S();
@@ -809,6 +821,7 @@ function handleTauriEvent(type, payload) {
         const btn = document.querySelector('[data-model-id="' + model_id + '"]');
         if (btn) btn.textContent = progress + "%";
       }
+      updateProgressBar(model_id, progress);
       break;
     }
     case "download-complete": {
@@ -862,6 +875,7 @@ function handleTauriEvent(type, payload) {
           st.downloadingMmproj[model_id] = true;
           const btn = document.querySelector('[data-model-id="' + model_id + '"]');
           if (btn) { btn.textContent = "下载 mmproj..."; btn.disabled = true; }
+          updateProgressBar(model_id, 0);
         } else if (model && model.model_type === "文本生成图片") {
           if (local && mainFile) {
             if (!local.files.includes(mainFile)) local.files.push(mainFile);
@@ -871,6 +885,7 @@ function handleTauriEvent(type, payload) {
           delete st.partFiles[model_id];
           const btn = document.querySelector('[data-model-id="' + model_id + '"]');
           if (btn) { btn.textContent = "下载 diffusion..."; btn.disabled = true; }
+          updateProgressBar(model_id, 0);
         } else {
           if (local && mainFile) {
             if (!local.files.includes(mainFile)) local.files.push(mainFile);
