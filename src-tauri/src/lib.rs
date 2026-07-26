@@ -236,6 +236,7 @@ pub fn run() {
             agent::download_adm_agent_update,
             agent::get_agent_workdir,
             agent::set_agent_workdir,
+            agent::pick_workdir_folder,
             agent::add_cloud_provider,
             agent::list_cloud_providers,
             agent::update_cloud_provider,

@@ -471,13 +471,6 @@ async function populateTypeFilter() {
   updateModelDesc();
 }
 
-function addLogLine(line, type = 'info') {
-  // 委托给全局启动日志面板
-  if (typeof window.addLaunchLog === 'function') {
-    window.addLaunchLog(line, type);
-  }
-}
-
 function renderModelTable() {
   const tbody = document.getElementById("model-tbody");
   const filteredList = getFilteredModelList();
@@ -785,36 +778,22 @@ function handleTauriEvent(type, payload) {
       break;
     }
     case "model-log": {
-      const logLine = payload?.line;
-      const source = payload?.source || 'stdout';
-      if (logLine) {
-        let logType = 'info';
-        if (source === 'stderr') logType = 'stderr';
-        else if (logLine.includes('error') || logLine.includes('Error') || logLine.includes('ERROR')) logType = 'error';
-        else if (logLine.includes('warning') || logLine.includes('Warning') || logLine.includes('WARN')) logType = 'warning';
-        else if (logLine.includes('success') || logLine.includes('Success') || logLine.includes('SUCCESS') || logLine.includes('listening') || logLine.includes('started')) logType = 'success';
-        addLogLine(`[${new Date().toLocaleTimeString()}] ${logLine}`, logType);
-      }
       break;
     }
 case "model-started": {
       st.runningModelId = model_id;
       st.runningModelPort = port;
       renderModelTable();
-      // 日志面板默认不自动弹出，用户可点击底部栏「启动日志」按钮查看
-      addLogLine(`[${new Date().toLocaleTimeString()}] ✅ 模型启动成功! 端口: ${port}`, 'success');
       break;
     }
     case "model-stopped": {
       st.runningModelId = null;
       st.runningModelPort = null;
       renderModelTable();
-      addLogLine(`[${new Date().toLocaleTimeString()}] ⏹️ 模型已停止`, 'info');
       break;
     }
     case "model-error": {
       showToast("模型错误 [" + model_id + "]: " + error);
-      addLogLine(`[${new Date().toLocaleTimeString()}] ❌ 模型错误: ${error}`, 'error');
       break;
     }
   }
@@ -884,7 +863,7 @@ if (status.running) {
 
 function setupListeners() {
   const L = listen();
-  const events = ["download-progress", "download-complete", "download-error", "model-log", "model-started", "model-stopped", "model-error"];
+  const events = ["download-progress", "download-complete", "download-error", "model-started", "model-stopped", "model-error"];
   events.forEach(function(ev) {
     try {
       L(ev, function(event) { handleTauriEvent(ev, event.payload); })
@@ -900,7 +879,6 @@ export default {
     console.log("[model_list] mount()");
     root.innerHTML = template;
 S().currentTypeFilter = "all";
-  S().currentLogModelId = null;
 
   setupListeners();
     init();

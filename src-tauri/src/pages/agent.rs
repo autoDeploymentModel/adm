@@ -1351,6 +1351,7 @@ async fn forward_sse_events(
         "http://127.0.0.1:{}/v1/workspaces/{}/events?client_id={}",
         port, workspace_id, client_id
     );
+    println!("[agent] forward_sse_events URL: {}", url);
     let client = reqwest::Client::builder().timeout(Duration::from_secs(3600)).build()
         .map_err(|e| format!("创建 SSE 客户端失败: {}", e))?;
 
@@ -1361,8 +1362,10 @@ async fn forward_sse_events(
             Err(_) => { tokio::time::sleep(Duration::from_secs(3)).await; continue; }
         };
         if !resp.status().is_success() {
+            println!("[agent] forward_sse_events HTTP {}", resp.status());
             tokio::time::sleep(Duration::from_secs(3)).await; continue;
         }
+        println!("[agent] forward_sse_events SSE 已连接 workspace: {}", workspace_id);
 
         use futures_util::StreamExt;
         let mut stream = resp.bytes_stream();
@@ -1458,7 +1461,31 @@ pub async fn agent_http_request(
 }
 
 #[tauri::command]
-pub async fn agent_subscribe_events(_state: tauri::State<'_, AppState>) -> Result<(), AppError> {
+pub async fn agent_subscribe_events(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    workspace_id: String,
+    client_id: String,
+) -> Result<(), AppError> {
+    let mut s = state.agent_session.lock().map_err(|e| e.to_string())?;
+    let sess = s.as_mut().ok_or("Agent server 未运行")?;
+
+    // 停止旧的 SSE 转发任务
+    sess.sse_stop.store(true, Ordering::Relaxed);
+
+    // 创建新的停止标志并更新 session
+    let new_sse_stop = Arc::new(AtomicBool::new(false));
+    sess.sse_stop = new_sse_stop.clone();
+    sess.workspace_id = workspace_id.clone();
+
+    let port = sess.port;
+
+    // 启动新的 SSE 转发任务
+    let app2 = app.clone();
+    tokio::spawn(async move {
+        let _ = forward_sse_events(&app2, port, &workspace_id, &client_id, new_sse_stop).await;
+    });
+
     Ok(())
 }
 
@@ -1551,5 +1578,29 @@ pub async fn export_agent_logs(app: tauri::AppHandle) -> Result<(), AppError> {
         .map_err(|e| format!("导出日志失败: {}", e))?;
 
     Ok(())
+}
+
+/// 弹出系统目录选择对话框，返回用户选择的目录路径
+#[tauri::command]
+pub async fn pick_workdir_folder(app: tauri::AppHandle) -> Result<String, AppError> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .pick_folder(move |path| {
+            let _ = tx.send(path);
+        });
+
+    let path = rx
+        .await
+        .map_err(|_| "选择目录对话框失败".to_string())?;
+    let path = path.ok_or_else(|| "用户取消了选择".to_string())?;
+
+    let path = path
+        .into_path()
+        .map_err(|e| format!("无法获取目录路径: {}", e))?;
+
+    Ok(path.to_string_lossy().to_string())
 }
 

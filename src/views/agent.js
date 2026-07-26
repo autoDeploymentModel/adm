@@ -14,6 +14,7 @@ let currentConvId = null;
 let currentConv = null;  // 当前会话详情
 let messages = [];       // 当前消息列表
 let sseListener = null;
+let sseErrorUnlisten = null; // SSE 错误事件 unlisten（避免重复注册）
 let sseReconnectTimer = null; // SSE 重连定时器
 let isSending = false;
 let contextUsage = { used: 0, max: 0 };
@@ -270,8 +271,11 @@ const template = `
     background: #0d1117;
     border: 1px solid #30363d;
     border-radius: 6px;
-    cursor: default;
+    cursor: pointer;
+    position: relative;
+    user-select: none;
   }
+  .workspace-selector:hover { border-color: #58a6ff; }
   .workspace-icon { font-size: 14px; }
   .workspace-name {
     flex: 1;
@@ -281,6 +285,36 @@ const template = `
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  .workspace-arrow { font-size: 10px; color: #8b949e; }
+  .workspace-dropdown {
+    display: none;
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    right: 0;
+    margin-bottom: 4px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 100;
+  }
+  .workspace-dropdown.show { display: block; }
+  .workspace-dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    font-size: 12px;
+    color: #e0e0e0;
+    cursor: pointer;
+    border-bottom: 1px solid #21262d;
+  }
+  .workspace-dropdown-item:hover { background: #1c2128; }
+  .workspace-dropdown-item.active { color: #58a6ff; }
+  .workspace-dropdown-item:last-child { border-bottom: none; }
+  .workspace-dropdown-item-path { font-size: 11px; color: #8b949e; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   .settings-btn-sidebar {
     display: flex;
@@ -1077,6 +1111,8 @@ const template = `
         <div class="workspace-selector" id="agent-workspace-selector">
           <span class="workspace-icon">📁</span>
           <span class="workspace-name" id="agent-workspace-name">默认工作区</span>
+          <span class="workspace-arrow">▾</span>
+          <div class="workspace-dropdown" id="agent-workspace-dropdown"></div>
         </div>
         <button class="settings-btn-sidebar" id="agent-settings-btn">
           <span>⚙</span>
@@ -1426,7 +1462,30 @@ async function init() {
   updateSettingsUI();
 
   // 监听 SSE 事件
-  setupSSEListener();
+  await setupSSEListener();
+
+  // 工作区选择器点击
+  var wsSelector = document.getElementById("agent-workspace-selector");
+  var wsDropdown = document.getElementById("agent-workspace-dropdown");
+  if (wsSelector && wsDropdown) {
+    wsSelector.addEventListener("click", function(e) {
+      if (wsDropdown.contains(e.target)) return;
+      wsDropdown.classList.toggle("show");
+    });
+    wsDropdown.addEventListener("click", function(e) {
+      var item = e.target.closest(".workspace-dropdown-item");
+      if (!item) return;
+      var wsId = item.getAttribute("data-wsid");
+      var wsPath = item.getAttribute("data-wspath");
+      if (wsId && wsId !== serverInfo.workspace_id) {
+        wsDropdown.classList.remove("show");
+        switchToWorkspace(wsId, wsPath);
+      }
+    });
+    document.addEventListener("click", function(e) {
+      if (!wsSelector.contains(e.target)) wsDropdown.classList.remove("show");
+    });
+  }
 
   // 检查项目初始化引导
   checkProjectInit();
@@ -2094,7 +2153,13 @@ async function sendMessage() {
     clearSendSafetyTimer();
     return;
   }
-  if (!currentConvId) return;
+  if (!currentConvId) {
+    var input = document.getElementById("agent-input");
+    var text = (input.value || "").trim();
+    if (!text && pendingFiles.length === 0) return;
+    try { await newConversation(); } catch (_) { return; }
+    if (!currentConvId) return;
+  }
   var input = document.getElementById("agent-input");
   var text = input.value.trim();
   if (!text && pendingFiles.length === 0) return;
@@ -2172,26 +2237,32 @@ function updateSendButton() {
 }
 
 // ===== SSE 事件 =====
-function setupSSEListener() {
-  console.log("[agent] setupSSEListener()");
-  if (sseListener) { try { sseListener(); } catch (_) {} }
+async function setupSSEListener() {
+  console.log("[agent] setupSSEListener() workspace:", serverInfo ? serverInfo.workspace_id : "unknown");
+  if (sseListener) { try { sseListener(); } catch (_) {} sseListener = null; }
   if (typeof listen !== "function") { console.warn("[agent] listen 不是函数"); return; }
 
-  // 通知后端开始订阅 SSE
-  invoke("agent_subscribe_events", {
-    workspace_id: serverInfo.workspace_id,
-    client_id: clientId
-  }).catch(function(_) {});
+  // 通知后端开始订阅 SSE（必须等待完成，否则消息发出后 SSE 还没连上）
+  try {
+    await invoke("agent_subscribe_events", {
+      workspaceId: serverInfo.workspace_id,
+      clientId: clientId
+    });
+    console.log("[agent] agent_subscribe_events 完成");
+  } catch (e) {
+    console.warn("[agent] agent_subscribe_events 失败:", e);
+  }
 
   try {
     sseListener = listen("agent-sse-event", function(event) {
       handleSSEEvent(event.payload);
     });
 
-    // 监听 SSE 错误事件（断线重连）
-    listen("agent-sse-error", function() {
+    // 监听 SSE 错误事件（断线重连）—— 用单独的变量保存 unlisten，避免重复注册
+    if (sseErrorUnlisten) { try { sseErrorUnlisten(); } catch (_) {} sseErrorUnlisten = null; }
+    sseErrorUnlisten = await listen("agent-sse-error", function() {
       reconnectSSE();
-    }).then(function(u) { unlisteners.push(u); }).catch(function() {});
+    });
   } catch (_) {}
 }
 
@@ -2207,7 +2278,7 @@ function reconnectSSE() {
     sseReconnectTimer = null;
     try {
       // 重新订阅 SSE
-      setupSSEListener();
+      await setupSSEListener();
       // 刷新会话列表
       await loadConversations();
       // 刷新当前会话消息
@@ -2757,12 +2828,64 @@ function parseContextSize(s) {
   return parseInt(s) || 0;
 }
 
+// ===== 工作区切换 =====
+async function switchToWorkspace(wsId, wsPath) {
+  if (!wsId) return;
+  console.log("[agent] 切换到工作区:", wsId, wsPath);
+  serverInfo.workspace_id = wsId;
+  workspaceInfo = { id: wsId, path: wsPath || "", name: wsPath ? wsPath.split(/[\\/]/).pop() : "默认工作区" };
+
+  // 重新初始化 Agent
+  try { await api("POST", "/v1/workspaces/" + wsId + "/agent/init"); } catch (_) {}
+  // 刷新 agentInfo
+  try {
+    agentInfo = await api("GET", "/v1/workspaces/" + wsId + "/agent");
+    if (agentInfo && agentInfo.model && agentInfo.model.context_window) {
+      contextUsage.max = agentInfo.model.context_window;
+    }
+  } catch (_) {}
+  // 重新订阅 SSE 事件到新工作区
+  await setupSSEListener();
+  // 清理旧 workspace 状态（必须在 loadConversations 之前，避免被覆盖）
+  messages = [];
+  currentConvId = null;
+  currentConv = null;
+  renderMessages();
+  document.getElementById("agent-conv-title").textContent = "选择或创建一个会话";
+  // 刷新对话列表（会自动选中第一个会话或创建新会话）
+  await loadConversations();
+  updateContextUsage();
+  updateWorkspaceSelector();
+}
+
 // ===== 工作区选择器 =====
 function updateWorkspaceSelector() {
   var nameEl = document.getElementById("agent-workspace-name");
-  if (!nameEl || !workspaceInfo) return;
-  nameEl.textContent = workspaceInfo.name || "默认工作区";
-  nameEl.title = workspaceInfo.path || "";
+  var dropdown = document.getElementById("agent-workspace-dropdown");
+  if (!nameEl || !dropdown) return;
+
+  nameEl.textContent = workspaceInfo ? workspaceInfo.name || "默认工作区" : "默认工作区";
+  nameEl.title = workspaceInfo ? workspaceInfo.path || "" : "";
+
+  // 异步获取所有工作区并填充下拉
+  api("GET", "/v1/workspaces").then(function(workspaces) {
+    if (!Array.isArray(workspaces) || workspaces.length < 2) {
+      dropdown.innerHTML = "";
+      return;
+    }
+    var html = "";
+    for (var i = 0; i < workspaces.length; i++) {
+      var w = workspaces[i];
+      var active = w.id === (serverInfo ? serverInfo.workspace_id : null) ? ' class="workspace-dropdown-item active"' : ' class="workspace-dropdown-item"';
+      var name = w.path ? w.path.split(/[\\/]/).pop() : "工作区 " + (i + 1);
+      var path = w.path || "";
+      html += '<div' + active + ' data-wsid="' + w.id + '" data-wspath="' + path.replace(/"/g, "&quot;") + '">' +
+        '<span>' + name + '</span>' +
+        (path ? '<span class="workspace-dropdown-item-path">' + path + '</span>' : '') +
+        '</div>';
+    }
+    dropdown.innerHTML = html;
+  }).catch(function() {});
 }
 
 // ===== 底部状态栏 =====
@@ -2834,6 +2957,7 @@ async function saveSettings() {
   try {
     // 保存工作目录
     var workdir = document.getElementById("settings-workdir").value.trim();
+    var oldWorkdir = workspaceInfo ? workspaceInfo.path : "";
     await invoke("set_agent_workdir", { workdir: workdir });
 
     // 保存 agent 设置到 config
@@ -2844,8 +2968,37 @@ async function saveSettings() {
     s.agent_temperature = settings.agent_temperature || null;
     await invoke("save_settings", { settings: s });
 
-    // 更新工作区信息
-    workspaceInfo = { path: workdir || "默认", name: workdir ? workdir.split(/[\\/]/).pop() : "默认工作区" };
+    // 如果工作目录发生了变化，切换 workspace
+    if (workdir && workdir !== oldWorkdir && serverInfo && serverInfo.workspace_id) {
+      try {
+        // 查找匹配的工作区
+        var newWsId = null;
+        var workspaces = await api("GET", "/v1/workspaces");
+        if (Array.isArray(workspaces)) {
+          var matched = workspaces.find(function(w) { return w.path === workdir; });
+          if (matched) newWsId = matched.id;
+        }
+        // 没有则创建
+        if (!newWsId) {
+          var newWs = await api("POST", "/v1/workspaces", {
+            path: workdir,
+            yolo: settings.agent_yolo || false,
+            client_id: clientId
+          });
+          newWsId = newWs.id;
+        }
+        // 切换到新 workspace
+        if (newWsId) {
+          await switchToWorkspace(newWsId, workdir);
+        }
+      } catch (e) {
+        console.warn("[agent] 切换工作区失败:", e);
+        showError("切换工作目录失败: " + e);
+      }
+    } else {
+      // 工作目录未变化，只更新 UI
+      workspaceInfo = { path: workdir || "默认", name: workdir ? workdir.split(/[\\/]/).pop() : "默认工作区" };
+    }
     updateWorkspaceSelector();
     updateStatusBar("ready", workdir, contextUsage.used);
   } catch (e) {
@@ -3040,7 +3193,26 @@ function bindEvents() {
   document.getElementById("agent-settings-btn").addEventListener("click", showSettings);
   document.getElementById("agent-settings-close").addEventListener("click", hideSettings);
   document.getElementById("agent-settings-cancel").addEventListener("click", hideSettings);
-  document.getElementById("agent-settings-save").addEventListener("click", async function() {
+  document.getElementById("agent-settings-save").addEventListener("click", doSaveAndClose);
+
+  // 浏览工作目录
+  document.getElementById("settings-browse-btn").addEventListener("click", async function() {
+    try {
+      var dir = await invoke("pick_workdir_folder");
+      if (dir) {
+        document.getElementById("settings-workdir").value = dir;
+        await doSaveAndClose();
+      }
+    } catch (_) {}
+  });
+
+  // 工作目录输入框变更时自动保存
+  document.getElementById("settings-workdir").addEventListener("change", async function() {
+    if (this.value.trim()) await doSaveAndClose();
+  });
+
+  // 从所有设置弹窗字段读取并保存，然后关闭
+  async function doSaveAndClose() {
     settings.agent_reasoning_effort = document.getElementById("settings-reasoning-effort").value;
     var tempVal = document.getElementById("settings-temperature").value;
     settings.agent_temperature = tempVal ? parseFloat(tempVal) : null;
@@ -3049,26 +3221,13 @@ function bindEvents() {
     hideSettings();
     updateModeToggle();
     updateModelBtn();
-    // 同步模型到 admAgent.json
     var selectedKey = settings.agent_default_provider || "local";
     var resolved = resolveAgentModel(selectedKey);
     var displayName = selectedKey === "local" ? "本地模型" : (providers.find(function(p) { return p.key === selectedKey; }) || {}).name || selectedKey;
-    var ctxLen = 0;
-    var mp = providers.find(function(x) { return x.key === selectedKey; });
-    if (mp) ctxLen = mp.context_window || 0;
-    await switchModel(selectedKey, displayName, ctxLen);
-  });
-
-  // 浏览工作目录
-  document.getElementById("settings-browse-btn").addEventListener("click", async function() {
-    try {
-      var dir = await invoke("get_agent_workdir");
-      var newDir = prompt("工作目录路径:", dir || "");
-      if (newDir !== null) {
-        document.getElementById("settings-workdir").value = newDir;
-      }
-    } catch (_) {}
-  });
+    if (resolved && resolved.model) {
+      await switchModel(selectedKey, displayName, resolved.context_window || 0);
+    }
+  }
 
   // 云端模型管理
   document.getElementById("agent-add-cloud-btn").addEventListener("click", showAddModelDialog);
@@ -3277,6 +3436,7 @@ export default {
     clearSendSafetyTimer();
     // 停止 SSE 监听
     if (sseListener) { try { sseListener(); } catch (_) {} sseListener = null; }
+    if (sseErrorUnlisten) { try { sseErrorUnlisten(); } catch (_) {} sseErrorUnlisten = null; }
     // 清除重连定时器
     if (sseReconnectTimer) { clearTimeout(sseReconnectTimer); sseReconnectTimer = null; }
     // 取消订阅
