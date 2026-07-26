@@ -1373,9 +1373,24 @@ Agent 页面采用 HTTP API + SSE 架构，不再使用 PTY 终端或 xterm.js�
 - **云端模型管理（前端 `agent.js`）**：顶部栏「添加云端模型」弹出表单（模型名称 / Base URL / API Key / 上下文大小，默认 256000 / 「支持图片输入」复选框，默认不勾选），「模型管理」弹出已添加模型列表，每项带「编辑」按钮，编辑复用同一表单并回填参数；列表卡片中支持图片的模型展示「支持图片」标记。
 - **模型下拉列表（`updateModelDropdown`）**：云端部分优先使用服务端 `GET /v1/workspaces/{id}/providers` 返回的完整 provider 列表（含编译内置在 admAgent 里、`admAgent.json` 中不存在的内置 provider，一个 provider 可能含多个 model，逐 model 渲染），条目 key 为复合格式 `provider/model`；`admAgent.json` 里刚添加、服务端尚未重载的 provider 作补充；服务端不可用时回退 `list_cloud_providers` 列表。支持图片的模型名后显示 📷 标记。打开下拉时异步刷新服务端列表（`refreshServerProviders`）并重渲染。
 - **切换模型（`switchModel`）**：`agent_default_provider` 只存在 ADM 自己的 `config.json`，admAgent 服务端不读它。因此切换时必须先调服务端 `POST /v1/workspaces/{id}/config/model`（`scope=0`，携带 `provider`/`model`，可选 `reasoning_effort`/`temperature`）把首选模型写进 admAgent 配置，再调 `POST .../agent/update` 重载，否则服务端会一直使用 `admAgent.json` 里旧的 `model` 字段（表现为选什么模型都显示旧模型）。本地模型（`local` / `local:xxx`）统一映射为 `provider=local, model=localModel`；复合 key（`provider/model`，服务端列表条目）直接拆分；其它云端 key 用 `list_cloud_providers` 返回的 `model_id`。
+  - **对话中途切换保障（`pendingModelReload`）**：`/agent/update` 可能因会话繁忙（上一轮刚结束服务端仍 busy / 有排队任务）失败，此时 `config/model` 已写入但 Agent 未重载，后续对话仍用旧模型。失败时置 `pendingModelReload=true`，在 `run_complete` 事件和 `sendMessage()` 发送前自动重试 `/agent/update`，确保同一会话下一轮用新模型。
+  - **agentInfo 竞态保护（`refreshAgentInfo`）**：所有 `GET /agent` 刷新统一走 `refreshAgentInfo()`，带递增序号，只应用最后一次发起的请求结果；避免 `run_complete` 触发的旧响应晚到，把刚切换的 `agentInfo`（模型显示、`supports_images` 图片检查、`context_window`）覆盖回旧模型。
 - **云端 provider 不被覆盖**：`add_cloud_provider` / `update_cloud_provider` 均保持 `providers.local` 存在；由于 `ensure_adm_agent_config` 仅原地更新 `providers.local`，用户新增 / 编辑的云端 provider 在改上下文大小、重进 Agent 页等场景下均被保留。
 - **附件功能**：前端支持发送图片附件给 Agent，三种输入方式：点击 📎 按钮选择文件、拖放到输入区域、Ctrl+V 粘贴剪贴板图片。附件以 base64 编码通过 `attachments` 字段随消息发送到 admAgent server（`POST /v1/workspaces/{id}/agent`）。发送前检查 `agentInfo.model.supports_images`，若模型不支持图片则弹出错误提示阻止发送。附件预览区显示在输入框上方，支持逐个删除。文件大小限制 20MB。
 - **上下文用量显示（`agent.js`）**：工具栏显示 `当前/最大` token（最大值取 `agentInfo.model.context_window`）。运行中由 SSE `session` 事件的 `context_tokens` 实时更新；但 admAgent 的 sessions 表**不持久化 `context_tokens`**（仅有 `prompt_tokens`/`completion_tokens` 列），server 重启后加载历史会话接口返回 0。此时前端回退 `estimateContextTokens(messages)` 本地估算（CJK ≈ 1 token/字、其它 ≈ 4 字符/token，统计 text/tool_call/tool_result/shell_command 部分，已压缩会话从 `summary_message_id` 开始统计），估算值带 `~` 前缀；收到非 0 的服务端 `context_tokens` 后恢复精确值，SSE 事件中 `context_tokens=0` 时不覆盖估算值。
+- **权限确认弹窗（`agent.js`）**：SSE `permission_request` 事件触发弹窗，按钮对应 `POST /permissions/grant` 的 `action`：允许=`allow`、允许本次会话=`allow_session`、拒绝=`deny`（服务端 API 仅接受 `permission`+`action` 两个字段）。因服务端 `allow_session` 按"工具+操作+路径"匹配，换文件/子会话仍会重复弹窗，前端做了客户端兜底：
+  - **客户端记忆**：点"允许本次会话"或勾选"本次会话不再询问此类操作"后，以 `tool_name|action` 为 key 存入 `permissionAutoAllow`；后续同类请求直接自动 `allow` 放行不弹窗。切换/新建/删除会话、切换工作区时 `resetPermissionState()` 清空记忆。
+  - **请求队列**：弹窗打开期间到达的新请求进入 `pendingPermissions` 队列（按 `id` 去重），避免覆盖当前请求导致其永远得不到应答；处理完当前请求后依次处理队列（命中记忆的自动放行）。
+  - **SSE 监听器修复**：`setupSSEListener` 中 `listen()` 必须 `await`（否则存的是 Promise，注销失败被吞掉，重连/切工作区后监听器叠加 → 同一事件重复处理）。
+- **消息区手动/自动滚动模式（`agent.js`）**：流式输出期间 `renderMessages()` 频繁重建 DOM，原先会把用户点开的 `<details>`（推理过程/工具调用/工具结果）合上并强制滚到底部，导致无法点开查看。现在：
+  - **手动模式**：鼠标进入 `#agent-msg-area`（`mouseenter`）即进入，重渲染时保留滚动位置（可上滑）；鼠标离开 3 秒后（`mouseleave` + 定时器）恢复自动模式并滚到底部。
+  - **折叠块状态保留**：每个可折叠 part 带稳定 `data-key`（`消息id:part序号`），重建消息节点时记录已展开的 key 并恢复，推理过程可点开/合上不被刷新重置（手动/自动模式均生效）。
+  - **状态重置**：切换/新建会话、切换工作区、页面卸载时 `exitManualScrollMode()`，避免把旧会话的滚动位置带到新会话。
+- **消息列表增量渲染（`agent.js`）**：早先 `renderMessages()` 每次 `innerHTML=""` 全量重建，流式输出时每秒触发多次 → 「正在思考」指示器不断重建导致动画闪烁；推理过程的 `<summary>` 在 mousedown/mouseup 之间被销毁，点击永远无法命中（表现为无法展开思考过程）。现改为 keyed 增量渲染：
+  - 消息节点带 `data-msgid`，按 `msgSignature()`（内容长度/状态签名）比对，未变化的节点原样保留不动。
+  - 结构未变（`msgStructSig()`：part 类型序列+meta）时 `updateMessageNode()` 就地更新文本（reasoning 只改内容 div、tool_call/tool_result 只改 summary 文字与内容），**保住 `<details>` 元素身份**，流式期间随时可点开/收起推理过程；结构变化才重建该消息节点（重建时按 `data-key` 恢复展开状态）。shell_command/未知类型内部结构随数据变化，仅局部重建该 part 元素（`buildPartElement()` 全量/局部共用）。
+  - 「正在思考」指示器改为持久节点：仅按需创建/移到末尾/移除，不再每次渲染重建，动画不再闪烁。
+- **YOLO 模式实时切换（`agent.js`）**：`agent_yolo` 存在 ADM 的 `config.json`，但服务端的 yolo 只在创建工作区时（`POST /v1/workspaces` 的 `yolo` 字段）传入一次，之后只改本地设置对运行中的 admAgent 不生效。`syncYoloToServer()` 通过 `POST /permissions/skip` 实时同步，调用时机：工具栏模式切换按钮、设置弹窗保存、Agent 页初始化（复用已有工作区时服务端保留旧状态）、切换工作区（各工作区 skip 状态独立）。开启 YOLO 时额外：把正在等待的权限请求（当前弹窗 + `pendingPermissions` 队列）全部自动放行并关闭弹窗，避免切换前已发出的请求卡住本轮对话；`showPermissionDialog` 入口也检查 `agent_yolo`，兼容切换瞬间服务端 skip 尚未生效仍发来请求的竞态。
 
 ---
 

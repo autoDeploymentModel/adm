@@ -24,6 +24,13 @@ let workspaceInfo = null; // { id, path, name }
 let agentInfo = null;    // Agent 状态信息 (当前模型等)
 let pendingFiles = [];   // 待发送附件列表 [{name, type, size, base64, dataUrl}]
 let sendSafetyTimer = null; // isSending 安全超时定时器（3分钟无任何 SSE 活动则自动重置，收到消息事件会续期）
+let permissionAutoAllow = {}; // 客户端"本次会话记住"缓存 key: tool|action → true（服务端 allow_session 按 工具+操作+路径 匹配，路径变化仍会弹窗，客户端兜底）
+let pendingPermissions = [];  // 弹窗打开期间到达的后续权限请求队列（避免覆盖当前请求导致其永远得不到应答）
+let currentPermission = null; // 当前弹窗正在处理的权限请求
+let manualScrollMode = false;   // 手动模式：鼠标在消息区内，暂停自动滚底，保留滚动位置与折叠块展开状态
+let manualModeExitTimer = null; // 鼠标离开消息区 3 秒后恢复自动模式的定时器
+let pendingModelReload = false; // 切换模型时 /agent/update 失败（如会话繁忙）→ 挂起，run_complete/下次发送前重试
+let agentInfoSeq = 0;           // agentInfo 刷新序号：只应用最新一次请求的结果，防止旧响应把切换后的模型覆盖回旧值
 
 // ===== 模板 =====
 const template = `
@@ -1452,6 +1459,9 @@ async function init() {
     } catch (e) {
       console.warn("[agent] 获取 agentInfo 失败:", e);
     }
+
+    // 把本地 YOLO 设置同步到服务端（复用已有工作区时服务端保留的是旧状态，可能与本地不一致）
+    await syncYoloToServer();
   }
 
   // 加载会话列表
@@ -1679,6 +1689,7 @@ function handleConvAction(action, convId) {
         api("DELETE", "/v1/workspaces/" + serverInfo.workspace_id + "/sessions/" + convId)
           .then(function() {
             if (currentConvId === convId) {
+              resetPermissionState();
               currentConvId = null;
               currentConv = null;
               messages = [];
@@ -1694,6 +1705,7 @@ function handleConvAction(action, convId) {
 }
 
 async function selectConversation(convId) {
+  if (convId !== currentConvId) { resetPermissionState(); exitManualScrollMode(); }
   currentConvId = convId;
   renderConversationList();
 
@@ -1745,6 +1757,8 @@ async function newConversation() {
       showError("创建会话失败: 服务端返回无效响应");
       return;
     }
+    resetPermissionState();
+    exitManualScrollMode();
     currentConvId = resp.id;
     messages = [];
     currentConv = resp;
@@ -1762,195 +1776,352 @@ async function newConversation() {
   }
 }
 
+// 退出手动滚动模式（切换会话/工作区时调用，避免把旧会话的滚动位置带到新会话）
+function exitManualScrollMode() {
+  if (manualModeExitTimer) { clearTimeout(manualModeExitTimer); manualModeExitTimer = null; }
+  manualScrollMode = false;
+}
+
 // ===== 消息渲染 =====
 // Message 结构: { id, role, session_id, parts: ContentPart[], model, provider, created_at, updated_at }
 // ContentPart 联合类型通过 type 字段区分:
 //   text / reasoning / image_url / binary / tool_call / tool_result / finish / shell_command
+//
+// 增量渲染：流式输出时 SSE 每秒触发多次渲染，若整体重建 DOM，
+// 「正在思考」指示器会不断重建导致动画闪烁，且推理过程 <summary> 在 mousedown 与
+// mouseup 之间被销毁，点击永远无法命中（表现为无法展开思考过程）。
+// 因此按 data-msgid 逐条对齐：内容未变的消息节点原样保留；结构未变的就地更新文本
+// （保住 <details> 元素身份，流式期间可点开/收起）；结构变化才重建该消息节点。
+
+// 该 part 是否需要渲染（用户消息不显示 finish 标记）
+function isPartRenderable(part, role) {
+  if (!part || !part.type) return false;
+  if (part.type === "finish" && role === "user") return false;
+  return true;
+}
+
+// 单个 part 的内容签名（长度/状态足以覆盖流式追加场景）
+function partSig(part) {
+  var d = (part && part.data) || {};
+  return (part.type || "?") + ":" +
+    ((d.text || "").length + (d.thinking || "").length + (d.input || "").length +
+     String(d.content || d.data || "").length + (d.output || "").length + (d.url || "").length) +
+    ":" + (d.finished === false ? "r" : "f") + (d.is_error ? "e" : "") +
+    ":" + (d.name || "") + (d.reason || "") + (d.exit_code !== undefined ? d.exit_code : "") + (d.path || "");
+}
+
+// 消息内容签名：变化才触发该消息节点的更新
+function msgSignature(msg) {
+  if (msg._streaming || !msg.parts || !Array.isArray(msg.parts) || msg.parts.length === 0) {
+    return "c:" + (msg.content || "").length + ":" + (msg.model || "") + (msg.provider || "");
+  }
+  return "p:" + msg.parts.map(partSig).join(";") + "|" + (msg.model || "") + (msg.provider || "") + (msg.created_at || "");
+}
+
+// 消息结构签名：part 类型序列 + 是否有元信息，结构一致才允许就地更新
+function msgStructSig(msg, role) {
+  if (msg._streaming || !msg.parts || !Array.isArray(msg.parts) || msg.parts.length === 0) return "plain";
+  var types = [];
+  msg.parts.forEach(function(p) { if (isPartRenderable(p, role)) types.push(p.type); });
+  return types.join(",") + ((msg.model || msg.provider) ? "|meta" : "");
+}
+
 function renderMessages() {
   const area = document.getElementById("agent-msg-area");
   if (!area) return;
-  area.innerHTML = "";
+  var prevScrollTop = area.scrollTop;
 
   if (messages.length === 0) {
     area.innerHTML = '<div class="empty-state"><span class="empty-state-icon">🤖</span><span class="empty-state-text">开始一个新的对话</span></div>';
     return;
   }
+  if (area.querySelector(".empty-state")) area.innerHTML = "";
 
-  messages.forEach(function(msg) {
-    var div = document.createElement("div");
-    var role = msg.role || "assistant";
-    div.className = "msg " + role;
-
-    // 如果是流式消息（SSE 临时构建的），直接渲染 content
-    if (msg._streaming && msg.content) {
-      div.textContent = msg.content;
-      area.appendChild(div);
-      return;
-    }
-
-    // 如果有 parts 数组，按 ContentPart 类型渲染
-    if (msg.parts && Array.isArray(msg.parts) && msg.parts.length > 0) {
-      renderMessageParts(div, msg.parts, role);
-    } else if (msg.content) {
-      // 兼容旧格式
-      div.textContent = msg.content;
-    } else {
-      // 无内容则跳过
-      return;
-    }
-
-    // 消息元信息
-    if (msg.model || msg.provider) {
-      var meta = document.createElement("div");
-      meta.className = "msg-meta";
-      var metaParts = [];
-      if (msg.model) metaParts.push(msg.model);
-      if (msg.provider) metaParts.push(msg.provider);
-      if (msg.created_at) metaParts.push(formatTime(msg.created_at));
-      meta.textContent = metaParts.join(" · ");
-      div.appendChild(meta);
-    }
-
-    area.appendChild(div);
+  // 移除已不在消息列表中的节点（错误提示、被正式消息替换的临时消息等）
+  var keySet = {};
+  messages.forEach(function(m, i) { keySet[String(m.id || ("idx" + i))] = true; });
+  var existing = {};
+  Array.prototype.slice.call(area.children).forEach(function(c) {
+    if (c.id === "agent-working-indicator") return;
+    var mid = c.getAttribute ? c.getAttribute("data-msgid") : null;
+    if (mid && keySet[mid] && !existing[mid]) existing[mid] = c;
+    else c.remove();
   });
 
-  // 当 Agent 正在工作中时，在消息末尾追加「正在工作」指示器
+  var pos = 0; // 期望位置游标（顺序未变时节点不移动）
+  messages.forEach(function(msg, msgIdx) {
+    var key = String(msg.id || ("idx" + msgIdx));
+    var el = existing[key];
+    if (el) delete existing[key]; // 防重复 id 时同一节点被两条消息复用
+    var sig = msgSignature(msg);
+    if (el && el._admSig === sig) {
+      // 内容未变化，原样保留
+    } else if (el && updateMessageNode(el, msg)) {
+      el._admSig = sig; // 结构未变：已就地更新文本
+    } else {
+      var fresh = buildMessageNode(msg, key);
+      if (!fresh) { if (el) el.remove(); return; } // 无内容消息跳过
+      fresh._admSig = sig;
+      if (el) {
+        // 重建时恢复旧节点中已展开的折叠块
+        var openKeys = {};
+        el.querySelectorAll("details[data-key][open]").forEach(function(d) { openKeys[d.getAttribute("data-key")] = true; });
+        fresh.querySelectorAll("details[data-key]").forEach(function(d) { if (openKeys[d.getAttribute("data-key")]) d.open = true; });
+        el.replaceWith(fresh);
+      }
+      el = fresh;
+    }
+    var expected = area.children[pos];
+    if (expected !== el) area.insertBefore(el, expected || null);
+    pos++;
+  });
+
+  // 「正在思考」指示器：持久节点，仅按需创建/移动/移除，避免每次重建导致动画闪烁
+  var indicator = document.getElementById("agent-working-indicator");
   if (isSending) {
-    var indicator = document.createElement("div");
-    indicator.className = "msg assistant working-indicator";
-    indicator.id = "agent-working-indicator";
-    indicator.innerHTML =
-      '<span class="working-indicator-dot"></span>' +
-      '<span class="working-indicator-text">正在思考' +
-        '<span class="working-indicator-dots"><span></span><span></span><span></span>' +
-      '</span></span>';
-    area.appendChild(indicator);
+    if (!indicator) {
+      indicator = document.createElement("div");
+      indicator.className = "msg assistant working-indicator";
+      indicator.id = "agent-working-indicator";
+      indicator.innerHTML =
+        '<span class="working-indicator-dot"></span>' +
+        '<span class="working-indicator-text">正在思考' +
+          '<span class="working-indicator-dots"><span></span><span></span><span></span>' +
+        '</span></span>';
+    }
+    if (area.lastElementChild !== indicator) area.appendChild(indicator);
+  } else if (indicator) {
+    indicator.remove();
   }
 
-  area.scrollTop = area.scrollHeight;
+  // 手动模式：保留用户当前滚动位置；自动模式：滚到底部
+  if (manualScrollMode) {
+    area.scrollTop = prevScrollTop;
+  } else {
+    area.scrollTop = area.scrollHeight;
+  }
 }
 
-// 渲染 ContentPart 数组
-function renderMessageParts(container, parts, role) {
-  parts.forEach(function(part) {
-    if (!part || !part.type) return;
-    var partType = part.type;
-    var partData = part.data || {};
+// 构建完整消息节点
+function buildMessageNode(msg, key) {
+  var role = msg.role || "assistant";
+  var div = document.createElement("div");
+  div.className = "msg " + role;
+  div.setAttribute("data-msgid", key);
 
-    switch (partType) {
+  if (msg._streaming && msg.content) {
+    // 流式消息（SSE 临时构建的），直接渲染 content
+    div.textContent = msg.content;
+  } else if (msg.parts && Array.isArray(msg.parts) && msg.parts.length > 0) {
+    renderMessageParts(div, msg.parts, role, key);
+  } else if (msg.content) {
+    // 兼容旧格式
+    div.textContent = msg.content;
+  } else {
+    return null; // 无内容则跳过
+  }
+
+  // 消息元信息
+  if (msg.model || msg.provider) {
+    var meta = document.createElement("div");
+    meta.className = "msg-meta";
+    var metaParts = [];
+    if (msg.model) metaParts.push(msg.model);
+    if (msg.provider) metaParts.push(msg.provider);
+    if (msg.created_at) metaParts.push(formatTime(msg.created_at));
+    meta.textContent = metaParts.join(" · ");
+    div.appendChild(meta);
+  }
+
+  div._admStruct = msgStructSig(msg, role);
+  return div;
+}
+
+// 就地更新消息节点（结构未变时只更新文本，保住 <details> 身份使流式期间可点开/收起）
+function updateMessageNode(el, msg) {
+  var role = msg.role || "assistant";
+  var struct = msgStructSig(msg, role);
+  if (struct === "plain" || el._admStruct !== struct) return false;
+  var partEls = el.querySelectorAll(":scope > [data-pk]");
+  var pi = 0;
+  for (var i = 0; i < msg.parts.length; i++) {
+    var part = msg.parts[i];
+    if (!isPartRenderable(part, role)) continue;
+    var pe = partEls[pi++];
+    if (!pe || pe.getAttribute("data-ptype") !== part.type) return false;
+    var d = part.data || {};
+    switch (part.type) {
       case "text":
-        var textDiv = document.createElement("div");
-        textDiv.className = "msg-text";
-        // 使用 Markdown 渲染
-        textDiv.innerHTML = renderMarkdown(partData.text || "");
-        container.appendChild(textDiv);
+        pe.innerHTML = renderMarkdown(d.text || "");
         break;
-
       case "reasoning":
-        var details = document.createElement("details");
-        details.className = "msg-reasoning";
-        var summary = document.createElement("summary");
-        summary.textContent = "💭 推理过程";
-        summary.style.cssText = "cursor:pointer;font-size:12px;color:#8b949e;";
-        details.appendChild(summary);
-        var reasoningContent = document.createElement("div");
-        reasoningContent.style.cssText = "padding:8px;color:#8b949e;font-style:italic;font-size:12px;white-space:pre-wrap;";
-        reasoningContent.textContent = partData.thinking || "";
-        details.appendChild(reasoningContent);
-        container.appendChild(details);
+        if (pe.lastElementChild && pe.lastElementChild.tagName !== "SUMMARY") {
+          pe.lastElementChild.textContent = d.thinking || "";
+        }
         break;
-
       case "tool_call":
-        var toolDetails = document.createElement("details");
-        toolDetails.className = "msg-tool-call";
-        var toolSummary = document.createElement("summary");
-        var finished = partData.finished !== false;
-        toolSummary.textContent = "🔧 " + (partData.name || "tool") + (finished ? " (已完成)" : " (执行中)");
-        toolSummary.style.cssText = "cursor:pointer;font-size:12px;color:#8b949e;";
-        toolDetails.appendChild(toolSummary);
-        var toolInput = document.createElement("div");
-        toolInput.style.cssText = "padding:8px;font-family:monospace;font-size:11px;color:#b0b8c8;white-space:pre-wrap;background:#0d1117;border-radius:4px;margin-top:4px;";
-        try {
-          toolInput.textContent = "输入: " + JSON.stringify(JSON.parse(partData.input || "{}"), null, 2);
-        } catch (_) {
-          toolInput.textContent = "输入: " + (partData.input || "");
+        var ts = pe.firstElementChild; // summary
+        if (ts) ts.textContent = "🔧 " + (d.name || "tool") + (d.finished !== false ? " (已完成)" : " (执行中)");
+        var ti = pe.lastElementChild;
+        if (ti && ti.tagName !== "SUMMARY") {
+          try { ti.textContent = "输入: " + JSON.stringify(JSON.parse(d.input || "{}"), null, 2); }
+          catch (_) { ti.textContent = "输入: " + (d.input || ""); }
         }
-        toolDetails.appendChild(toolInput);
-        container.appendChild(toolDetails);
         break;
-
       case "tool_result":
-        var resultDetails = document.createElement("details");
-        resultDetails.className = "msg-tool-result";
-        var resultSummary = document.createElement("summary");
-        var isError = partData.is_error;
-        resultSummary.textContent = (isError ? "❌ " : "✅ ") + (partData.name || "tool") + " 结果";
-        resultSummary.style.cssText = "cursor:pointer;font-size:12px;color:" + (isError ? "#ff6b6b" : "#43a047") + ";";
-        resultDetails.appendChild(resultSummary);
-        var resultContent = document.createElement("div");
-        resultContent.style.cssText = "padding:8px;font-family:monospace;font-size:11px;color:#b0b8c8;white-space:pre-wrap;background:#0d1117;border-radius:4px;margin-top:4px;max-height:300px;overflow-y:auto;";
-        resultContent.textContent = partData.content || partData.data || "";
-        resultDetails.appendChild(resultContent);
-        container.appendChild(resultDetails);
+        var rs = pe.firstElementChild; // summary
+        if (rs) {
+          rs.textContent = (d.is_error ? "❌ " : "✅ ") + (d.name || "tool") + " 结果";
+          rs.style.color = d.is_error ? "#ff6b6b" : "#43a047";
+        }
+        var rc = pe.lastElementChild;
+        if (rc && rc.tagName !== "SUMMARY") rc.textContent = d.content || d.data || "";
         break;
-
       case "finish":
-        // 用户消息不显示 finish 标记（stop/end_turn 等对用户无意义）
-        if (role !== "user") {
-          var finishDiv = document.createElement("div");
-          finishDiv.className = "msg-finish";
-          finishDiv.style.cssText = "border-top:1px solid #30363d;padding-top:4px;margin-top:4px;font-size:11px;color:#6e7681;";
-          var reason = partData.reason || "完成";
-          finishDiv.textContent = "── " + reason + " ──";
-          container.appendChild(finishDiv);
-        }
+        pe.textContent = "── " + (d.reason || "完成") + " ──";
         break;
-
-      case "shell_command":
-        var shellDiv = document.createElement("div");
-        shellDiv.className = "msg-shell-command";
-        shellDiv.style.cssText = "font-family:monospace;font-size:11px;background:#0d1117;border-radius:4px;padding:8px;margin-top:4px;";
-        var cmdDiv = document.createElement("div");
-        cmdDiv.style.cssText = "color:#6c63ff;";
-        cmdDiv.textContent = "$ " + (partData.command || "");
-        shellDiv.appendChild(cmdDiv);
-        if (partData.output) {
-          var outDiv = document.createElement("div");
-          outDiv.style.cssText = "color:#b0b8c8;white-space:pre-wrap;margin-top:4px;";
-          outDiv.textContent = partData.output;
-          shellDiv.appendChild(outDiv);
-        }
-        if (partData.exit_code !== undefined) {
-          var exitDiv = document.createElement("div");
-          exitDiv.style.cssText = "color:#6e7681;margin-top:4px;";
-          exitDiv.textContent = "退出码: " + partData.exit_code;
-          shellDiv.appendChild(exitDiv);
-        }
-        container.appendChild(shellDiv);
-        break;
-
       case "image_url":
-        var img = document.createElement("img");
-        img.src = partData.url || "";
-        img.style.cssText = "max-width:300px;border-radius:8px;margin-top:4px;";
-        container.appendChild(img);
+        if (pe.getAttribute("src") !== (d.url || "")) pe.setAttribute("src", d.url || "");
         break;
-
       case "binary":
-        var binDiv = document.createElement("div");
-        binDiv.style.cssText = "font-size:12px;color:#8b949e;padding:4px 0;";
-        binDiv.textContent = "📎 附件: " + (partData.path || "file") + " (" + (partData.mime_type || "unknown") + ")";
-        container.appendChild(binDiv);
+        pe.textContent = "📎 附件: " + (d.path || "file") + " (" + (d.mime_type || "unknown") + ")";
         break;
-
       default:
-        // 未知类型，显示原始 JSON
-        var unknownDiv = document.createElement("div");
-        unknownDiv.style.cssText = "font-size:11px;color:#6e7681;";
-        unknownDiv.textContent = JSON.stringify(part);
-        container.appendChild(unknownDiv);
+        // shell_command / 未知类型：内部结构随数据变化，仅重建该 part 元素（无 details，不影响点击）
+        var np = buildPartElement(part, i, role, el.getAttribute("data-msgid"));
+        if (!np) return false;
+        np.setAttribute("data-pk", String(i));
+        np.setAttribute("data-ptype", part.type);
+        pe.replaceWith(np);
     }
+  }
+  return true;
+}
+
+// 渲染 ContentPart 数组（msgKey 用于给折叠块生成稳定 data-key，重渲染时恢复展开状态）
+function renderMessageParts(container, parts, role, msgKey) {
+  parts.forEach(function(part, partIdx) {
+    if (!isPartRenderable(part, role)) return;
+    var el = buildPartElement(part, partIdx, role, msgKey);
+    if (!el) return;
+    el.setAttribute("data-pk", String(partIdx));
+    el.setAttribute("data-ptype", part.type);
+    container.appendChild(el);
   });
+}
+
+// 构建单个 part 的根元素（供全量渲染与就地更新时局部重建共用）
+function buildPartElement(part, partIdx, role, msgKey) {
+  var partType = part.type;
+  var partData = part.data || {};
+  var partKey = (msgKey || "") + ":" + partIdx;
+
+  switch (partType) {
+    case "text":
+      var textDiv = document.createElement("div");
+      textDiv.className = "msg-text";
+      // 使用 Markdown 渲染
+      textDiv.innerHTML = renderMarkdown(partData.text || "");
+      return textDiv;
+
+    case "reasoning":
+      var details = document.createElement("details");
+      details.className = "msg-reasoning";
+      details.setAttribute("data-key", partKey);
+      var summary = document.createElement("summary");
+      summary.textContent = "💭 推理过程";
+      summary.style.cssText = "cursor:pointer;font-size:12px;color:#8b949e;";
+      details.appendChild(summary);
+      var reasoningContent = document.createElement("div");
+      reasoningContent.style.cssText = "padding:8px;color:#8b949e;font-style:italic;font-size:12px;white-space:pre-wrap;";
+      reasoningContent.textContent = partData.thinking || "";
+      details.appendChild(reasoningContent);
+      return details;
+
+    case "tool_call":
+      var toolDetails = document.createElement("details");
+      toolDetails.className = "msg-tool-call";
+      toolDetails.setAttribute("data-key", partKey);
+      var toolSummary = document.createElement("summary");
+      var finished = partData.finished !== false;
+      toolSummary.textContent = "🔧 " + (partData.name || "tool") + (finished ? " (已完成)" : " (执行中)");
+      toolSummary.style.cssText = "cursor:pointer;font-size:12px;color:#8b949e;";
+      toolDetails.appendChild(toolSummary);
+      var toolInput = document.createElement("div");
+      toolInput.style.cssText = "padding:8px;font-family:monospace;font-size:11px;color:#b0b8c8;white-space:pre-wrap;background:#0d1117;border-radius:4px;margin-top:4px;";
+      try {
+        toolInput.textContent = "输入: " + JSON.stringify(JSON.parse(partData.input || "{}"), null, 2);
+      } catch (_) {
+        toolInput.textContent = "输入: " + (partData.input || "");
+      }
+      toolDetails.appendChild(toolInput);
+      return toolDetails;
+
+    case "tool_result":
+      var resultDetails = document.createElement("details");
+      resultDetails.className = "msg-tool-result";
+      resultDetails.setAttribute("data-key", partKey);
+      var resultSummary = document.createElement("summary");
+      var isError = partData.is_error;
+      resultSummary.textContent = (isError ? "❌ " : "✅ ") + (partData.name || "tool") + " 结果";
+      resultSummary.style.cssText = "cursor:pointer;font-size:12px;color:" + (isError ? "#ff6b6b" : "#43a047") + ";";
+      resultDetails.appendChild(resultSummary);
+      var resultContent = document.createElement("div");
+      resultContent.style.cssText = "padding:8px;font-family:monospace;font-size:11px;color:#b0b8c8;white-space:pre-wrap;background:#0d1117;border-radius:4px;margin-top:4px;max-height:300px;overflow-y:auto;";
+      resultContent.textContent = partData.content || partData.data || "";
+      resultDetails.appendChild(resultContent);
+      return resultDetails;
+
+    case "finish":
+      // 用户消息的 finish 已在 isPartRenderable 中过滤
+      var finishDiv = document.createElement("div");
+      finishDiv.className = "msg-finish";
+      finishDiv.style.cssText = "border-top:1px solid #30363d;padding-top:4px;margin-top:4px;font-size:11px;color:#6e7681;";
+      var reason = partData.reason || "完成";
+      finishDiv.textContent = "── " + reason + " ──";
+      return finishDiv;
+
+    case "shell_command":
+      var shellDiv = document.createElement("div");
+      shellDiv.className = "msg-shell-command";
+      shellDiv.style.cssText = "font-family:monospace;font-size:11px;background:#0d1117;border-radius:4px;padding:8px;margin-top:4px;";
+      var cmdDiv = document.createElement("div");
+      cmdDiv.style.cssText = "color:#6c63ff;";
+      cmdDiv.textContent = "$ " + (partData.command || "");
+      shellDiv.appendChild(cmdDiv);
+      if (partData.output) {
+        var outDiv = document.createElement("div");
+        outDiv.style.cssText = "color:#b0b8c8;white-space:pre-wrap;margin-top:4px;";
+        outDiv.textContent = partData.output;
+        shellDiv.appendChild(outDiv);
+      }
+      if (partData.exit_code !== undefined) {
+        var exitDiv = document.createElement("div");
+        exitDiv.style.cssText = "color:#6e7681;margin-top:4px;";
+        exitDiv.textContent = "退出码: " + partData.exit_code;
+        shellDiv.appendChild(exitDiv);
+      }
+      return shellDiv;
+
+    case "image_url":
+      var img = document.createElement("img");
+      img.src = partData.url || "";
+      img.style.cssText = "max-width:300px;border-radius:8px;margin-top:4px;";
+      return img;
+
+    case "binary":
+      var binDiv = document.createElement("div");
+      binDiv.style.cssText = "font-size:12px;color:#8b949e;padding:4px 0;";
+      binDiv.textContent = "📎 附件: " + (partData.path || "file") + " (" + (partData.mime_type || "unknown") + ")";
+      return binDiv;
+
+    default:
+      // 未知类型，显示原始 JSON
+      var unknownDiv = document.createElement("div");
+      unknownDiv.style.cssText = "font-size:11px;color:#6e7681;";
+      unknownDiv.textContent = JSON.stringify(part);
+      return unknownDiv;
+  }
 }
 
 // ===== 附件处理 =====
@@ -2195,6 +2366,17 @@ async function sendMessage() {
     return;
   }
 
+  // 若此前切换模型时 /agent/update 未生效（会话繁忙），发送前补一次重载，确保本轮用新模型
+  if (pendingModelReload && serverInfo && serverInfo.workspace_id) {
+    try {
+      await api("POST", "/v1/workspaces/" + serverInfo.workspace_id + "/agent/update");
+      pendingModelReload = false;
+      refreshAgentInfo();
+    } catch (e) {
+      console.warn("[agent] 发送前重载 Agent 配置失败:", e);
+    }
+  }
+
   isSending = true;
   updateSendButton();
 
@@ -2272,7 +2454,9 @@ async function setupSSEListener() {
   }
 
   try {
-    sseListener = listen("agent-sse-event", function(event) {
+    // 必须 await：listen() 返回 Promise，不 await 会导致 sseListener 存的是 Promise，
+    // 下次注销时调用失败被吞掉，旧监听器永远无法移除 → 事件重复处理
+    sseListener = await listen("agent-sse-event", function(event) {
       handleSSEEvent(event.payload);
     });
 
@@ -2338,15 +2522,16 @@ function handleSSEEvent(payload) {
       updateSendButton();
       clearSendSafetyTimer();
       updateStatusBar("ready", null, contextUsage.used);
-      // 运行完成后刷新 Agent 信息（模型可能已变更）并更新模型按钮显示
-      api("GET", "/v1/workspaces/" + serverInfo.workspace_id + "/agent").then(function(info) {
-        agentInfo = info;
-        if (info && info.model && info.model.context_window) {
-          contextUsage.max = info.model.context_window;
-          updateContextUsage();
-        }
-        updateModelBtn();
-      }).catch(function() {});
+      // 若切换模型时会话繁忙导致 /agent/update 未生效，本轮结束后立即重试重载
+      if (pendingModelReload) {
+        pendingModelReload = false;
+        api("POST", "/v1/workspaces/" + serverInfo.workspace_id + "/agent/update")
+          .then(function() { refreshAgentInfo(); })
+          .catch(function() { pendingModelReload = true; });
+      } else {
+        // 运行完成后刷新 Agent 信息（模型可能已变更）并更新模型按钮显示（带序号防旧响应覆盖）
+        refreshAgentInfo();
+      }
       // 运行完成后刷新会话列表和消息
       loadConversations();
       if (currentConvId) {
@@ -2455,6 +2640,7 @@ function handleSessionSSEEvent(action, sessData) {
     conversations = conversations.filter(function(c) { return c.id !== sessData.id; });
     renderConversationList();
     if (currentConvId === sessData.id) {
+      resetPermissionState();
       currentConvId = null;
       currentConv = null;
       messages = [];
@@ -2476,7 +2662,75 @@ async function refreshMessages() {
 }
 
 // ===== 权限确认弹窗 =====
+// 同类操作识别 key：工具名 + 操作类型（不含路径/参数，保证"记住"对同工具不同文件也生效）
+function permissionKey(data) {
+  return (data.tool_name || data.tool || "unknown") + "|" + (data.action || data.operation || "");
+}
+
+// 切换/新建会话时重置权限记忆与队列（"允许本次会话"仅对当前会话生效）
+function resetPermissionState() {
+  permissionAutoAllow = {};
+  pendingPermissions = [];
+  currentPermission = null;
+  var overlay = document.getElementById("agent-permission-overlay");
+  if (overlay) overlay.classList.remove("show");
+}
+
+// 自动放行（已记住的同类操作，不弹窗）
+function autoGrantPermission(data) {
+  api("POST", "/v1/workspaces/" + serverInfo.workspace_id + "/permissions/grant", {
+    permission: data, action: "allow"
+  }).catch(function(e) { showError("权限自动放行失败: " + e); });
+}
+
+// 将 YOLO 状态实时同步到 admAgent 服务端（POST /permissions/skip），中途切换立即生效。
+// 服务端的 yolo 只在创建工作区时传入一次，之后必须靠此接口更新，否则只改本地 config.json 不生效
+async function syncYoloToServer() {
+  if (!serverInfo || !serverInfo.workspace_id) return;
+  try {
+    await api("POST", "/v1/workspaces/" + serverInfo.workspace_id + "/permissions/skip", {
+      skip: !!settings.agent_yolo
+    });
+  } catch (e) {
+    console.warn("[agent] 同步 YOLO 状态到服务端失败:", e);
+  }
+  // 开启 YOLO 时，把已在等待的权限请求（当前弹窗 + 队列）全部放行并关闭弹窗，
+  // 避免切换前已发出的请求继续卡住本轮对话
+  if (settings.agent_yolo) {
+    var waiting = [];
+    if (currentPermission) { waiting.push(currentPermission); currentPermission = null; }
+    waiting = waiting.concat(pendingPermissions);
+    pendingPermissions = [];
+    var overlay = document.getElementById("agent-permission-overlay");
+    if (overlay) overlay.classList.remove("show");
+    waiting.forEach(autoGrantPermission);
+  }
+}
+
 function showPermissionDialog(data) {
+  // YOLO 模式下直接放行（兼容切换瞬间服务端 skip 尚未生效、仍发来请求的竞态）
+  if (settings && settings.agent_yolo) { autoGrantPermission(data); return; }
+  // 客户端已记住该类操作 → 直接放行，不再弹窗
+  if (permissionAutoAllow[permissionKey(data)]) { autoGrantPermission(data); return; }
+  // 去重：同一请求的重复事件忽略（SSE 重连/重复监听器可能送达多次）
+  if (currentPermission && currentPermission.id && currentPermission.id === data.id) return;
+  if (pendingPermissions.some(function(p) { return p.id && p.id === data.id; })) return;
+  // 弹窗已打开 → 排队，避免覆盖当前请求导致前一个请求永远得不到应答
+  if (currentPermission) { pendingPermissions.push(data); return; }
+  renderPermissionDialog(data);
+}
+
+// 处理队列中的下一个权限请求（命中记忆的自动放行，否则弹窗）
+function processNextPermission() {
+  while (pendingPermissions.length > 0) {
+    var next = pendingPermissions.shift();
+    if (permissionAutoAllow[permissionKey(next)]) { autoGrantPermission(next); continue; }
+    renderPermissionDialog(next);
+    return;
+  }
+}
+
+function renderPermissionDialog(data) {
   var overlay = document.getElementById("agent-permission-overlay");
   var body = document.getElementById("agent-permission-body");
   if (!overlay || !body) return;
@@ -2497,19 +2751,28 @@ function showPermissionDialog(data) {
     (description ? '<div style="margin-bottom:8px;"><strong>描述:</strong> ' + escapeHtml(description) + '</div>' : '') +
     (detail ? '<div><strong>详情:</strong><div class="permission-detail-box">' + escapeHtml(detail) + '</div></div>' : '');
 
+  currentPermission = data;
+  var skipEl = document.getElementById("agent-permission-skip");
+  if (skipEl) skipEl.checked = false; // 勾选状态不跨弹窗残留
   overlay.classList.add("show");
 
   // 绑定按钮
   var grantPermission = async function(action) {
+    var skip = skipEl ? skipEl.checked : false;
+    // "允许本次会话" 或勾选"不再询问" → 客户端记住，同类请求后续自动放行
+    if (action !== "deny" && (action === "allow_session" || skip)) {
+      permissionAutoAllow[permissionKey(data)] = true;
+    }
     overlay.classList.remove("show");
-    var skip = document.getElementById("agent-permission-skip").checked;
+    currentPermission = null;
     try {
       await api("POST", "/v1/workspaces/" + serverInfo.workspace_id + "/permissions/grant", {
-        permission: data, action: action, skip_session: skip
+        permission: data, action: action
       });
     } catch (e) {
       showError("权限处理失败: " + e);
     }
+    processNextPermission();
   };
 
   document.getElementById("agent-permission-allow").onclick = function() { grantPermission("allow"); };
@@ -2667,23 +2930,39 @@ async function switchModel(providerKey, displayName, ctxLen) {
         scope: 0,
         model: modelCfg
       });
-      await api("POST", "/v1/workspaces/" + serverInfo.workspace_id + "/agent/update");
-      // 刷新 agentInfo 以获取服务端确认后的实际模型
       try {
-        agentInfo = await api("GET", "/v1/workspaces/" + serverInfo.workspace_id + "/agent");
-        if (agentInfo && agentInfo.model && agentInfo.model.context_window) {
-          contextUsage.max = agentInfo.model.context_window;
-          updateContextUsage();
-        }
-        // 用服务端返回的实际模型名覆盖显示（可能与选择名略有差异）
-        if (nameEl && agentInfo && agentInfo.model && agentInfo.model.id) {
-          nameEl.textContent = agentInfo.model.id;
-        }
-      } catch (_) { /* agentInfo 刷新失败不影响切换 */ }
+        await api("POST", "/v1/workspaces/" + serverInfo.workspace_id + "/agent/update");
+        pendingModelReload = false;
+        // 刷新 agentInfo 以获取服务端确认后的实际模型（updateModelBtn 优先显示 agentInfo.model.id）
+        await refreshAgentInfo();
+      } catch (updErr) {
+        // 会话繁忙等原因 reload 失败：config/model 已写入，挂起到 run_complete / 下次发消息前重试，
+        // 否则服务端会继续用旧模型（表现为对话中途切换模型不生效）
+        pendingModelReload = true;
+        console.warn("[agent] /agent/update 失败，挂起待重试:", updErr);
+      }
     } catch (e) {
       showError("通知 Agent 切换模型失败: " + e);
     }
   }
+}
+
+// 刷新 agentInfo（带序号竞态保护：并发请求只应用最后一次发起的结果，
+// 避免 run_complete 的旧响应把切换模型后的 agentInfo 覆盖回旧模型）
+async function refreshAgentInfo() {
+  if (!serverInfo || !serverInfo.workspace_id) return null;
+  var seq = ++agentInfoSeq;
+  try {
+    var info = await api("GET", "/v1/workspaces/" + serverInfo.workspace_id + "/agent");
+    if (seq !== agentInfoSeq) return null; // 已有更新的请求，丢弃旧响应
+    agentInfo = info;
+    if (info && info.model && info.model.context_window) {
+      contextUsage.max = info.model.context_window;
+      updateContextUsage();
+    }
+    updateModelBtn();
+    return info;
+  } catch (_) { return null; }
 }
 
 // 从 admAgent 服务端拉取完整 provider 列表（含编译内置的 provider，
@@ -2948,6 +3227,8 @@ async function switchToWorkspace(wsId, wsPath) {
 
   // 重新初始化 Agent
   try { await api("POST", "/v1/workspaces/" + wsId + "/agent/init"); } catch (_) {}
+  // 同步 YOLO 状态到新工作区（各工作区的 skip 状态独立，保留的可能是旧值）
+  await syncYoloToServer();
   // 刷新 agentInfo
   try {
     agentInfo = await api("GET", "/v1/workspaces/" + wsId + "/agent");
@@ -2958,6 +3239,8 @@ async function switchToWorkspace(wsId, wsPath) {
   // 重新订阅 SSE 事件到新工作区
   await setupSSEListener();
   // 清理旧 workspace 状态（必须在 loadConversations 之前，避免被覆盖）
+  resetPermissionState();
+  exitManualScrollMode();
   messages = [];
   currentConvId = null;
   currentConv = null;
@@ -3246,7 +3529,7 @@ function showError(msg) {
     div.className = "msg error";
     div.textContent = msg;
     area.appendChild(div);
-    area.scrollTop = area.scrollHeight;
+    if (!manualScrollMode) area.scrollTop = area.scrollHeight;
   }
 }
 
@@ -3331,6 +3614,7 @@ function bindEvents() {
     settings.agent_temperature = tempVal ? parseFloat(tempVal) : null;
     settings.agent_yolo = document.getElementById("settings-yolo").checked;
     await saveSettings();
+    await syncYoloToServer();
     hideSettings();
     updateModeToggle();
     updateModelBtn();
@@ -3350,6 +3634,8 @@ function bindEvents() {
     settings.agent_yolo = !settings.agent_yolo;
     updateModeToggle();
     await saveSettings();
+    // 实时同步到服务端，对话中途切换立即生效
+    await syncYoloToServer();
   });
 
   // 模型下拉
@@ -3455,6 +3741,22 @@ function bindEvents() {
     msgArea.addEventListener("contextmenu", function(e) {
       showCopyPasteMenu(e, null);
     });
+
+    // 手动/自动滚动模式：鼠标进入消息区 → 手动模式（暂停自动滚底，可上滑、可点开/合上推理过程）；
+    // 鼠标离开 3 秒后 → 恢复自动模式并滚到底部
+    msgArea.addEventListener("mouseenter", function() {
+      if (manualModeExitTimer) { clearTimeout(manualModeExitTimer); manualModeExitTimer = null; }
+      manualScrollMode = true;
+    });
+    msgArea.addEventListener("mouseleave", function() {
+      if (manualModeExitTimer) clearTimeout(manualModeExitTimer);
+      manualModeExitTimer = setTimeout(function() {
+        manualModeExitTimer = null;
+        manualScrollMode = false;
+        var a = document.getElementById("agent-msg-area");
+        if (a) a.scrollTop = a.scrollHeight;
+      }, 3000);
+    });
   }
 
   // 右键菜单：输入框 → 复制/粘贴
@@ -3549,6 +3851,11 @@ export default {
   unmount() {
     console.log("[agent] unmount()");
     pendingFiles = [];
+    // 重置权限弹窗状态（避免残留的 currentPermission 导致重新进入后新请求被误判为"弹窗已打开"而永久排队）
+    pendingPermissions = [];
+    currentPermission = null;
+    // 重置手动滚动模式
+    exitManualScrollMode();
     clearSendSafetyTimer();
     // 停止 SSE 监听
     if (sseListener) { try { sseListener(); } catch (_) {} sseListener = null; }
