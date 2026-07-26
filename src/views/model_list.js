@@ -218,6 +218,75 @@ const template = `
     background: #c62828;
   }
 
+  .btn-delete {
+    background: transparent;
+    color: #ef5350;
+    border: 1px solid #ef5350;
+  }
+
+  .btn-delete:hover:not(:disabled) {
+    background: #ef5350;
+    color: #fff;
+  }
+
+  .modal-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+
+  .modal-box {
+    background: #16213e;
+    border-radius: 12px;
+    padding: 24px;
+    min-width: 360px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  }
+
+  .modal-box h3 {
+    color: #fff;
+    font-size: 16px;
+    margin-bottom: 12px;
+  }
+
+  .modal-box p {
+    color: #a0a0c0;
+    font-size: 14px;
+    margin-bottom: 20px;
+  }
+
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .modal-actions .btn {
+    padding: 8px 20px;
+    font-size: 13px;
+  }
+
+  .btn-cancel {
+    background: #2a2a4e;
+    color: #e0e0e0;
+  }
+
+  .btn-cancel:hover {
+    background: #3a3a5e;
+  }
+
+  .btn-confirm-delete {
+    background: #ef5350;
+    color: #fff;
+  }
+
+  .btn-confirm-delete:hover {
+    background: #d32f2f;
+  }
 
   .actions-cell {
     white-space: nowrap;
@@ -364,6 +433,16 @@ const template = `
     </tbody>
   </table></div>
 </main>
+<div id="delete-modal" class="modal-overlay" style="display:none;">
+  <div class="modal-box">
+    <h3>确认删除</h3>
+    <p id="delete-modal-msg">确定要删除此模型吗？删除后无法恢复。</p>
+    <div class="modal-actions">
+      <button class="btn btn-cancel" id="delete-modal-cancel">取消</button>
+      <button class="btn btn-confirm-delete" id="delete-modal-confirm">确认删除</button>
+    </div>
+  </div>
+</div>
 </div>
 `;
 
@@ -537,6 +616,9 @@ actionsHtml = '<button class="btn btn-view" id="view-' + safeModelId + '">查看
     } else {
       actionsHtml = '';
     }
+    if (downloaded && !isRunning) {
+      actionsHtml += '<button class="btn btn-delete" data-delete-btn="' + safeModelId + '">删除</button>';
+    }
 
     const toolsBadge = model.support_tools
       ? '<span class="feature-badge feature-supported">支持</span>'
@@ -593,6 +675,13 @@ function bindRowEvents() {
     btn.addEventListener('click', function() {
       const modelId = btn.id.replace('img-', '');
       openImageGen(modelId);
+    });
+  });
+  const deleteBtns = document.querySelectorAll('#model-tbody .btn-delete[data-delete-btn]');
+  deleteBtns.forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      const modelId = btn.dataset.deleteBtn;
+      showDeleteConfirm(modelId);
     });
   });
 }
@@ -670,6 +759,29 @@ function openImageGen(modelId) {
 function goModel(modelId) {
   const port = S().runningModelPort || 5678;
   location.hash = "#/chat?model_id=" + encodeURIComponent(modelId) + "&port=" + port;
+}
+
+function showDeleteConfirm(modelId) {
+  const modal = document.getElementById("delete-modal");
+  document.getElementById("delete-modal-msg").textContent = '确定要删除模型 "' + modelId + '" 吗？删除后无法恢复。';
+  modal.style.display = "flex";
+  modal.dataset.modelId = modelId;
+}
+
+function hideDeleteConfirm() {
+  document.getElementById("delete-modal").style.display = "none";
+}
+
+async function handleDelete(modelId) {
+  try {
+    await invoke()("delete_local_model", { modelId: modelId });
+    const idx = S().localModels.findIndex(function(m) { return m.model_id === modelId; });
+    if (idx !== -1) S().localModels.splice(idx, 1);
+    delete S().partFiles[modelId];
+    renderModelTable();
+  } catch (e) {
+    showToast("删除失败: " + e);
+  }
 }
 
 function handleTauriEvent(type, payload) {
@@ -882,6 +994,17 @@ S().currentTypeFilter = "all";
 
   setupListeners();
     init();
+
+    document.getElementById("delete-modal-cancel").addEventListener("click", hideDeleteConfirm);
+    document.getElementById("delete-modal-confirm").addEventListener("click", async function() {
+      const modal = document.getElementById("delete-modal");
+      const modelId = modal.dataset.modelId;
+      hideDeleteConfirm();
+      if (modelId) await handleDelete(modelId);
+    });
+    document.getElementById("delete-modal").addEventListener("click", function(e) {
+      if (e.target === this) hideDeleteConfirm();
+    });
   },
   unmount() {
     console.log("[model_list] unmount()");

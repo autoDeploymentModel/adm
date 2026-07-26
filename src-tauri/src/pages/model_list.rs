@@ -822,6 +822,39 @@ pub async fn stop_model(state: tauri::State<'_, AppState>) -> Result<(), AppErro
     Ok(())
 }
 
+#[tauri::command]
+pub async fn delete_local_model(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    model_id: String,
+) -> Result<(), AppError> {
+    {
+        let running_id = state.running_model_id.lock().map_err(|e| e.to_string())?;
+        if let Some(ref rid) = *running_id {
+            if rid == &model_id {
+                bail!("模型正在运行中，请先关闭后再删除");
+            }
+        }
+    }
+
+    let data_dir = config::get_data_dir(Some(&app))?;
+    let models_dir = data_dir.join("models");
+
+    let dir_path = models_dir.join(&model_id);
+    if dir_path.exists() {
+        std::fs::remove_dir_all(&dir_path)
+            .map_err(|e| format!("删除模型目录失败: {}", e))?;
+    }
+
+    let file_path = models_dir.join(format!("{}.gguf", model_id));
+    if file_path.exists() {
+        std::fs::remove_file(&file_path)
+            .map_err(|e| format!("删除模型文件失败: {}", e))?;
+    }
+
+    Ok(())
+}
+
 /// 查询是否有模型已成功启动（全局标识），用于进入 Agent 页前的判断
 #[tauri::command]
 pub async fn is_model_running(state: tauri::State<'_, AppState>) -> Result<bool, AppError> {

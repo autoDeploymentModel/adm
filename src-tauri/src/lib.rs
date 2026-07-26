@@ -211,6 +211,7 @@ pub fn run() {
             model_list::stop_model,
             model_list::get_model_status,
             model_list::is_model_running,
+            model_list::delete_local_model,
             model_list::get_downloading_models,
             model_list::get_downloading_phases,
             // model_image.rs
