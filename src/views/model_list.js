@@ -586,7 +586,7 @@ function renderModelTable() {
     const safeModelId = model.model_id.replace(/"/g, '"');
     let downloadBtnHtml = "";
     if (downloaded) {
-      downloadBtnHtml = '<button class="btn btn-download downloaded" disabled>已下载</button>';
+      downloadBtnHtml = '';
     } else if (isDownloadingMmproj) {
       downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" disabled>下载 mmproj...</button>';
     } else if (isDownloadingDiffusion) {

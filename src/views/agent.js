@@ -2682,33 +2682,16 @@ function updateModelDropdown() {
 
   var currentProvider = settings.agent_default_provider || "local";
 
-  // 本地模型列表 (来自 scan_local_models)
-  localModels.forEach(function(m) {
-    var item = document.createElement("div");
-    var modelId = "local:" + (m.id || m.filename);
-    var isSelected = currentProvider === modelId;
-    item.className = "model-item" + (isSelected ? " selected" : "");
-    var ctxStr = m.context_length ? formatTokens(m.context_length) : "";
-    var dispName = m.name || m.filename || "Local Model";
-    item.innerHTML = '<span class="model-item-name">🏠 ' + escapeHtml(dispName) + '</span>' +
-      (ctxStr ? '<span class="model-item-ctx">' + ctxStr + '</span>' : '');
-    item.addEventListener("click", function() {
-      switchModel(modelId, dispName, m.context_length || 0);
-    });
-    dropdown.appendChild(item);
+  // 本地模型 - 统一显示一条入口
+  var localItem = document.createElement("div");
+  var isLocalSelected = currentProvider === "local" || currentProvider.startsWith("local:");
+  localItem.className = "model-item" + (isLocalSelected ? " selected" : "");
+  var localLabel = localModels.length > 0 ? localModels.length + " Local Models" : "Local Model";
+  localItem.innerHTML = '<span class="model-item-name">🏠 ' + localLabel + '</span><span class="model-item-ctx">本地</span>';
+  localItem.addEventListener("click", function() {
+    switchModel("local", "Local Model", 0);
   });
-
-  // 如果没有本地模型，显示默认本地项
-  if (localModels.length === 0) {
-    var localItem = document.createElement("div");
-    var isLocalSelected = currentProvider === "local";
-    localItem.className = "model-item" + (isLocalSelected ? " selected" : "");
-    localItem.innerHTML = '<span class="model-item-name">🏠 Local Model</span><span class="model-item-ctx">本地</span>';
-    localItem.addEventListener("click", function() {
-      switchModel("local", "Local Model", 0);
-    });
-    dropdown.appendChild(localItem);
-  }
+  dropdown.appendChild(localItem);
 
   // 云端模型
   providers.forEach(function(p) {
@@ -2723,16 +2706,6 @@ function updateModelDropdown() {
     });
     dropdown.appendChild(item);
   });
-
-  // 添加模型按钮
-  var addBtn = document.createElement("div");
-  addBtn.className = "model-item model-add";
-  addBtn.innerHTML = "＋ 添加模型...";
-  addBtn.addEventListener("click", function() {
-    dropdown.classList.remove("show");
-    showAddModelDialog();
-  });
-  dropdown.appendChild(addBtn);
 
   updateModelBtn();
 }
@@ -2751,11 +2724,7 @@ function updateModelBtn() {
   var provider = settings.agent_default_provider || "local";
 
   // 检查是否是本地模型
-  if (provider.startsWith("local:")) {
-    var modelId = provider.substring(6);
-    var m = localModels.find(function(x) { return (x.id || x.filename) === modelId; });
-    nameEl.textContent = m ? (m.name || m.filename) : "Local Model";
-  } else if (provider === "local") {
+  if (provider === "local" || provider.startsWith("local:")) {
     nameEl.textContent = "Local Model";
   } else {
     var p = providers.find(function(x) { return x.key === provider; });
@@ -3243,6 +3212,7 @@ function bindEvents() {
   // 模型下拉
   document.getElementById("agent-model-btn").addEventListener("click", function(e) {
     e.stopPropagation();
+    updateModelDropdown();
     document.getElementById("agent-model-dropdown").classList.toggle("show");
   });
   document.addEventListener("click", function() {
