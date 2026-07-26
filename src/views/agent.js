@@ -1464,6 +1464,9 @@ async function init() {
   // 监听 SSE 事件
   await setupSSEListener();
 
+  // SSE 连接建立后重新加载工具列表，确保 skills_event 等发现事件不遗漏
+  await loadTools();
+
   // 工作区选择器点击
   var wsSelector = document.getElementById("agent-workspace-selector");
   var wsDropdown = document.getElementById("agent-workspace-dropdown");
@@ -2515,7 +2518,28 @@ async function loadTools() {
   // Skills
   if (results[0].status === "fulfilled") {
     var skills = results[0].value;
-    if (!Array.isArray(skills)) skills = skills.skills || [];
+    console.log("[agent] /skills raw response:", JSON.stringify(skills).substring(0, 800));
+    if (Array.isArray(skills)) {
+      // 直接数组格式 [SkillInfo, ...]
+    } else if (skills && typeof skills === "object") {
+      // 尝试多种可能的包装 key
+      if (Array.isArray(skills.skills)) skills = skills.skills;
+      else if (Array.isArray(skills.data)) skills = skills.data;
+      else if (Array.isArray(skills.result)) skills = skills.result;
+      else if (Array.isArray(skills.items)) skills = skills.items;
+      else {
+        // Map 格式 {"name": SkillInfo, ...}
+        var mapValues = Object.values(skills).filter(function(v) { return v && typeof v === "object"; });
+        if (mapValues.length > 0 && mapValues.every(function(v) { return typeof v.name === "string" || typeof v.id === "string"; })) {
+          skills = mapValues;
+        } else {
+          skills = [];
+        }
+      }
+    } else {
+      skills = [];
+    }
+    console.log("[agent] /skills parsed count:", skills.length, skills.map(function(s){return s.name||s.id||'?'}));
     skills.forEach(function(s) {
       allTools.push({
         name: s.name || s.id || "unknown",
