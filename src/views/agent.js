@@ -1703,7 +1703,7 @@ async function selectConversation(convId) {
     renderMessages();
 
     // 更新上下文用量
-    contextUsage.used = currentConv.context_tokens || currentConv.prompt_tokens || 0;
+    contextUsage.used = currentConv.context_tokens ?? currentConv.prompt_tokens ?? 0;
     updateContextUsage();
 
     // 渲染 Todo 列表
@@ -1732,6 +1732,7 @@ async function newConversation() {
     currentConvId = resp.id;
     messages = [];
     currentConv = resp;
+    contextUsage.used = 0;
     await loadConversations();
     renderMessages();
     document.getElementById("agent-conv-title").textContent = resp.title || "新会话";
@@ -2423,7 +2424,7 @@ function handleSessionSSEEvent(action, sessData) {
     // 如果是当前会话，更新标题和上下文
     if (currentConvId === sessData.id) {
       document.getElementById("agent-conv-title").textContent = sessData.title || "会话";
-      contextUsage.used = sessData.context_tokens || sessData.prompt_tokens || 0;
+      contextUsage.used = sessData.context_tokens ?? sessData.prompt_tokens ?? 0;
       updateContextUsage();
     }
   } else if (action === "deleted") {
