@@ -455,7 +455,14 @@ const template = `
   .icon-btn:hover { background: rgba(255,255,255,0.15); color: #fff; }
   .icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-  /* 消息区 */
+  /* 消息区（包裹层承载悬浮「回到底部」按钮的定位） */
+  .msg-area-wrap {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+  }
   .msg-area {
     flex: 1;
     overflow-y: auto;
@@ -468,6 +475,31 @@ const template = `
   .msg-area::-webkit-scrollbar { width: 8px; }
   .msg-area::-webkit-scrollbar-track { background: #0d1117; }
   .msg-area::-webkit-scrollbar-thumb { background: #30363d; border-radius: 4px; }
+
+  /* 回到底部悬浮圆球（未滚到底部时显示） */
+  .scroll-bottom-btn {
+    position: absolute;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: #fff;
+    color: #111;
+    border: none;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    font-weight: 700;
+    cursor: pointer;
+    z-index: 10;
+    transition: background 0.15s;
+  }
+  .scroll-bottom-btn.show { display: flex; }
+  .scroll-bottom-btn:hover { background: #e6e6e6; }
 
   .msg {
     max-width: 80%;
@@ -1198,11 +1230,15 @@ const template = `
       </div>
 
       <!-- 消息列表 (滚动区域) -->
-      <div class="msg-area" id="agent-msg-area">
-        <div class="empty-state">
-          <span class="empty-state-icon">🤖</span>
-          <span class="empty-state-text">开始一个新的对话</span>
+      <div class="msg-area-wrap">
+        <div class="msg-area" id="agent-msg-area">
+          <div class="empty-state">
+            <span class="empty-state-icon">🤖</span>
+            <span class="empty-state-text">开始一个新的对话</span>
+          </div>
         </div>
+        <!-- 回到底部悬浮圆球 -->
+        <button class="scroll-bottom-btn" id="agent-scroll-bottom-btn" title="滚动到底部">↓</button>
       </div>
       <!-- 滚动模式提示 -->
       <div class="scroll-mode-tip" id="agent-scroll-tip">鼠标离开聊天区域，进入自动浏览模式</div>
@@ -1864,9 +1900,27 @@ function exitManualScrollMode() {
   hideScrollTip();
 }
 
-// 显示/隐藏滚动模式提示（鼠标在消息区停住后显示，3 秒后自动消失）
+// 消息区是否已滚到底部（4px 容差，避免亚像素/缩放导致判定不中）
+function isMsgAreaAtBottom(area) {
+  return area.scrollHeight - area.scrollTop - area.clientHeight <= 4;
+}
+
+// 更新「回到底部」悬浮圆球的显隐：未滚到底部时显示，到底/无滚动条时隐藏
+function updateScrollBottomBtn() {
+  var btn = document.getElementById("agent-scroll-bottom-btn");
+  var area = document.getElementById("agent-msg-area");
+  if (!btn || !area) return;
+  if (area.scrollHeight <= area.clientHeight || isMsgAreaAtBottom(area)) {
+    btn.classList.remove("show");
+  } else {
+    btn.classList.add("show");
+  }
+}
+
+// 显示/隐藏滚动模式提示（鼠标在消息区停住后显示，3 秒后自动消失；已在自动模式时提示无意义，不显示）
 function showScrollTip() {
   scrollTipIdleTimer = null;
+  if (!manualScrollMode) return;
   var tip = document.getElementById("agent-scroll-tip");
   if (!tip) return;
   tip.classList.add("show");
@@ -1931,6 +1985,7 @@ function renderMessages() {
 
   if (messages.length === 0) {
     area.innerHTML = '<div class="empty-state"><span class="empty-state-icon">🤖</span><span class="empty-state-text">开始一个新的对话</span></div>';
+    updateScrollBottomBtn();
     return;
   }
   if (area.querySelector(".empty-state")) area.innerHTML = "";
@@ -2000,6 +2055,8 @@ function renderMessages() {
   } else {
     area.scrollTop = area.scrollHeight;
   }
+  // 流式输出时内容增长不一定触发 scroll 事件，渲染后主动刷新悬浮圆球显隐
+  updateScrollBottomBtn();
 }
 
 // 构建完整消息节点
@@ -3702,6 +3759,7 @@ function showError(msg) {
     div.textContent = msg;
     area.appendChild(div);
     if (!manualScrollMode) area.scrollTop = area.scrollHeight;
+    updateScrollBottomBtn();
     // 60 秒后自动消失（增量渲染会保留错误节点，需自行清理避免堆积）
     setTimeout(function() { if (div.parentNode) div.remove(); }, 60000);
   }
@@ -3923,11 +3981,11 @@ function bindEvents() {
       showCopyPasteMenu(e, null);
     });
 
-    // 手动/自动滚动模式：鼠标进入消息区 → 手动模式（暂停自动滚底，可上滑、可点开/合上推理过程）；
+    // 手动/自动滚动模式：鼠标进入消息区且不在底部 → 手动模式（暂停自动滚底，可上滑、可点开/合上推理过程）；
     // 鼠标离开 1 秒后 → 恢复自动模式并滚到底部
     msgArea.addEventListener("mouseenter", function() {
       if (manualModeExitTimer) { clearTimeout(manualModeExitTimer); manualModeExitTimer = null; }
-      manualScrollMode = true;
+      manualScrollMode = !isMsgAreaAtBottom(msgArea);
     });
     msgArea.addEventListener("mouseleave", function() {
       if (scrollTipIdleTimer) { clearTimeout(scrollTipIdleTimer); scrollTipIdleTimer = null; }
@@ -3940,6 +3998,30 @@ function bindEvents() {
         if (a) a.scrollTop = a.scrollHeight;
       }, 1000);
     });
+
+    // 滚动到底部 → 立即进入自动浏览模式（即使鼠标还在消息区内）；鼠标在区内向上滚离底部 → 回到手动模式
+    msgArea.addEventListener("scroll", function() {
+      if (isMsgAreaAtBottom(msgArea)) {
+        if (manualModeExitTimer) { clearTimeout(manualModeExitTimer); manualModeExitTimer = null; }
+        manualScrollMode = false;
+      } else if (msgArea.matches(":hover")) {
+        // :hover 判断避免鼠标已离开时手动模式下的程序化滚动（恢复 prevScrollTop）误触发重新进入手动模式
+        manualScrollMode = true;
+      }
+      updateScrollBottomBtn();
+    });
+
+    // 回到底部悬浮圆球：点击滚到底部并进入自动浏览模式，圆球随之隐藏
+    var scrollBottomBtn = document.getElementById("agent-scroll-bottom-btn");
+    if (scrollBottomBtn) {
+      scrollBottomBtn.addEventListener("click", function() {
+        if (manualModeExitTimer) { clearTimeout(manualModeExitTimer); manualModeExitTimer = null; }
+        manualScrollMode = false;
+        hideScrollTip();
+        msgArea.scrollTop = msgArea.scrollHeight;
+        updateScrollBottomBtn();
+      });
+    }
 
     // 悬停提示：鼠标在消息区停住 600ms 后显示「鼠标离开聊天区域，进入自动浏览模式」，移动或离开时隐藏
     msgArea.addEventListener("mousemove", function() {
