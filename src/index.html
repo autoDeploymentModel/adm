@@ -171,6 +171,11 @@
     .llamacpp-progress-fill { height: 100%; background: #6c63ff; border-radius: 3px; transition: width 0.3s ease; }
     .llamacpp-status-text { font-size: 12px; color: #8080a0; margin-top: 6px; text-align: center; }
 
+    /* 视图切换 loading 动画（模块加载超时才显示，避免瞬时切换时 spinner 闪烁） */
+    .view-loading { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 14px; }
+    .view-loading-spinner { width: 36px; height: 36px; border: 3px solid #2a2a4e; border-top-color: #6c63ff; border-radius: 50%; animation: spin 0.8s linear infinite; }
+    .view-loading-text { font-size: 13px; color: #8080a0; }
+
     /* Agent 下载弹窗 */
     #agent-download-overlay {
       display: none;
@@ -775,8 +780,18 @@
     };
 
     let currentView = null;
+    let renderSeq = 0;
+
+    // 卸载旧视图并展示 loading 动画（仅在模块加载超过阈值时调用）
+    function showViewLoading() {
+      if (currentView && currentView.unmount) { try { currentView.unmount(); } catch (_) {} }
+      currentView = null;
+      document.getElementById("view-root").innerHTML =
+        '<div class="view-loading"><div class="view-loading-spinner"></div><div class="view-loading-text">页面加载中...</div></div>';
+    }
 
     async function renderRoute() {
+      const seq = ++renderSeq;
       const hash = location.hash || "#/list";
       console.log("[index] renderRoute() hash:", hash);
       const clean = hash.replace(/^#/, "");
@@ -798,20 +813,38 @@
       const route = routes[path] || routes["/list"];
       setActiveNav(route.nav);
 
+      // 先异步加载模块（已缓存时瞬时完成），旧视图保持显示避免黑屏闪烁；
+      // 超过 120ms 未就绪才切换为 loading 动画
+      const loadingTimer = setTimeout(showViewLoading, 120);
+      let mod = null;
+      let loadErr = null;
+      try {
+        mod = await route.load();
+      } catch (e) {
+        loadErr = e;
+      }
+      clearTimeout(loadingTimer);
+      if (seq !== renderSeq) return; // 加载期间路由已切换，本次渲染作废
+
       const root = document.getElementById("view-root");
       if (currentView && currentView.unmount) currentView.unmount();
       currentView = null;
       root.innerHTML = "";
 
+      if (loadErr) {
+        console.error("[index] 加载视图失败:", loadErr);
+        root.innerHTML = '<div style="padding:40px;color:#ff6b6b;">页面加载失败: ' + loadErr + '</div>';
+        return;
+      }
+
       try {
-        const mod = await route.load();
         const view = mod.default;
         currentView = view;
         console.log("[index] 加载视图模块:", path);
         view.mount(root, params);
         console.log("[index] 视图已挂载:", path);
       } catch (e) {
-        console.error("[index] 加载视图失败:", e);
+        console.error("[index] 挂载视图失败:", e);
         root.innerHTML = '<div style="padding:40px;color:#ff6b6b;">页面加载失败: ' + e + '</div>';
       }
     }
