@@ -1462,6 +1462,9 @@ async function init() {
 
     // 把本地 YOLO 设置同步到服务端（复用已有工作区时服务端保留的是旧状态，可能与本地不一致）
     await syncYoloToServer();
+
+    // 全局默认开启自动压缩（Compact 模式）
+    await enableAutoCompact();
   }
 
   // 加载会话列表
@@ -1705,7 +1708,7 @@ function handleConvAction(action, convId) {
 }
 
 async function selectConversation(convId) {
-  if (convId !== currentConvId) { resetPermissionState(); exitManualScrollMode(); }
+  if (convId !== currentConvId) { resetPermissionState(); exitManualScrollMode(); clearErrorNotices(); }
   currentConvId = convId;
   renderConversationList();
 
@@ -1759,6 +1762,7 @@ async function newConversation() {
     }
     resetPermissionState();
     exitManualScrollMode();
+    clearErrorNotices();
     currentConvId = resp.id;
     messages = [];
     currentConv = resp;
@@ -1843,6 +1847,8 @@ function renderMessages() {
   var existing = {};
   Array.prototype.slice.call(area.children).forEach(function(c) {
     if (c.id === "agent-working-indicator") return;
+    // 错误提示节点保留（否则 run_complete 后的 refreshMessages 会把刚显示的中断原因立即清掉）
+    if (c.classList && c.classList.contains("error")) return;
     var mid = c.getAttribute ? c.getAttribute("data-msgid") : null;
     if (mid && keySet[mid] && !existing[mid]) existing[mid] = c;
     else c.remove();
@@ -2521,7 +2527,20 @@ function handleSSEEvent(payload) {
       isSending = false;
       updateSendButton();
       clearSendSafetyTimer();
-      updateStatusBar("ready", null, contextUsage.used);
+      // 本轮运行出错/被取消时明确提示（error 非空表示运行出错），
+      // 否则服务端中断本轮时 UI 静默停止，表现为"会话突然中断"却无任何说明
+      if (actualData && actualData.error) {
+        console.warn("[agent] run_complete 携带错误:", JSON.stringify(actualData));
+        var ctxHint = (contextUsage.max > 0 && contextUsage.used >= contextUsage.max * 0.9)
+          ? "（上下文已接近上限 " + contextUsage.used + "/" + contextUsage.max + "，建议新建会话继续）" : "";
+        showError("本轮对话中断: " + actualData.error + ctxHint);
+        updateStatusBar("error", null, contextUsage.used);
+      } else {
+        if (actualData && actualData.cancelled) {
+          showError("本轮对话已取消");
+        }
+        updateStatusBar("ready", null, contextUsage.used);
+      }
       // 若切换模型时会话繁忙导致 /agent/update 未生效，本轮结束后立即重试重载
       if (pendingModelReload) {
         pendingModelReload = false;
@@ -2548,9 +2567,11 @@ function handleSSEEvent(payload) {
       // 配置变更，刷新 Agent 信息
       break;
     case "agent_event":
-      // Agent 事件（错误/响应/摘要）
-      if (actualData.error) {
-        showError("Agent 错误: " + actualData.error);
+      // Agent 事件（错误/响应/摘要）：error 可能是字符串或对象，统一展示并留完整日志便于排查
+      if (actualData && actualData.error) {
+        console.warn("[agent] agent_event 错误:", JSON.stringify(actualData).substring(0, 500));
+        var aerr = typeof actualData.error === "string" ? actualData.error : JSON.stringify(actualData.error);
+        showError("Agent 错误: " + aerr);
       }
       break;
     case "file":
@@ -3161,6 +3182,22 @@ function updateContextUsage() {
   }
 }
 
+// ===== 会话上下文压缩 =====
+// 全局默认开启自动压缩（Compact 模式）：上下文接近上限时服务端自动生成摘要压缩，
+// 无需用户手动干预（scope=0 全局配置，幂等，每次初始化确保开启，不提供设置开关）
+async function enableAutoCompact() {
+  if (!serverInfo || !serverInfo.workspace_id) return;
+  try {
+    await api("POST", "/v1/workspaces/" + serverInfo.workspace_id + "/config/compact", {
+      scope: 0,
+      enabled: true
+    });
+    console.log("[agent] 自动压缩（Compact 模式）已开启");
+  } catch (e) {
+    console.warn("[agent] 开启自动压缩失败:", e);
+  }
+}
+
 // 本地估算历史消息占用的上下文 token 数。
 // 服务端的 context_tokens 仅存内存，重启后加载历史会话会返回 0，此时用字符数估算：
 // CJK 字符 ≈ 1 token/字，其他字符 ≈ 4 字符/token，另加每条消息固定开销。
@@ -3229,6 +3266,8 @@ async function switchToWorkspace(wsId, wsPath) {
   try { await api("POST", "/v1/workspaces/" + wsId + "/agent/init"); } catch (_) {}
   // 同步 YOLO 状态到新工作区（各工作区的 skip 状态独立，保留的可能是旧值）
   await syncYoloToServer();
+  // 确保新工作区也开启自动压缩（全局配置，幂等调用仅作兑底）
+  await enableAutoCompact();
   // 刷新 agentInfo
   try {
     agentInfo = await api("GET", "/v1/workspaces/" + wsId + "/agent");
@@ -3241,6 +3280,7 @@ async function switchToWorkspace(wsId, wsPath) {
   // 清理旧 workspace 状态（必须在 loadConversations 之前，避免被覆盖）
   resetPermissionState();
   exitManualScrollMode();
+  clearErrorNotices();
   messages = [];
   currentConvId = null;
   currentConv = null;
@@ -3530,7 +3570,16 @@ function showError(msg) {
     div.textContent = msg;
     area.appendChild(div);
     if (!manualScrollMode) area.scrollTop = area.scrollHeight;
+    // 60 秒后自动消失（增量渲染会保留错误节点，需自行清理避免堆积）
+    setTimeout(function() { if (div.parentNode) div.remove(); }, 60000);
   }
+}
+
+// 清除消息区内的错误提示（切换/新建会话、切换工作区时调用，避免旧会话错误残留）
+function clearErrorNotices() {
+  var area = document.getElementById("agent-msg-area");
+  if (!area) return;
+  area.querySelectorAll(".msg.error").forEach(function(e) { e.remove(); });
 }
 
 // 应用内确认弹窗（Tauri WebView 中原生 confirm() 非阻塞，不可用）

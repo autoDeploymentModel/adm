@@ -1390,6 +1390,10 @@ Agent 页面采用 HTTP API + SSE 架构，不再使用 PTY 终端或 xterm.js�
   - 消息节点带 `data-msgid`，按 `msgSignature()`（内容长度/状态签名）比对，未变化的节点原样保留不动。
   - 结构未变（`msgStructSig()`：part 类型序列+meta）时 `updateMessageNode()` 就地更新文本（reasoning 只改内容 div、tool_call/tool_result 只改 summary 文字与内容），**保住 `<details>` 元素身份**，流式期间随时可点开/收起推理过程；结构变化才重建该消息节点（重建时按 `data-key` 恢复展开状态）。shell_command/未知类型内部结构随数据变化，仅局部重建该 part 元素（`buildPartElement()` 全量/局部共用）。
   - 「正在思考」指示器改为持久节点：仅按需创建/移到末尾/移除，不再每次渲染重建，动画不再闪烁。
+- **运行中断原因提示（`agent.js`）**：`run_complete` 事件携带 `error`（非空表示运行出错，如上下文溢出、上游 API 错误）与 `cancelled` 字段，早先被忽略，服务端中断本轮时 UI 静默停止（表现为"会话突然中断"无任何说明）。现在：
+  - `run_complete.error` 非空 → `showError("本轮对话中断: ...")`，若上下文用量 ≥ 90% 附加"建议新建会话"提示，状态栏置 error；`cancelled` → 提示已取消；`agent_event.error` 兼容字符串/对象，均留 console 完整日志便于排查。
+  - 错误提示节点（`.msg.error`）在增量渲染清理中保留（否则 `run_complete` 后的 `refreshMessages()` 会把刚显示的中断原因立即清掉），60 秒后自动消失；切换/新建会话、切换工作区时 `clearErrorNotices()` 清除，避免旧会话错误残留。
+- **自动压缩全局默认开启（`agent.js`）**：`enableAutoCompact()` 调用服务端 `POST /v1/workspaces/{id}/config/compact`（`scope=0` 全局、`enabled=true`）开启 Compact 模式，上下文接近上限时服务端自动生成摘要压缩（后续轮次从 `summary_message_id` 开始），无需用户干预。**不提供设置开关、无手动压缩按钮、无额外预警 UI**（上下文用量仅保留原有 80%/95% 的 warning/danger 变色），在 Agent 页初始化与切换工作区时幂等调用确保始终开启（失败仅 console 警告不阻塞）。
 - **YOLO 模式实时切换（`agent.js`）**：`agent_yolo` 存在 ADM 的 `config.json`，但服务端的 yolo 只在创建工作区时（`POST /v1/workspaces` 的 `yolo` 字段）传入一次，之后只改本地设置对运行中的 admAgent 不生效。`syncYoloToServer()` 通过 `POST /permissions/skip` 实时同步，调用时机：工具栏模式切换按钮、设置弹窗保存、Agent 页初始化（复用已有工作区时服务端保留旧状态）、切换工作区（各工作区 skip 状态独立）。开启 YOLO 时额外：把正在等待的权限请求（当前弹窗 + `pendingPermissions` 队列）全部自动放行并关闭弹窗，避免切换前已发出的请求卡住本轮对话；`showPermissionDialog` 入口也检查 `agent_yolo`，兼容切换瞬间服务端 skip 尚未生效仍发来请求的竞态。
 
 ---
