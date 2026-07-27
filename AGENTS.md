@@ -5,6 +5,7 @@
 - `pnpm tauri build` — 生产构建
 - `pnpm tauri clean` — 清理构建产物
 - `pnpm tauri:build:windows` / `:macos` / `:linux` — 跨平台构建
+- `pnpm typecheck` — 前端类型检查（tsc --noEmit，只检查不产出，改完前端必跑）
 
 ## 架构
 - **Tauri 2.11.2** + Rust 后端 + **原生 HTML/CSS/JS**（无框架、无打包工具）。
@@ -12,9 +13,11 @@
 - **单窗口 SPA（单页应用）** + hash 路由：
   - `index.html`（外壳）含 `#view-root` 容器、底部硬件栏与导航。
   - 5 个视图（`model_list` / `model_chat` / `model_image` / `settings` / `agent`）各自为独立 **ES 模块**（`src/views/*.js`），默认导出 `{ template, mount(root, params), unmount() }`。
+  - `agent` 视图已拆分：`src/views/agent.js` 为入口（init/bindEvents/生命周期），具体逻辑在 `src/views/agent/` 子模块（state/template/api/utils/ui/render/session/attach/send/sse/permission/tools/model/workspace/settings_dialog）；跨模块共享状态统一挂在 `state.js` 的 `S` 对象上。
   - `index.html` 通过动态 `import()` 异步加载视图模块，把 `template`（含 `<style>` 的 HTML 字符串）注入 `#view-root`，调用 `mount`/`unmount` 管理生命周期。
-- CSS/JS **内联**在每个视图模块的 `template` 字符串或模块函数内，保持零依赖。
-- 未配置 linter、formatter、typechecker 或测试框架。
+- CSS/JS **内联**在每个视图模块的 `template` 字符串或模块函数内，保持零运行时依赖。
+- **样式隔离约定**：全局 reset（`* {}`）与 `body` 样式只由 `index.html` 壳层提供，视图内不得重复定义；视图选择器带视图前缀（`agent-*` / `settings-*` 等）；视图内元素 id 不得与壳层 id（`app` / `view-root` 等）重复。
+- **类型检查**：`jsconfig.json` 开启 `checkJs`，全局类型声明在 `src/types.d.ts`；历史视图暂以 `// @ts-nocheck` 豁免，新代码不得新增此标记（用 JSDoc 注解）。未配置 linter、formatter 或测试框架。
 
 ## IPC 注意事项（重要）
 - SPA 运行在 Tauri 主窗口内，**直接**调用 `window.__TAURI__.core.invoke` / `.event.listen`，无需 `postMessage` 代理。
@@ -51,7 +54,7 @@
 - 图标：`python scripts/generate-icons.py` 从 `src-tauri/icons/source.png` 生成。
 
 ## 注意事项
-- 修改逻辑后记得同步更新 `doc/dev_doc.md`（详细的中文开发文档）。
+- 修改代码后记得同步更新本地改动日志 `doc/dev_log.md`。
 - admAgent api文档在 `doc/server-api.md`
 - llama-server cli 启动参数文档  windows在`doc/llamacpp.txt`，  macos在 `doc/llamacpp-macos.txt`
 - admAgent 源码在 `admAgent` 目录下，有不清楚的地方可以直接搜索源码确定后再决定怎么改，admAgent源码目录只能读，不能有任何修改和写入动作

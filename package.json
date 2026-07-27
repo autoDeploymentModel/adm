@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "tauri": "tauri",
+    "typecheck": "tsc -p jsconfig.json",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "tauri:build:windows": "tauri build --target x86_64-pc-windows-msvc",
@@ -17,7 +18,8 @@
     "fix:macos": "bash scripts/fix-macos-damaged.sh"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2"
+    "@tauri-apps/cli": "^2",
+    "typescript": "^7.0.2"
   },
   "dependencies": {
     "tauri-plugin-hwinfo": "^0.2.3"

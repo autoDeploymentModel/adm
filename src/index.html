@@ -700,8 +700,6 @@
       } catch (_) {}
     }
 
-    // goAgent 保留供底部栏调用
-
     // 暴露给视图模块（如 settings 调用）
     window.ADM = {
       showUpdateDialog,
@@ -769,13 +767,8 @@
         });
       }
 
-      // Agent 路由：加载 agent.js 视图模块
-      if (path === "/agent") {
-        // 确保不隐藏 view-root
-      }
-
-      // 非 agent 路由：确保 view-root 可见
-
+      // Agent 页面需提前检查依赖（模型运行/admAgent 存在），入口统一走 goAgent()，
+      // 直接输入 #/agent 的路由也照常加载，由 agent 视图自身做失败处理
       const route = routes[path] || routes["/list"];
       setActiveNav(route.nav);
 
@@ -799,15 +792,6 @@
 
     window.addEventListener("hashchange", renderRoute);
 
-    // 接收 Agent 视图模块的导航请求
-    window.addEventListener("message", function (event) {
-      const data = event.data;
-      if (!data || !data.type) return;
-      if (data.type === "navigate") {
-        location.hash = "#/list";
-      }
-    });
-
     // ===== 初始化 =====
     async function init() {
       console.log("[index] init() 开始初始化");
@@ -815,7 +799,7 @@
         setupLlamacppProgressListener();
         setupAdmAgentUpdateProgressListener();
         setupAgentDownloadListener();
-systemInfo = await invoke("get_system_info");
+        systemInfo = await invoke("get_system_info");
         window.__adm_state.systemInfo = systemInfo;
 
         try {

@@ -1,19 +1,10 @@
+// @ts-nocheck -- 历史视图暂未类型化（jsconfig checkJs 全局开启，新代码请勿加此标记）
 const template = `
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
+  /* 样式隔离约定：选择器限定在本视图容器内（id/class 带 settings- 前缀），
+     全局 reset（*）与 body 样式由 index.html 壳层统一提供，视图内不得重复定义 */
 
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    background: #1a1a2e;
-    color: #e0e0e0;
-    height: 100vh;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    user-select: none;
-  }
-
-  #app { display: flex; flex-direction: column; height: 100%; }
+  #settings-app { display: flex; flex-direction: column; height: 100%; }
 
   #settings-header {
     display: flex;
@@ -226,7 +217,7 @@ const template = `
   .confirm-dialog .btn-cancel { background: rgba(255, 255, 255, 0.1); color: #e0e0e0; border: none; padding: 8px 28px; border-radius: 8px; font-size: 14px; cursor: pointer; transition: background 0.2s; }
   .confirm-dialog .btn-cancel:hover { background: rgba(255, 255, 255, 0.2); }
 </style>
-<div id="app">
+<div id="settings-app">
   <div id="settings-header">
     <button class="back-btn" id="back-btn">&#8592; 返回</button>
     <span class="title">设置</span>

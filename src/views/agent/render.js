@@ -1,0 +1,360 @@
+// 消息渲染（增量 DOM 对齐）与 Todo 列表
+import { S } from "./state.js";
+import { renderMarkdown, formatTime } from "./utils.js";
+import { updateScrollBottomBtn } from "./ui.js";
+
+// ===== 消息渲染 =====
+// Message 结构: { id, role, session_id, parts: ContentPart[], model, provider, created_at, updated_at }
+// ContentPart 联合类型通过 type 字段区分:
+//   text / reasoning / image_url / binary / tool_call / tool_result / finish / shell_command
+//
+// 增量渲染：流式输出时 SSE 每秒触发多次渲染，若整体重建 DOM，
+// 「正在思考」指示器会不断重建导致动画闪烁，且推理过程 <summary> 在 mousedown 与
+// mouseup 之间被销毁，点击永远无法命中（表现为无法展开思考过程）。
+// 因此按 data-msgid 逐条对齐：内容未变的消息节点原样保留；结构未变的就地更新文本
+// （保住 <details> 元素身份，流式期间可点开/收起）；结构变化才重建该消息节点。
+
+// 该 part 是否需要渲染（用户消息不显示 finish 标记）
+function isPartRenderable(part, role) {
+  if (!part || !part.type) return false;
+  if (part.type === "finish" && role === "user") return false;
+  return true;
+}
+
+// 单个 part 的内容签名（长度/状态足以覆盖流式追加场景）
+function partSig(part) {
+  var d = (part && part.data) || {};
+  return (part.type || "?") + ":" +
+    ((d.text || "").length + (d.thinking || "").length + (d.input || "").length +
+     String(d.content || d.data || "").length + (d.output || "").length + (d.url || "").length) +
+    ":" + (d.finished === false ? "r" : "f") + (d.is_error ? "e" : "") +
+    ":" + (d.name || "") + (d.reason || "") + (d.exit_code !== undefined ? d.exit_code : "") + (d.path || "");
+}
+
+// 消息内容签名：变化才触发该消息节点的更新
+function msgSignature(msg) {
+  if (msg._streaming || !msg.parts || !Array.isArray(msg.parts) || msg.parts.length === 0) {
+    return "c:" + (msg.content || "").length + ":" + (msg.model || "") + (msg.provider || "");
+  }
+  return "p:" + msg.parts.map(partSig).join(";") + "|" + (msg.model || "") + (msg.provider || "") + (msg.created_at || "");
+}
+
+// 消息结构签名：part 类型序列 + 是否有元信息，结构一致才允许就地更新
+function msgStructSig(msg, role) {
+  if (msg._streaming || !msg.parts || !Array.isArray(msg.parts) || msg.parts.length === 0) return "plain";
+  var types = [];
+  msg.parts.forEach(function(p) { if (isPartRenderable(p, role)) types.push(p.type); });
+  return types.join(",") + ((msg.model || msg.provider) ? "|meta" : "");
+}
+
+export function renderMessages() {
+  const area = document.getElementById("agent-msg-area");
+  if (!area) return;
+  var prevScrollTop = area.scrollTop;
+
+  if (S.messages.length === 0) {
+    area.innerHTML = '<div class="empty-state"><span class="empty-state-icon">🤖</span><span class="empty-state-text">开始一个新的对话</span></div>';
+    updateScrollBottomBtn();
+    return;
+  }
+  if (area.querySelector(".empty-state")) area.innerHTML = "";
+
+  // 移除已不在消息列表中的节点（错误提示、被正式消息替换的临时消息等）
+  var keySet = {};
+  S.messages.forEach(function(m, i) { keySet[String(m.id || ("idx" + i))] = true; });
+  var existing = {};
+  Array.prototype.slice.call(area.children).forEach(function(c) {
+    if (c.id === "agent-working-indicator") return;
+    // 错误提示节点保留（否则 run_complete 后的 refreshMessages 会把刚显示的中断原因立即清掉）
+    if (c.classList && c.classList.contains("error")) return;
+    var mid = c.getAttribute ? c.getAttribute("data-msgid") : null;
+    if (mid && keySet[mid] && !existing[mid]) existing[mid] = c;
+    else c.remove();
+  });
+
+  var pos = 0; // 期望位置游标（顺序未变时节点不移动）
+  S.messages.forEach(function(msg, msgIdx) {
+    var key = String(msg.id || ("idx" + msgIdx));
+    var el = existing[key];
+    if (el) delete existing[key]; // 防重复 id 时同一节点被两条消息复用
+    var sig = msgSignature(msg);
+    if (el && el._admSig === sig) {
+      // 内容未变化，原样保留
+    } else if (el && updateMessageNode(el, msg)) {
+      el._admSig = sig; // 结构未变：已就地更新文本
+    } else {
+      var fresh = buildMessageNode(msg, key);
+      if (!fresh) { if (el) el.remove(); return; } // 无内容消息跳过
+      /** @type {any} */ (fresh)._admSig = sig;
+      if (el) {
+        // 重建时恢复旧节点中已展开的折叠块
+        var openKeys = {};
+        el.querySelectorAll("details[data-key][open]").forEach(function(d) { openKeys[d.getAttribute("data-key")] = true; });
+        fresh.querySelectorAll("details[data-key]").forEach(function(d) { if (openKeys[d.getAttribute("data-key")]) /** @type {HTMLDetailsElement} */ (d).open = true; });
+        el.replaceWith(fresh);
+      }
+      el = fresh;
+    }
+    var expected = area.children[pos];
+    if (expected !== el) area.insertBefore(el, expected || null);
+    pos++;
+  });
+
+  // 「正在思考」指示器：持久节点，仅按需创建/移动/移除，避免每次重建导致动画闪烁
+  var indicator = document.getElementById("agent-working-indicator");
+  if (S.isSending) {
+    if (!indicator) {
+      indicator = document.createElement("div");
+      indicator.className = "msg assistant working-indicator";
+      indicator.id = "agent-working-indicator";
+      indicator.innerHTML =
+        '<span class="working-indicator-dot"></span>' +
+        '<span class="working-indicator-text">正在思考' +
+          '<span class="working-indicator-dots"><span></span><span></span><span></span>' +
+        '</span></span>';
+    }
+    if (area.lastElementChild !== indicator) area.appendChild(indicator);
+  } else if (indicator) {
+    indicator.remove();
+  }
+
+  // 手动模式：保留用户当前滚动位置；自动模式：滚到底部
+  if (S.manualScrollMode) {
+    area.scrollTop = prevScrollTop;
+  } else {
+    area.scrollTop = area.scrollHeight;
+  }
+  // 流式输出时内容增长不一定触发 scroll 事件，渲染后主动刷新悬浮圆球显隐
+  updateScrollBottomBtn();
+}
+
+// 构建完整消息节点
+function buildMessageNode(msg, key) {
+  var role = msg.role || "assistant";
+  var div = document.createElement("div");
+  div.className = "msg " + role;
+  div.setAttribute("data-msgid", key);
+
+  if (msg._streaming && msg.content) {
+    // 流式消息（SSE 临时构建的），直接渲染 content
+    div.textContent = msg.content;
+  } else if (msg.parts && Array.isArray(msg.parts) && msg.parts.length > 0) {
+    renderMessageParts(div, msg.parts, role, key);
+  } else if (msg.content) {
+    // 兼容旧格式
+    div.textContent = msg.content;
+  } else {
+    return null; // 无内容则跳过
+  }
+
+  // 消息元信息
+  if (msg.model || msg.provider) {
+    var meta = document.createElement("div");
+    meta.className = "msg-meta";
+    var metaParts = [];
+    if (msg.model) metaParts.push(msg.model);
+    if (msg.provider) metaParts.push(msg.provider);
+    if (msg.created_at) metaParts.push(formatTime(msg.created_at));
+    meta.textContent = metaParts.join(" · ");
+    div.appendChild(meta);
+  }
+
+  /** @type {any} */ (div)._admStruct = msgStructSig(msg, role);
+  return div;
+}
+
+// 就地更新消息节点（结构未变时只更新文本，保住 <details> 身份使流式期间可点开/收起）
+function updateMessageNode(el, msg) {
+  var role = msg.role || "assistant";
+  var struct = msgStructSig(msg, role);
+  if (struct === "plain" || el._admStruct !== struct) return false;
+  var partEls = el.querySelectorAll(":scope > [data-pk]");
+  var pi = 0;
+  for (var i = 0; i < msg.parts.length; i++) {
+    var part = msg.parts[i];
+    if (!isPartRenderable(part, role)) continue;
+    var pe = partEls[pi++];
+    if (!pe || pe.getAttribute("data-ptype") !== part.type) return false;
+    var d = part.data || {};
+    switch (part.type) {
+      case "text":
+        pe.innerHTML = renderMarkdown(d.text || "");
+        break;
+      case "reasoning":
+        if (pe.lastElementChild && pe.lastElementChild.tagName !== "SUMMARY") {
+          pe.lastElementChild.textContent = d.thinking || "";
+        }
+        break;
+      case "tool_call":
+        var ts = pe.firstElementChild; // summary
+        if (ts) ts.textContent = "🔧 " + (d.name || "tool") + (d.finished !== false ? " (已完成)" : " (执行中)");
+        var ti = pe.lastElementChild;
+        if (ti && ti.tagName !== "SUMMARY") {
+          try { ti.textContent = "输入: " + JSON.stringify(JSON.parse(d.input || "{}"), null, 2); }
+          catch (_) { ti.textContent = "输入: " + (d.input || ""); }
+        }
+        break;
+      case "tool_result":
+        var rs = pe.firstElementChild; // summary
+        if (rs) {
+          rs.textContent = (d.is_error ? "❌ " : "✅ ") + (d.name || "tool") + " 结果";
+          rs.style.color = d.is_error ? "#ff6b6b" : "#43a047";
+        }
+        var rc = pe.lastElementChild;
+        if (rc && rc.tagName !== "SUMMARY") rc.textContent = d.content || d.data || "";
+        break;
+      case "finish":
+        pe.textContent = "── " + (d.reason || "完成") + " ──";
+        break;
+      case "image_url":
+        if (pe.getAttribute("src") !== (d.url || "")) pe.setAttribute("src", d.url || "");
+        break;
+      case "binary":
+        pe.textContent = "📎 附件: " + (d.path || "file") + " (" + (d.mime_type || "unknown") + ")";
+        break;
+      default:
+        // shell_command / 未知类型：内部结构随数据变化，仅重建该 part 元素（无 details，不影响点击）
+        var np = buildPartElement(part, i, role, el.getAttribute("data-msgid"));
+        if (!np) return false;
+        np.setAttribute("data-pk", String(i));
+        np.setAttribute("data-ptype", part.type);
+        pe.replaceWith(np);
+    }
+  }
+  return true;
+}
+
+// 渲染 ContentPart 数组（msgKey 用于给折叠块生成稳定 data-key，重渲染时恢复展开状态）
+function renderMessageParts(container, parts, role, msgKey) {
+  parts.forEach(function(part, partIdx) {
+    if (!isPartRenderable(part, role)) return;
+    var el = buildPartElement(part, partIdx, role, msgKey);
+    if (!el) return;
+    el.setAttribute("data-pk", String(partIdx));
+    el.setAttribute("data-ptype", part.type);
+    container.appendChild(el);
+  });
+}
+
+// 构建单个 part 的根元素（供全量渲染与就地更新时局部重建共用）
+function buildPartElement(part, partIdx, role, msgKey) {
+  var partType = part.type;
+  var partData = part.data || {};
+  var partKey = (msgKey || "") + ":" + partIdx;
+
+  switch (partType) {
+    case "text":
+      var textDiv = document.createElement("div");
+      textDiv.className = "msg-text";
+      // 使用 Markdown 渲染
+      textDiv.innerHTML = renderMarkdown(partData.text || "");
+      return textDiv;
+
+    case "reasoning":
+      var details = document.createElement("details");
+      details.className = "msg-reasoning";
+      details.setAttribute("data-key", partKey);
+      var summary = document.createElement("summary");
+      summary.textContent = "💭 推理过程";
+      summary.style.cssText = "cursor:pointer;font-size:12px;color:#8b949e;";
+      details.appendChild(summary);
+      var reasoningContent = document.createElement("div");
+      reasoningContent.style.cssText = "padding:8px;color:#8b949e;font-style:italic;font-size:12px;white-space:pre-wrap;";
+      reasoningContent.textContent = partData.thinking || "";
+      details.appendChild(reasoningContent);
+      return details;
+
+    case "tool_call":
+      var toolDetails = document.createElement("details");
+      toolDetails.className = "msg-tool-call";
+      toolDetails.setAttribute("data-key", partKey);
+      var toolSummary = document.createElement("summary");
+      var finished = partData.finished !== false;
+      toolSummary.textContent = "🔧 " + (partData.name || "tool") + (finished ? " (已完成)" : " (执行中)");
+      toolSummary.style.cssText = "cursor:pointer;font-size:12px;color:#8b949e;";
+      toolDetails.appendChild(toolSummary);
+      var toolInput = document.createElement("div");
+      toolInput.style.cssText = "padding:8px;font-family:monospace;font-size:11px;color:#b0b8c8;white-space:pre-wrap;background:#0d1117;border-radius:4px;margin-top:4px;";
+      try {
+        toolInput.textContent = "输入: " + JSON.stringify(JSON.parse(partData.input || "{}"), null, 2);
+      } catch (_) {
+        toolInput.textContent = "输入: " + (partData.input || "");
+      }
+      toolDetails.appendChild(toolInput);
+      return toolDetails;
+
+    case "tool_result":
+      var resultDetails = document.createElement("details");
+      resultDetails.className = "msg-tool-result";
+      resultDetails.setAttribute("data-key", partKey);
+      var resultSummary = document.createElement("summary");
+      var isError = partData.is_error;
+      resultSummary.textContent = (isError ? "❌ " : "✅ ") + (partData.name || "tool") + " 结果";
+      resultSummary.style.cssText = "cursor:pointer;font-size:12px;color:" + (isError ? "#ff6b6b" : "#43a047") + ";";
+      resultDetails.appendChild(resultSummary);
+      var resultContent = document.createElement("div");
+      resultContent.style.cssText = "padding:8px;font-family:monospace;font-size:11px;color:#b0b8c8;white-space:pre-wrap;background:#0d1117;border-radius:4px;margin-top:4px;max-height:300px;overflow-y:auto;";
+      resultContent.textContent = partData.content || partData.data || "";
+      resultDetails.appendChild(resultContent);
+      return resultDetails;
+
+    case "finish":
+      // 用户消息的 finish 已在 isPartRenderable 中过滤
+      var finishDiv = document.createElement("div");
+      finishDiv.className = "msg-finish";
+      finishDiv.style.cssText = "border-top:1px solid #30363d;padding-top:4px;margin-top:4px;font-size:11px;color:#6e7681;";
+      var reason = partData.reason || "完成";
+      finishDiv.textContent = "── " + reason + " ──";
+      return finishDiv;
+
+    case "shell_command":
+      var shellDiv = document.createElement("div");
+      shellDiv.className = "msg-shell-command";
+      shellDiv.style.cssText = "font-family:monospace;font-size:11px;background:#0d1117;border-radius:4px;padding:8px;margin-top:4px;";
+      var cmdDiv = document.createElement("div");
+      cmdDiv.style.cssText = "color:#6c63ff;";
+      cmdDiv.textContent = "$ " + (partData.command || "");
+      shellDiv.appendChild(cmdDiv);
+      if (partData.output) {
+        var outDiv = document.createElement("div");
+        outDiv.style.cssText = "color:#b0b8c8;white-space:pre-wrap;margin-top:4px;";
+        outDiv.textContent = partData.output;
+        shellDiv.appendChild(outDiv);
+      }
+      if (partData.exit_code !== undefined) {
+        var exitDiv = document.createElement("div");
+        exitDiv.style.cssText = "color:#6e7681;margin-top:4px;";
+        exitDiv.textContent = "退出码: " + partData.exit_code;
+        shellDiv.appendChild(exitDiv);
+      }
+      return shellDiv;
+
+    case "image_url":
+      var img = document.createElement("img");
+      img.src = partData.url || "";
+      img.style.cssText = "max-width:300px;border-radius:8px;margin-top:4px;";
+      return img;
+
+    case "binary":
+      var binDiv = document.createElement("div");
+      binDiv.style.cssText = "font-size:12px;color:#8b949e;padding:4px 0;";
+      binDiv.textContent = "📎 附件: " + (partData.path || "file") + " (" + (partData.mime_type || "unknown") + ")";
+      return binDiv;
+
+    default:
+      // 未知类型，显示原始 JSON
+      var unknownDiv = document.createElement("div");
+      unknownDiv.style.cssText = "font-size:11px;color:#6e7681;";
+      unknownDiv.textContent = JSON.stringify(part);
+      return unknownDiv;
+  }
+}
+
+// ===== Todo 列表渲染 =====
+export function renderTodos(todos) {
+  // TODO: 在右侧消息区域上方或侧边显示 Todo 列表
+  // 当前先存储到 currentConv，后续可扩展 UI
+  if (S.currentConv && todos) {
+    S.currentConv.todos = todos;
+  }
+}
