@@ -33,6 +33,7 @@ let pendingModelReload = false; // 切换模型时 /agent/update 失败（如会
 let agentInfoSeq = 0;           // agentInfo 刷新序号：只应用最新一次请求的结果，防止旧响应把切换后的模型覆盖回旧值
 let toolsTab = "skill";         // 工具面板当前 tab: "skill" | "lsp" | "mcp"
 let toolsData = { skill: [], lsp: [], mcp: [] }; // 各 tab 工具缓存 [{name, status, statusColor, title}]
+let initSeq = 0;                // init() 版本号：unmount/重新 mount 时递增，旧的在途 init 检测到过期后立即终止，防止并发 init 互相踩踏
 
 // ===== 模板 =====
 const template = `
@@ -1395,12 +1396,19 @@ const template = `
 // ===== API 客户端 =====
 async function api(method, path, body) {
   console.log("[agent] API:", method, path, body ? JSON.stringify(body).substring(0, 100) : "");
-  return invoke("agent_http_request", { method, path, body: body || null });
+  try {
+    return await invoke("agent_http_request", { method, path, body: body || null });
+  } catch (e) {
+    // 统一记录失败的请求（含后端返回的 HTTP 状态与响应体片段），避免被调用方 catch 后静默吞掉无法定位
+    console.error("[agent] API 失败:", method, path, "→", e);
+    throw e;
+  }
 }
 
 // ===== 初始化 =====
 async function init() {
-  console.log("[agent] init() 开始");
+  var seq = ++initSeq;
+  console.log("[agent] init() 开始, seq:", seq);
   // 生成 clientId (UUID)
   clientId = crypto.randomUUID ? crypto.randomUUID() : generateUUID();
 
@@ -1416,8 +1424,8 @@ async function init() {
 
   // 检查 admAgent 是否已下载
   try {
-    var agentInfo = await invoke("check_adm_agent");
-    if (!agentInfo || !agentInfo.exists) {
+    var agentCheck = await invoke("check_adm_agent");
+    if (!agentCheck || !agentCheck.exists) {
       showError("未找到 admAgent 工具，请先下载");
       updateStatusBar("error", null, 0);
       // 显示下载引导
@@ -1452,6 +1460,7 @@ async function init() {
     updateStatusBar("error", null, 0);
     return;
   }
+  if (seq !== initSeq) return; // 页面已切走/重新挂载，终止过期 init
 
   // 加载工作区信息 (获取或创建工作区)
   try {
@@ -1491,6 +1500,7 @@ async function init() {
   } catch (_) {
     workspaceInfo = { path: "默认", name: "默认工作区" };
   }
+  if (seq !== initSeq) return;
 
   // 加载 provider 列表
   try {
@@ -1536,9 +1546,10 @@ async function init() {
     // 全局默认开启自动压缩（Compact 模式）
     await enableAutoCompact();
   }
+  if (seq !== initSeq) return;
 
-  // 加载会话列表
-  await loadConversations();
+  // 加载会话列表（restoreCurrent=true：重新挂载时 DOM 已重置，即使 currentConvId 仍有值也必须重新 selectConversation 渲染聊天区）
+  await loadConversations(true);
 
   // 加载工具列表（重新挂载时模板默认 Skill tab 高亮，同步重置状态）
   toolsTab = "skill";
@@ -1568,6 +1579,7 @@ async function init() {
   updateModeToggle();
   updateSettingsUI();
 
+  if (seq !== initSeq) return;
   // 监听 SSE 事件
   await setupSSEListener();
 
@@ -1673,28 +1685,63 @@ function generateUUID() {
 }
 
 // ===== 会话管理 =====
-async function loadConversations() {
-  console.log("[agent] 加载会话列表");
-  if (!serverInfo) return;
-  try {
-    // GET /v1/workspaces/{id}/sessions → 返回 Session[] (直接数组)
-    var resp = await api("GET", "/v1/workspaces/" + serverInfo.workspace_id + "/sessions");
-    conversations = Array.isArray(resp) ? resp : (resp.sessions || resp || []);
-    renderConversationList();
+async function loadConversations(restoreCurrent) {
+  console.log("[agent] 加载会话列表, workspace:", serverInfo ? serverInfo.workspace_id : "无");
+  if (!serverInfo || !serverInfo.workspace_id) {
+    console.error("[agent] 加载会话列表中止: serverInfo/workspace_id 缺失");
+    return;
+  }
 
-    // 自动选中或创建会话：确保 currentConvId 始终有效，否则发送按钮无反应
-    if (!currentConvId) {
-      if (conversations.length > 0) {
-        // 选中第一个会话
-        await selectConversation(conversations[0].id);
-      } else {
-        // 没有会话则自动创建一个
-        await newConversation();
-      }
+  // GET /v1/workspaces/{id}/sessions → 返回 Session[] (直接数组)
+  // 瞬时失败（如重新挂载时服务端正忙）重试 2 次；失败时保留旧列表不清空，并明确报错
+  var resp = null, lastErr = null;
+  for (var attempt = 1; attempt <= 3; attempt++) {
+    try {
+      resp = await api("GET", "/v1/workspaces/" + serverInfo.workspace_id + "/sessions");
+      lastErr = null;
+      break;
+    } catch (e) {
+      lastErr = e;
+      console.error("[agent] 加载会话列表失败(第" + attempt + "次):", e);
+      if (attempt < 3) await new Promise(function(r) { setTimeout(r, 500); });
     }
-  } catch (e) {
-    conversations = [];
+  }
+  if (lastErr !== null) {
+    showError("加载会话列表失败: " + lastErr);
     renderConversationList();
+    return;
+  }
+
+  var list = Array.isArray(resp) ? resp : (resp && Array.isArray(resp.sessions) ? resp.sessions : null);
+  if (list === null) {
+    console.error("[agent] 会话列表响应格式异常:", JSON.stringify(resp).substring(0, 200));
+    list = [];
+  }
+  conversations = list;
+  renderConversationList();
+  console.log("[agent] 会话列表加载完成，共", conversations.length, "个, currentConvId:", currentConvId, "restore:", !!restoreCurrent);
+
+  // restoreCurrent：重新挂载后 currentConvId 是上次残留的模块级状态，DOM 已被重置，
+  // 必须重新 selectConversation 才能渲染聊天区；若该会话已被删除则清空回退到默认逻辑
+  if (restoreCurrent && currentConvId) {
+    var stillExists = conversations.some(function(c) { return c.id === currentConvId; });
+    if (stillExists) {
+      await selectConversation(currentConvId);
+      return;
+    }
+    console.warn("[agent] 残留的 currentConvId 已不存在，回退默认选择:", currentConvId);
+    currentConvId = null;
+  }
+
+  // 自动选中或创建会话：确保 currentConvId 始终有效，否则发送按钮无反应
+  if (!currentConvId) {
+    if (conversations.length > 0) {
+      // 选中第一个会话
+      await selectConversation(conversations[0].id);
+    } else {
+      // 没有会话则自动创建一个
+      await newConversation();
+    }
   }
 }
 
@@ -1830,6 +1877,7 @@ async function selectConversation(convId) {
     // 启用操作按钮
     document.getElementById("agent-undo-btn").disabled = false;
   } catch (e) {
+    console.error("[agent] 加载会话失败:", convId, e);
     showError("加载会话失败: " + e);
   }
 }
@@ -4064,10 +4112,16 @@ export default {
     console.log("[agent] mount() params:", params);
     root.innerHTML = template;
     bindEvents();
-    init();
+    // init 是 fire-and-forget，必须兜底 catch，否则任何未捕获异常都是静默死亡（表现为页面空白无报错）
+    init().catch(function(e) {
+      console.error("[agent] init() 未捕获异常:", e);
+      showError("Agent 页面初始化失败: " + e);
+    });
   },
   unmount() {
     console.log("[agent] unmount()");
+    // 使在途 init() 失效，防止切走后旧 init 继续执行、或与下次 mount 的新 init 并发互踩
+    initSeq++;
     pendingFiles = [];
     // 重置权限弹窗状态（避免残留的 currentPermission 导致重新进入后新请求被误判为"弹窗已打开"而永久排队）
     pendingPermissions = [];
@@ -4080,8 +4134,10 @@ export default {
     if (sseErrorUnlisten) { try { sseErrorUnlisten(); } catch (_) {} sseErrorUnlisten = null; }
     // 清除重连定时器
     if (sseReconnectTimer) { clearTimeout(sseReconnectTimer); sseReconnectTimer = null; }
-    // 取消订阅
-    try { invoke("agent_unsubscribe_events"); } catch (_) {}
+    // 注意：这里不调 agent_unsubscribe_events。它是异步 fire-and-forget，快速切回时可能在新页面
+    // agent_subscribe_events 之后才在后端执行，把新订阅的 sse_stop 置 true → 新 SSE 静默失效。
+    // setupSSEListener 订阅时后端会自动停止旧转发任务，因此无需在此主动退订；
+    // 前端监听器（sseListener）已在上方解绑，后台事件不会被处理。
     // 清理事件监听
     unlisteners.forEach(function(u) { try { if (typeof u === "function") u(); } catch (_) {} });
     unlisteners = [];

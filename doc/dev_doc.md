@@ -1397,6 +1397,11 @@ Agent 页面采用 HTTP API + SSE 架构，不再使用 PTY 终端或 xterm.js�
   - 错误提示节点（`.msg.error`）在增量渲染清理中保留（否则 `run_complete` 后的 `refreshMessages()` 会把刚显示的中断原因立即清掉），60 秒后自动消失；切换/新建会话、切换工作区时 `clearErrorNotices()` 清除，避免旧会话错误残留。
 - **自动压缩全局默认开启（`agent.js`）**：`enableAutoCompact()` 调用服务端 `POST /v1/workspaces/{id}/config/compact`（`scope=0` 全局、`enabled=true`）开启 Compact 模式，上下文接近上限时服务端自动生成摘要压缩（后续轮次从 `summary_message_id` 开始），无需用户干预。**不提供设置开关、无手动压缩按钮、无额外预警 UI**（上下文用量仅保留原有 80%/95% 的 warning/danger 变色），在 Agent 页初始化与切换工作区时幂等调用确保始终开启（失败仅 console 警告不阻塞）。
 - **YOLO 模式实时切换（`agent.js`）**：`agent_yolo` 存在 ADM 的 `config.json`，但服务端的 yolo 只在创建工作区时（`POST /v1/workspaces` 的 `yolo` 字段）传入一次，之后只改本地设置对运行中的 admAgent 不生效。`syncYoloToServer()` 通过 `POST /permissions/skip` 实时同步，调用时机：工具栏模式切换按钮、设置弹窗保存、Agent 页初始化（复用已有工作区时服务端保留旧状态）、切换工作区（各工作区 skip 状态独立）。开启 YOLO 时额外：把正在等待的权限请求（当前弹窗 + `pendingPermissions` 队列）全部自动放行并关闭弹窗，避免切换前已发出的请求卡住本轮对话；`showPermissionDialog` 入口也检查 `agent_yolo`，兼容切换瞬间服务端 skip 尚未生效仍发来请求的竞态。
+- **重新挂载恢复当前会话（`agent.js`）**：`currentConvId` 等是模块级状态，切走再切回 Agent 页时不会清空，但 `mount()` 已把 DOM 重置为空模板。早先 `loadConversations()` 里 `if (!currentConvId)` 判断为假直接跳过 `selectConversation`，导致会话列表加载了但聊天区永远不渲染。现在 `init()` 调用 `loadConversations(true)`（restoreCurrent）：若残留的 `currentConvId` 仍在会话列表中则重新 `selectConversation` 渲染聊天区，已被删除则清空回退到选第一个/新建会话。
+- **init() 并发保护（`agent.js`）**：`mount()` 里 `init()` 是 fire-and-forget 异步调用（已兜底 `.catch` 避免静默死亡），快速切走再切回时旧的在途 init 会与新 init 并发（重复请求、`setupSSEListener` 互踩、旧 init 覆盖新状态 → 表现为大概率无法加载历史会话）。现用模块级 `initSeq` 版本号：`init()` 开头 `seq = ++initSeq`，`unmount()` 也递增 `initSeq`，在途 init 在关键 await 后检查 `seq !== initSeq` 即终止。
+- **HTTP 代理错误透传（`agent.rs` `agent_http_request`）**：非 2xx 响应（4xx/5xx）作为错误抛出（含状态码 + 响应体前 300 字符）。此前会把错误 JSON 当成功结果返回，前端 `Array.isArray` 判定失败后静默降级为空列表/空聊天，控制台无任何报错无法定位。前端 `api()` 统一 `console.error` 记录失败请求后重新抛出。
+- **会话列表加载容错（`agent.js` `loadConversations`）**：瞬时失败重试 2 次（间隔 500ms）；最终失败时保留旧列表不清空并 `showError` 明确报错；响应非数组时记录原始响应片段便于排查。
+- **unmount 不调 `agent_unsubscribe_events`**：它是异步 fire-and-forget，快速切回时可能在新页面 `agent_subscribe_events` 之后才在后端执行，把新订阅的 `sse_stop` 置 true → 新 SSE 静默失效。订阅时后端会自动停止旧转发任务，前端监听器已在 unmount 解绑，后台事件不会被处理。
 
 ---
 

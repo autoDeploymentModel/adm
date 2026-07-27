@@ -1481,9 +1481,12 @@ pub async fn agent_http_request(
         }
     }
 
-    let result: serde_json::Value = resp.json().await
-        .map_err(|e| format!("解析响应失败: {} (HTTP {})", e, status))?;
-    Ok(result)
+    // 其它状态码（4xx/5xx）：读取响应体作为错误抛出。
+    // 此前会把错误 JSON 当成功结果返回，前端 Array.isArray 判定失败后静默降级为
+    // 空列表/空聊天（表现为“列表加载不出来”且控制台无任何报错）
+    let text = resp.text().await.unwrap_or_default();
+    let snippet: String = text.chars().take(300).collect();
+    bail!("HTTP {} {} {}: {}", status.as_u16(), method.to_uppercase(), path, snippet);
 }
 
 #[tauri::command]
