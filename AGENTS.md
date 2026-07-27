@@ -54,3 +54,4 @@
 - 修改逻辑后记得同步更新 `doc/dev_doc.md`（详细的中文开发文档）。
 - admAgent api文档在 `doc/server-api.md`
 - llama-server cli 启动参数文档  windows在`doc/llamacpp.txt`，  macos在 `doc/llamacpp-macos.txt`
+- admAgent 源码在 `admAgent` 目录下，有不清楚的地方可以直接搜索源码确定后再决定怎么改，admAgent源码目录只能读，不能有任何修改和写入动作
