@@ -631,7 +631,10 @@
         }
         try { await invoke("prepare_adm_agent_config"); } catch (_) {}
         const running = await invoke("is_model_running");
-        if (!running) { showComingSoon("请先启动模型"); return; }
+        if (!running) {
+          const ok = await showShellConfirm("当前未启动本地模型，进入 Agent 后可能无法使用本地模型对话。\n是否继续进入？");
+          if (!ok) return;
+        }
         const info = await invoke("check_adm_agent");
         if (!info.exists) {
           showAgentDownloadDialog();
@@ -649,6 +652,29 @@
         hideAgentDownloadDialog();
         showComingSoon("操作失败: " + e);
       }
+    }
+
+    // 应用内确认弹窗（Tauri WebView 中原生 confirm() 非阻塞，不可用）
+    function showShellConfirm(message) {
+      return new Promise(function (resolve) {
+        const overlay = document.createElement("div");
+        overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;display:flex;justify-content:center;align-items:center;";
+        overlay.innerHTML =
+          '<div style="background:#16213e;border:1px solid #2a2a4e;border-radius:12px;padding:28px 32px;max-width:420px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.5);text-align:center;">' +
+            '<div style="font-size:36px;margin-bottom:12px;">⚠️</div>' +
+            '<div class="sc-msg" style="font-size:14px;color:#e0e0e0;line-height:1.7;margin-bottom:20px;white-space:pre-line;"></div>' +
+            '<div style="display:flex;gap:12px;justify-content:center;">' +
+              '<button data-act="cancel" style="background:rgba(255,255,255,0.1);color:#e0e0e0;border:none;padding:10px 28px;border-radius:8px;font-size:14px;cursor:pointer;">取消</button>' +
+              '<button data-act="ok" style="background:#6c63ff;color:#fff;border:none;padding:10px 28px;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer;">确定</button>' +
+            '</div>' +
+          '</div>';
+        overlay.querySelector(".sc-msg").textContent = message;
+        function close(result) { overlay.remove(); resolve(result); }
+        overlay.querySelector('[data-act="cancel"]').addEventListener("click", function () { close(false); });
+        overlay.querySelector('[data-act="ok"]').addEventListener("click", function () { close(true); });
+        overlay.addEventListener("click", function (e) { if (e.target === overlay) close(false); });
+        document.body.appendChild(overlay);
+      });
     }
 
     function showComingSoon(msg) {
