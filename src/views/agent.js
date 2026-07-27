@@ -29,8 +29,6 @@ let pendingPermissions = [];  // 弹窗打开期间到达的后续权限请求�
 let currentPermission = null; // 当前弹窗正在处理的权限请求
 let manualScrollMode = false;   // 手动模式：鼠标在消息区内，暂停自动滚底，保留滚动位置与折叠块展开状态
 let manualModeExitTimer = null; // 鼠标离开消息区 1 秒后恢复自动模式的定时器
-let scrollTipIdleTimer = null;  // 鼠标在消息区停住后显示滚动模式提示的定时器
-let scrollTipHideTimer = null;  // 滚动模式提示自动隐藏的定时器
 let pendingModelReload = false; // 切换模型时 /agent/update 失败（如会话繁忙）→ 挂起，run_complete/下次发送前重试
 let agentInfoSeq = 0;           // agentInfo 刷新序号：只应用最新一次请求的结果，防止旧响应把切换后的模型覆盖回旧值
 let toolsTab = "skill";         // 工具面板当前 tab: "skill" | "lsp" | "mcp"
@@ -379,28 +377,7 @@ const template = `
     flex-direction: column;
     min-width: 0;
     overflow: hidden;
-    position: relative;
   }
-
-  /* 滚动模式提示（鼠标在消息区停住时显示） */
-  .scroll-mode-tip {
-    position: absolute;
-    top: 48px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: rgba(22, 27, 34, 0.92);
-    border: 1px solid #30363d;
-    color: #b0b8c8;
-    font-size: 12px;
-    padding: 4px 12px;
-    border-radius: 12px;
-    white-space: nowrap;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.25s;
-    z-index: 10;
-  }
-  .scroll-mode-tip.show { opacity: 1; }
 
   .chat-header {
     padding: 8px 16px;
@@ -1240,8 +1217,6 @@ const template = `
         <!-- 回到底部悬浮圆球 -->
         <button class="scroll-bottom-btn" id="agent-scroll-bottom-btn" title="滚动到底部">↓</button>
       </div>
-      <!-- 滚动模式提示 -->
-      <div class="scroll-mode-tip" id="agent-scroll-tip">鼠标离开聊天区域，进入自动浏览模式</div>
 
       <!-- 输入框区域: textarea 在上, 工具栏在下 -->
       <div class="input-area">
@@ -1896,8 +1871,6 @@ async function newConversation() {
 function exitManualScrollMode() {
   if (manualModeExitTimer) { clearTimeout(manualModeExitTimer); manualModeExitTimer = null; }
   manualScrollMode = false;
-  if (scrollTipIdleTimer) { clearTimeout(scrollTipIdleTimer); scrollTipIdleTimer = null; }
-  hideScrollTip();
 }
 
 // 消息区是否已滚到底部（4px 容差，避免亚像素/缩放导致判定不中）
@@ -1915,23 +1888,6 @@ function updateScrollBottomBtn() {
   } else {
     btn.classList.add("show");
   }
-}
-
-// 显示/隐藏滚动模式提示（鼠标在消息区停住后显示，3 秒后自动消失；已在自动模式时提示无意义，不显示）
-function showScrollTip() {
-  scrollTipIdleTimer = null;
-  if (!manualScrollMode) return;
-  var tip = document.getElementById("agent-scroll-tip");
-  if (!tip) return;
-  tip.classList.add("show");
-  if (scrollTipHideTimer) clearTimeout(scrollTipHideTimer);
-  scrollTipHideTimer = setTimeout(hideScrollTip, 3000);
-}
-
-function hideScrollTip() {
-  if (scrollTipHideTimer) { clearTimeout(scrollTipHideTimer); scrollTipHideTimer = null; }
-  var tip = document.getElementById("agent-scroll-tip");
-  if (tip) tip.classList.remove("show");
 }
 
 // ===== 消息渲染 =====
@@ -3988,8 +3944,6 @@ function bindEvents() {
       manualScrollMode = !isMsgAreaAtBottom(msgArea);
     });
     msgArea.addEventListener("mouseleave", function() {
-      if (scrollTipIdleTimer) { clearTimeout(scrollTipIdleTimer); scrollTipIdleTimer = null; }
-      hideScrollTip();
       if (manualModeExitTimer) clearTimeout(manualModeExitTimer);
       manualModeExitTimer = setTimeout(function() {
         manualModeExitTimer = null;
@@ -4017,18 +3971,10 @@ function bindEvents() {
       scrollBottomBtn.addEventListener("click", function() {
         if (manualModeExitTimer) { clearTimeout(manualModeExitTimer); manualModeExitTimer = null; }
         manualScrollMode = false;
-        hideScrollTip();
         msgArea.scrollTop = msgArea.scrollHeight;
         updateScrollBottomBtn();
       });
     }
-
-    // 悬停提示：鼠标在消息区停住 600ms 后显示「鼠标离开聊天区域，进入自动浏览模式」，移动或离开时隐藏
-    msgArea.addEventListener("mousemove", function() {
-      hideScrollTip();
-      if (scrollTipIdleTimer) clearTimeout(scrollTipIdleTimer);
-      scrollTipIdleTimer = setTimeout(showScrollTip, 600);
-    });
   }
 
   // 右键菜单：输入框 → 复制/粘贴

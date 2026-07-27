@@ -1386,7 +1386,6 @@ Agent 页面采用 HTTP API + SSE 架构，不再使用 PTY 终端或 xterm.js�
   - **手动模式**：鼠标进入 `#agent-msg-area`（`mouseenter`）且不在底部时进入，重渲染时保留滚动位置（可上滑）；鼠标离开 1 秒后（`mouseleave` + 定时器）恢复自动模式并滚到底部。
   - **滚到底部即自动模式**：`scroll` 监听中用 `isMsgAreaAtBottom()`（4px 容差）判定，滚动条到底 → 立即进入自动浏览模式（即使鼠标还在消息区内）；鼠标在区内（`:hover`）向上滚离底部 → 回到手动模式。`:hover` 判断避免鼠标已离开时手动模式下的程序化滚动误触发。
   - **回到底部悬浮圆球**：未滚到底部时，消息区底部居中显示白色圆球按钮 `#agent-scroll-bottom-btn`（↓ 图标，由 `.msg-area-wrap` 包裹层定位），点击后滚到底部并进入自动浏览模式，圆球随之隐藏。显隐由 `updateScrollBottomBtn()` 统一控制，在 `scroll` 事件、`renderMessages()` 渲染后（流式输出内容增长不触发 scroll）、`showError()` 追加后刷新；无滚动条时不显示。
-  - **悬停提示**：鼠标在消息区停住 600ms（`mousemove` 防抖）后，消息区顶部居中淡入显示提示条「鼠标离开聊天区域，进入自动浏览模式」（`#agent-scroll-tip`，`pointer-events: none`），3 秒后自动消失，鼠标移动或离开时立即隐藏；已处于自动模式时不显示。
   - **折叠块状态保留**：每个可折叠 part 带稳定 `data-key`（`消息id:part序号`），重建消息节点时记录已展开的 key 并恢复，推理过程可点开/合上不被刷新重置（手动/自动模式均生效）。
   - **状态重置**：切换/新建会话、切换工作区、页面卸载时 `exitManualScrollMode()`，避免把旧会话的滚动位置带到新会话。
 - **消息列表增量渲染（`agent.js`）**：早先 `renderMessages()` 每次 `innerHTML=""` 全量重建，流式输出时每秒触发多次 → 「正在思考」指示器不断重建导致动画闪烁；推理过程的 `<summary>` 在 mousedown/mouseup 之间被销毁，点击永远无法命中（表现为无法展开思考过程）。现改为 keyed 增量渲染：
