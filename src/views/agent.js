@@ -33,6 +33,8 @@ let scrollTipIdleTimer = null;  // 鼠标在消息区停住后显示滚动模式
 let scrollTipHideTimer = null;  // 滚动模式提示自动隐藏的定时器
 let pendingModelReload = false; // 切换模型时 /agent/update 失败（如会话繁忙）→ 挂起，run_complete/下次发送前重试
 let agentInfoSeq = 0;           // agentInfo 刷新序号：只应用最新一次请求的结果，防止旧响应把切换后的模型覆盖回旧值
+let toolsTab = "skill";         // 工具面板当前 tab: "skill" | "lsp" | "mcp"
+let toolsData = { skill: [], lsp: [], mcp: [] }; // 各 tab 工具缓存 [{name, status, statusColor, title}]
 
 // ===== 模板 =====
 const template = `
@@ -201,7 +203,7 @@ const template = `
   .tools-section {
     border-top: 1px solid #30363d;
     flex-shrink: 0;
-    height: 160px;
+    height: 184px;
     display: flex;
     flex-direction: column;
   }
@@ -223,6 +225,28 @@ const template = `
     font-size: 10px;
     color: #6e7681;
     font-weight: 400;
+  }
+
+  /* 工具 tab 切换: Skill / LSP / MCP */
+  .tools-tabs {
+    display: flex;
+    border-bottom: 1px solid #21262d;
+    flex-shrink: 0;
+  }
+  .tools-tab {
+    flex: 1;
+    text-align: center;
+    padding: 5px 0;
+    font-size: 11px;
+    color: #6e7681;
+    cursor: pointer;
+    transition: all 0.15s;
+    border-bottom: 2px solid transparent;
+  }
+  .tools-tab:hover { color: #b0b8c8; }
+  .tools-tab.active {
+    color: #e0e0e0;
+    border-bottom-color: #6c63ff;
   }
 
   .tools-list {
@@ -253,15 +277,20 @@ const template = `
   }
   .tool-dot.green { background: #43a047; }
   .tool-dot.gray { background: #555; }
+  .tool-dot.yellow { background: #d29922; }
+  .tool-dot.red { background: #f85149; }
   .tool-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .tool-type {
+  .tool-status {
     font-size: 10px;
-    color: #6e7681;
     padding: 1px 4px;
     border-radius: 3px;
     background: rgba(255,255,255,0.06);
     flex-shrink: 0;
   }
+  .tool-status.green { color: #43a047; }
+  .tool-status.gray { color: #6e7681; }
+  .tool-status.yellow { color: #d29922; }
+  .tool-status.red { color: #f85149; }
 
   /* ③ 底部: 工作区选择 + 设置 (不滚动) */
   .sidebar-footer {
@@ -1127,11 +1156,16 @@ const template = `
         </div>
       </div>
 
-      <!-- ② tools-block: Skills/MCP/LSP (固定高度160px, 内部滚动) -->
+      <!-- ② tools-block: Skills/MCP/LSP (固定高度, 内部滚动, tab 切换) -->
       <div class="tools-section" id="agent-tools-section">
         <div class="tools-header">
           <span>工具</span>
           <span class="tools-count" id="agent-tools-count">0</span>
+        </div>
+        <div class="tools-tabs" id="agent-tools-tabs">
+          <span class="tools-tab active" data-tab="skill">Skill</span>
+          <span class="tools-tab" data-tab="lsp">LSP</span>
+          <span class="tools-tab" data-tab="mcp">MCP</span>
         </div>
         <div class="tools-list" id="agent-tools-list">
         </div>
@@ -1495,8 +1529,25 @@ async function init() {
   // 加载会话列表
   await loadConversations();
 
-  // 加载工具列表
+  // 加载工具列表（重新挂载时模板默认 Skill tab 高亮，同步重置状态）
+  toolsTab = "skill";
   await loadTools();
+
+  // 工具 tab 切换（Skill / LSP / MCP）
+  var toolsTabs = document.getElementById("agent-tools-tabs");
+  if (toolsTabs) {
+    toolsTabs.addEventListener("click", function(e) {
+      var tab = e.target.closest(".tools-tab");
+      if (!tab) return;
+      var mode = tab.getAttribute("data-tab");
+      if (!mode || mode === toolsTab) return;
+      toolsTab = mode;
+      toolsTabs.querySelectorAll(".tools-tab").forEach(function(t) {
+        t.classList.toggle("active", t === tab);
+      });
+      renderToolsList();
+    });
+  }
 
   // 检查 admAgent 版本
   checkAgentVersion();
@@ -2845,27 +2896,40 @@ function renderPermissionDialog(data) {
 }
 
 // ===== 工具列表 =====
-// 分别调用 /skills、/mcp/states、/lsps 三个端点
+// 分别调用 /skills、/mcp/states、/lsps 三个端点，外加工作区详情获取 skill 状态快照
+// 结果按 tab（skill / lsp / mcp）分类缓存到 toolsData，再渲染当前 tab
 async function loadTools() {
   if (!serverInfo) return;
-  var container = document.getElementById("agent-tools-list");
-  var countEl = document.getElementById("agent-tools-count");
-  if (!container) return;
-
-  var allTools = [];
   var wsId = serverInfo.workspace_id;
 
-  // 并行请求三个端点
+  // MCP/LSP 共用的 state 字符串 → 中文标签 + 颜色
+  var stateMap = {
+    connected: { label: "已连接", color: "green" },
+    starting:  { label: "启动中", color: "yellow" },
+    disabled:  { label: "已禁用", color: "gray" },
+    error:     { label: "错误",   color: "red" },
+  };
+
+  // 并行请求四个端点（工作区详情用于 skill 状态快照）
   var results = await Promise.allSettled([
     api("GET", "/v1/workspaces/" + wsId + "/skills"),
     api("GET", "/v1/workspaces/" + wsId + "/mcp/states"),
     api("GET", "/v1/workspaces/" + wsId + "/lsps"),
+    api("GET", "/v1/workspaces/" + wsId),
   ]);
 
+  // Skill 状态快照 map: name → {state, error}（state: 0=正常 1=错误）
+  var skillStates = {};
+  if (results[3].status === "fulfilled" && results[3].value && Array.isArray(results[3].value.skills)) {
+    results[3].value.skills.forEach(function(s) {
+      if (s && s.name) skillStates[s.name] = s;
+    });
+  }
+
   // Skills
+  var skillTools = [];
   if (results[0].status === "fulfilled") {
     var skills = results[0].value;
-    console.log("[agent] /skills raw response:", JSON.stringify(skills).substring(0, 800));
     if (Array.isArray(skills)) {
       // 直接数组格式 [SkillInfo, ...]
     } else if (skills && typeof skills === "object") {
@@ -2886,69 +2950,92 @@ async function loadTools() {
     } else {
       skills = [];
     }
-    console.log("[agent] /skills parsed count:", skills.length, skills.map(function(s){return s.name||s.id||'?'}));
     skills.forEach(function(s) {
-      allTools.push({
-        name: s.name || s.id || "unknown",
-        type: "Skill",
-        enabled: s.user_invocable !== false,
-        source: s.source || "",
+      var name = s.name || s.id || "unknown";
+      // 快照里 state=1 为发现/解析错误；能出现在 /skills 列表里的默认视为已加载
+      var snap = skillStates[name];
+      var status = { label: "已加载", color: "green", title: "" };
+      if (snap && snap.state === 1) {
+        status = { label: "错误", color: "red", title: snap.error || "" };
+      }
+      skillTools.push({
+        name: name,
+        status: status.label,
+        statusColor: status.color,
+        title: status.title,
       });
     });
   }
 
   // MCP clients
+  var mcpTools = [];
   if (results[1].status === "fulfilled") {
     var mcpStates = results[1].value;
     if (mcpStates && typeof mcpStates === "object" && !Array.isArray(mcpStates)) {
       Object.values(mcpStates).forEach(function(m) {
-        allTools.push({
+        var st = stateMap[m.state] || { label: m.state || "未知", color: "gray" };
+        mcpTools.push({
           name: m.name || "unknown",
-          type: "MCP",
-          enabled: m.state === "connected",
-          source: m.state || "unknown",
+          status: st.label,
+          statusColor: st.color,
+          title: m.error || "",
         });
       });
     }
   }
 
   // LSP clients
+  var lspTools = [];
   if (results[2].status === "fulfilled") {
     var lspStates = results[2].value;
     if (lspStates && typeof lspStates === "object" && !Array.isArray(lspStates)) {
-      Object.values(lspStates).forEach(function(l) {
-        allTools.push({
-          name: l.name || "unknown",
-          type: "LSP",
-          enabled: l.state === "connected",
-          source: l.state || "unknown",
+      Object.keys(lspStates).forEach(function(key) {
+        var l = lspStates[key];
+        var st = stateMap[l.state] || { label: l.state || "未知", color: "gray" };
+        lspTools.push({
+          name: l.name || key,
+          status: st.label,
+          statusColor: st.color,
+          title: l.error || "",
         });
       });
     }
   }
 
-  if (countEl) countEl.textContent = allTools.length;
+  toolsData = { skill: skillTools, lsp: lspTools, mcp: mcpTools };
+  renderToolsList();
+}
+
+// 渲染当前 tab 的工具列表（名称 + 状态），空则显示占位
+function renderToolsList() {
+  var container = document.getElementById("agent-tools-list");
+  var countEl = document.getElementById("agent-tools-count");
+  if (!container) return;
+
+  var tools = toolsData[toolsTab] || [];
+  if (countEl) countEl.textContent = tools.length;
   container.innerHTML = "";
 
-  if (allTools.length === 0) {
+  if (tools.length === 0) {
     container.innerHTML = '<div class="tool-item"><span class="tool-dot gray"></span><span class="tool-name" style="color:#6e7681;">暂无工具</span></div>';
     return;
   }
 
-  allTools.forEach(function(tool) {
+  tools.forEach(function(tool) {
     var item = document.createElement("div");
     item.className = "tool-item";
+    if (tool.title) item.title = tool.title;
     var dot = document.createElement("span");
-    dot.className = "tool-dot " + (tool.enabled ? "green" : "gray");
+    dot.className = "tool-dot " + (tool.statusColor || "gray");
     item.appendChild(dot);
     var name = document.createElement("span");
     name.className = "tool-name";
     name.textContent = tool.name;
     item.appendChild(name);
-    var typeLabel = document.createElement("span");
-    typeLabel.className = "tool-type";
-    typeLabel.textContent = tool.type;
-    item.appendChild(typeLabel);
+    var statusLabel = document.createElement("span");
+    statusLabel.className = "tool-status " + (tool.statusColor || "gray");
+    statusLabel.textContent = tool.status;
+    item.appendChild(statusLabel);
     container.appendChild(item);
   });
 }
@@ -3331,6 +3418,8 @@ async function switchToWorkspace(wsId, wsPath) {
   document.getElementById("agent-conv-title").textContent = "选择或创建一个会话";
   // 刷新对话列表（会自动选中第一个会话或创建新会话）
   await loadConversations();
+  // 刷新工具列表（Skill/LSP/MCP 按工作区隔离）
+  await loadTools();
   updateContextUsage();
   updateWorkspaceSelector();
 }

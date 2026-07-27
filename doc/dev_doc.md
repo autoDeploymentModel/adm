@@ -195,7 +195,7 @@ adm/
 │   │   ├── model_chat.js             # 模型对话交互视图（内嵌 WebUI + 启动遮罩 + 日志面板）
 │   │   ├── model_image.js            # 文生图视图（文本输入/宽高设置/图片生成/日志）
 │   │   └── settings.js               # 设置视图（导航分栏 + 参数表单 + 版本/关于）
-│   │   └── agent.js                  # Agent 视图（会话列表 + 聊天界面 + 设置弹窗，HTTP API + SSE）
+│   │   └── agent.js                  # Agent 视图（会话列表 + 工具面板（Skill/LSP/MCP tab 切换 + 状态显示）+ 聊天界面 + 设置弹窗，HTTP API + SSE）
 │   └── model_types.json              # 模型类型筛选数据（fetch 读取）
 ├── src-tauri/                        # Tauri 后端 (Rust)
 │   ├── Cargo.toml                    # Rust 依赖配置
