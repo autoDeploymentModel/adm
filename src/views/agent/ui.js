@@ -1,5 +1,6 @@
 // 通用 UI：状态栏 / 上下文用量 / 错误与确认弹窗 / 滚动模式 / 安全超时 / 右键菜单
 import { S } from "./state.js";
+import { api } from "./api.js";
 import { formatTokens, isMsgAreaAtBottom } from "./utils.js";
 
 // 退出手动滚动模式（切换会话/工作区时调用，避免把旧会话的滚动位置带到新会话）
@@ -21,16 +22,29 @@ export function updateScrollBottomBtn() {
 }
 
 // ===== isSending 安全超时 =====
+// 计时器仅在收到 message 事件时刷新；本地模型处理大上下文时 prompt 阶段可能
+// 数分钟不产出任何 token（无 message 事件），不能仅凭超时就重置状态，
+// 需先向服务端确认会话是否仍在运行（is_busy），仍忙则续期计时器
 export function startSendSafetyTimer() {
   clearSendSafetyTimer();
-  S.sendSafetyTimer = setTimeout(function() {
-    if (S.isSending) {
-      console.warn("[agent] isSending 安全超时 (3min)，自动重置");
-      S.isSending = false;
-      updateSendButton();
-      updateStatusBar("ready", null, S.contextUsage.used);
-      showError("运行超时，已自动重置状态");
-    }
+  S.sendSafetyTimer = setTimeout(async function() {
+    if (!S.isSending) return;
+    try {
+      if (S.serverInfo && S.currentConvId) {
+        var sess = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions/" + S.currentConvId);
+        if (S.isSending && sess && sess.is_busy) {
+          console.log("[agent] 安全超时检查：会话仍在运行，续期计时器");
+          startSendSafetyTimer();
+          return;
+        }
+      }
+    } catch (_) {}
+    if (!S.isSending) return; // 等待查询期间 run_complete 可能已正常收尾
+    console.warn("[agent] isSending 安全超时 (3min) 且会话已不在运行，自动重置");
+    S.isSending = false;
+    updateSendButton();
+    updateStatusBar("ready", null, S.contextUsage.used);
+    showError("运行超时，已自动重置状态");
   }, 180000);
 }
 
@@ -117,6 +131,11 @@ export function updateSendButton() {
   } else {
     btn.textContent = "📤 发送";
     btn.classList.remove("cancel");
+    // 「正在思考」指示器只在 renderMessages 内按 isSending 创建/移除；
+    // 超时/取消/断线等路径重置 isSending 后不会触发重渲染，需在此同步移除，
+    // 否则出现「指示器还在转但按钮已变回发送」的错位状态
+    var indicator = document.getElementById("agent-working-indicator");
+    if (indicator) indicator.remove();
   }
 }
 
