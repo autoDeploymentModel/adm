@@ -45,7 +45,7 @@ const template = `
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
     gap: 16px;
-    margin: 0 20px 20px;
+    margin: 12px 20px 20px;
   }
 
   .model-card {
