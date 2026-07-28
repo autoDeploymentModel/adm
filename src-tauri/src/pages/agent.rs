@@ -1378,14 +1378,31 @@ async fn forward_sse_events(
         port, workspace_id, client_id
     );
     println!("[agent] forward_sse_events URL: {}", url);
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(3600)).build()
+    // SSE 是无限期长连接：reqwest 的 timeout() 是整个请求（含响应体流）的总时限，
+    // 到期会强制掐断连接。而 admAgent 的 workspace 靠 SSE 流引用计数存活，
+    // 最后一条流断开会立即 teardown workspace 并触发 server 自身退出（"连接一断，服务即死"）。
+    // 因此这里只限制建连耗时，绝不能给流本身设总超时。
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .build()
         .map_err(|e| format!("创建 SSE 客户端失败: {}", e))?;
 
     loop {
         if stop.load(Ordering::Relaxed) { return Ok(()); }
         let resp = match client.get(&url).send().await {
             Ok(r) => r,
-            Err(_) => { tokio::time::sleep(Duration::from_secs(3)).await; continue; }
+            Err(e) => {
+                if stop.load(Ordering::Relaxed) { return Ok(()); }
+                // 连不上时检查 admAgent 进程是否已退出：已退出则通知前端自愈重启，
+                // 避免在死进程上无限空转、前端只能看到 "admAgent server 未运行"
+                if agent_process_exited(app) {
+                    println!("[agent] forward_sse_events: admAgent 进程已退出，通知前端自动重启");
+                    let _ = app.emit("agent-server-died", serde_json::json!({}));
+                    return Ok(());
+                }
+                println!("[agent] forward_sse_events 连接失败: {}", e);
+                tokio::time::sleep(Duration::from_secs(3)).await; continue;
+            }
         };
         if !resp.status().is_success() {
             println!("[agent] forward_sse_events HTTP {}", resp.status());
@@ -1417,7 +1434,22 @@ async fn forward_sse_events(
                 }
             }
         }
-        if !stop.load(Ordering::Relaxed) { tokio::time::sleep(Duration::from_secs(3)).await; }
+        // 流断开后立即重连：admAgent 在最后一条 SSE 流断开的瞬间就会 teardown workspace，
+        // 任何等待都在扩大 server 自杀的竞争窗口
+        if !stop.load(Ordering::Relaxed) {
+            println!("[agent] forward_sse_events 流断开，立即重连");
+        }
+    }
+}
+
+/// 检查 admAgent server 子进程是否已退出（供 SSE 转发循环的自愈判断）。
+/// 会话已被清理（正常 stop 流程）时返回 false，由 sse_stop 标志让循环自行退出。
+fn agent_process_exited(app: &tauri::AppHandle) -> bool {
+    let state = app.state::<AppState>();
+    let mut s = match state.agent_session.lock() { Ok(g) => g, Err(_) => return false };
+    match s.as_mut() {
+        Some(sess) => matches!(sess.child.try_wait(), Ok(Some(_))),
+        None => false,
     }
 }
 

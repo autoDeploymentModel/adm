@@ -2,10 +2,10 @@
 // 模板 / 共享状态 / 各功能逻辑拆分在 ./agent/ 子模块（原生 ESM，无编译步骤）
 
 import { template } from "./agent/template.js";
-import { S, invoke } from "./agent/state.js";
+import { S, invoke, listen } from "./agent/state.js";
 import { api } from "./agent/api.js";
 import { generateUUID, isMsgAreaAtBottom, autoResize, $input } from "./agent/utils.js";
-import { updateStatusBar, updateContextUsage, updateModeToggle, exitManualScrollMode, clearSendSafetyTimer, showError, showConfirm, showCopyPasteMenu, updateScrollBottomBtn } from "./agent/ui.js";
+import { updateStatusBar, updateContextUsage, updateModeToggle, updateSendButton, exitManualScrollMode, clearSendSafetyTimer, showError, showConfirm, showCopyPasteMenu, updateScrollBottomBtn } from "./agent/ui.js";
 import { loadConversations, renderConversationList, selectConversation, newConversation } from "./agent/session.js";
 import { sendMessage } from "./agent/send.js";
 import { setupSSEListener } from "./agent/sse.js";
@@ -259,6 +259,29 @@ function showDownloadGuide() {
         });
       }
     }, 0);
+  }
+}
+
+// ===== admAgent server 意外退出自愈 =====
+// 后端 SSE 转发循环检测到 admAgent 进程消失时 emit "agent-server-died"，
+// 这里防重入地重跑一遍 init（重启 server、恢复工作区与会话）
+var serverRestarting = false;
+async function handleServerDied() {
+  if (serverRestarting) return;
+  serverRestarting = true;
+  console.warn("[agent] admAgent server 意外退出，自动重启中...");
+  showError("admAgent 服务异常退出，正在自动重启...");
+  S.isSending = false;
+  updateSendButton();
+  clearSendSafetyTimer();
+  updateStatusBar("error", null, S.contextUsage.used);
+  try {
+    await init();
+  } catch (e) {
+    console.error("[agent] admAgent 自动重启失败:", e);
+    showError("admAgent 自动重启失败: " + e);
+  } finally {
+    serverRestarting = false;
   }
 }
 
@@ -525,6 +548,12 @@ export default {
     console.log("[agent] mount() params:", params);
     root.innerHTML = template;
     bindEvents();
+    // 监听 admAgent server 意外退出（unmount 时经 S.unlisteners 统一解绑）
+    if (typeof listen === "function") {
+      listen("agent-server-died", handleServerDied)
+        .then(function(u) { S.unlisteners.push(u); })
+        .catch(function() {});
+    }
     // init 是 fire-and-forget，必须兜底 catch，否则任何未捕获异常都是静默死亡（表现为页面空白无报错）
     init().catch(function(e) {
       console.error("[agent] init() 未捕获异常:", e);
