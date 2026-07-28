@@ -442,6 +442,38 @@ export const template = `
   .scroll-bottom-btn.show { display: flex; }
   .scroll-bottom-btn:hover { background: #e6e6e6; }
 
+  /* Todo 固定面板（有 todos 时常驻在消息区与输入区之间，实时反映完成状态） */
+  .todos-panel {
+    flex-shrink: 0;
+    background: #161b22;
+    border-top: 1px solid #30363d;
+    font-size: 12px;
+  }
+  .todos-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 14px;
+    cursor: pointer;
+    user-select: none;
+    color: #b0b8c8;
+  }
+  .todos-panel-header:hover { background: rgba(255,255,255,0.04); }
+  .todos-panel-progress { color: #8b949e; margin-left: 6px; }
+  .todos-panel-toggle { color: #8b949e; font-size: 10px; transition: transform 0.15s; }
+  .todos-panel.collapsed .todos-panel-toggle { transform: rotate(-90deg); }
+  .todos-panel-list { max-height: 150px; overflow-y: auto; padding: 0 14px 8px; }
+  .todos-panel-list::-webkit-scrollbar { width: 6px; }
+  .todos-panel-list::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+  .todos-panel.collapsed .todos-panel-list { display: none; }
+  .todo-item { display: flex; align-items: flex-start; gap: 6px; padding: 2px 0; line-height: 1.5; }
+  .todo-item-icon { flex-shrink: 0; width: 14px; text-align: center; }
+  .todo-item.completed { color: #6e7681; }
+  .todo-item.completed .todo-item-text { text-decoration: line-through; }
+  .todo-item.completed .todo-item-icon { color: #3fb950; }
+  .todo-item.in_progress { color: #e3b341; }
+  .todo-item.pending { color: #b0b8c8; }
+
   .msg {
     max-width: 80%;
     padding: 10px 14px;
@@ -1180,6 +1212,15 @@ export const template = `
         </div>
         <!-- 回到底部悬浮圆球 -->
         <button class="scroll-bottom-btn" id="agent-scroll-bottom-btn" title="滚动到底部">↓</button>
+      </div>
+
+      <!-- Todo 固定面板（有 todos 时显示，实时反映完成状态） -->
+      <div class="todos-panel" id="agent-todos-panel" style="display:none;">
+        <div class="todos-panel-header" id="agent-todos-header">
+          <span>📋 任务清单<span class="todos-panel-progress" id="agent-todos-progress"></span></span>
+          <span class="todos-panel-toggle">▾</span>
+        </div>
+        <div class="todos-panel-list" id="agent-todos-list"></div>
       </div>
 
       <!-- 输入框区域: textarea 在上, 工具栏在下 -->

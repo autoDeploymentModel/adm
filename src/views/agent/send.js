@@ -5,7 +5,7 @@ import { autoResize, generateRunId } from "./utils.js";
 import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, updateContextUsage } from "./ui.js";
 import { renderMessages } from "./render.js";
 import { newConversation } from "./session.js";
-import { refreshAgentInfo } from "./model.js";
+import { refreshAgentInfo, reloadAgentConfig } from "./model.js";
 import { clearPendingFiles } from "./attach.js";
 
 // ===== 发送消息 =====
@@ -53,7 +53,7 @@ export async function sendMessage() {
   // 若此前切换模型时 /agent/update 未生效（会话繁忙），发送前补一次重载，确保本轮用新模型
   if (S.pendingModelReload && S.serverInfo && S.serverInfo.workspace_id) {
     try {
-      await api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent/update");
+      await reloadAgentConfig();
       S.pendingModelReload = false;
       refreshAgentInfo();
     } catch (e) {
@@ -94,7 +94,16 @@ export async function sendMessage() {
         };
       });
     }
-    await api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent", body);
+    try {
+      await api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent", body);
+    } catch (sendErr) {
+      // coordinator 被失败的 init 置空（如曾切到服务端未加载的 provider）：
+      // 重建后重试一次，避免用户卡在永久性的“agent coordinator not initialized”
+      if (String(sendErr).indexOf("agent coordinator not initialized") < 0) throw sendErr;
+      console.warn("[agent] coordinator 未初始化，尝试 /agent/init 后重发");
+      await api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent/init");
+      await api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent", body);
+    }
     console.log("[agent] 消息已发送, runId:", runId);
     startSendSafetyTimer();
     updateContextUsage();

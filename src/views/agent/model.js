@@ -4,6 +4,20 @@ import { api } from "./api.js";
 import { escapeHtml, formatTokens, slugifyModelId } from "./utils.js";
 import { showError, updateContextUsage } from "./ui.js";
 
+// 重载服务端 Agent 配置。/agent/update 报 "agent configuration is missing" 说明 coordinator
+// 已被一次失败的 /agent/init 置空（如曾切到服务端未加载的 provider），此时改调
+// /agent/init 重建 coordinator（重建时会用当前 active model，配置已修复则成功）。
+export async function reloadAgentConfig() {
+  var ws = "/v1/workspaces/" + S.serverInfo.workspace_id;
+  try {
+    await api("POST", ws + "/agent/update");
+  } catch (e) {
+    if (String(e).indexOf("agent configuration is missing") < 0) throw e;
+    console.warn("[agent] coordinator 已失效，改用 /agent/init 重建");
+    await api("POST", ws + "/agent/init");
+  }
+}
+
 // ===== 模型切换 =====
 // 切换模型：保存设置 → 通知服务端重新加载 → 刷新 agentInfo → 更新 UI
 export async function switchModel(providerKey, displayName, ctxLen) {
@@ -46,7 +60,7 @@ export async function switchModel(providerKey, displayName, ctxLen) {
         model: modelCfg
       });
       try {
-        await api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent/update");
+        await reloadAgentConfig();
         S.pendingModelReload = false;
         // 刷新 agentInfo 以获取服务端确认后的实际模型（updateModelBtn 优先显示 agentInfo.model.id）
         await refreshAgentInfo();

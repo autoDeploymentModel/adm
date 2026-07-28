@@ -438,6 +438,12 @@ function bindEvents() {
     });
   });
 
+  // Todo 固定面板：点击头部折叠/展开（状态存 S，重新渲染不丢）
+  document.getElementById("agent-todos-header").addEventListener("click", function() {
+    S.todosCollapsed = !S.todosCollapsed;
+    document.getElementById("agent-todos-panel").classList.toggle("collapsed", S.todosCollapsed);
+  });
+
   // 输入框
   var input = document.getElementById("agent-input");
   input.addEventListener("keydown", function(e) {

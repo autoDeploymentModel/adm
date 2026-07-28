@@ -351,10 +351,38 @@ function buildPartElement(part, partIdx, role, msgKey) {
 }
 
 // ===== Todo 列表渲染 =====
+// 固定面板位于消息区与输入区之间：有 todos 时常驻显示进度与清单，无 todos 时隐藏。
+// 数据源：selectConversation 的会话详情 + session SSE updated 事件（proto.Session 自带 todos）。
 export function renderTodos(todos) {
-  // TODO: 在右侧消息区域上方或侧边显示 Todo 列表
-  // 当前先存储到 currentConv，后续可扩展 UI
-  if (S.currentConv && todos) {
-    S.currentConv.todos = todos;
+  if (S.currentConv) {
+    S.currentConv.todos = todos || [];
   }
+  var panel = document.getElementById("agent-todos-panel");
+  var listEl = document.getElementById("agent-todos-list");
+  var progressEl = document.getElementById("agent-todos-progress");
+  if (!panel || !listEl || !progressEl) return;
+
+  if (!Array.isArray(todos) || todos.length === 0) {
+    panel.style.display = "none";
+    listEl.innerHTML = "";
+    return;
+  }
+
+  var done = todos.filter(function(t) { return t.status === "completed"; }).length;
+  progressEl.textContent = " " + done + "/" + todos.length;
+  panel.style.display = "";
+  panel.classList.toggle("collapsed", !!S.todosCollapsed);
+
+  listEl.innerHTML = "";
+  todos.forEach(function(t) {
+    var status = t.status === "completed" || t.status === "in_progress" ? t.status : "pending";
+    var icon = status === "completed" ? "✓" : (status === "in_progress" ? "●" : "○");
+    // in_progress 优先显示进行时描述（active_form），更直观
+    var text = status === "in_progress" && t.active_form ? t.active_form : (t.content || "");
+    var item = document.createElement("div");
+    item.className = "todo-item " + status;
+    item.innerHTML = '<span class="todo-item-icon">' + icon + '</span><span class="todo-item-text"></span>';
+    item.querySelector(".todo-item-text").textContent = text;
+    listEl.appendChild(item);
+  });
 }

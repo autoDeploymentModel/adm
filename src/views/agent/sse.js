@@ -7,7 +7,7 @@ import { renderMessages, renderTodos } from "./render.js";
 import { loadConversations, refreshMessages, renderConversationList } from "./session.js";
 import { showPermissionDialog, resetPermissionState } from "./permission.js";
 import { loadTools } from "./tools.js";
-import { refreshAgentInfo } from "./model.js";
+import { refreshAgentInfo, reloadAgentConfig } from "./model.js";
 
 // ===== SSE 事件 =====
 export async function setupSSEListener() {
@@ -111,7 +111,7 @@ function handleSSEEvent(payload) {
       // 若切换模型时会话繁忙导致 /agent/update 未生效，本轮结束后立即重试重载
       if (S.pendingModelReload) {
         S.pendingModelReload = false;
-        api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent/update")
+        reloadAgentConfig()
           .then(function() { refreshAgentInfo(); })
           .catch(function() { S.pendingModelReload = true; });
       } else {
@@ -206,9 +206,12 @@ function handleSessionSSEEvent(action, sessData) {
       S.conversations[idx] = sessData;
       renderConversationList();
     }
-    // 如果是当前会话，更新标题和上下文
+    // 如果是当前会话，更新快照、标题、上下文和 Todo 面板
     if (S.currentConvId === sessData.id) {
+      S.currentConv = sessData;
       document.getElementById("agent-conv-title").textContent = sessData.title || "会话";
+      // Session SSE 是完整快照；todos 使用 omitempty，字段缺失表示列表已清空，必须隐藏旧面板
+      renderTodos(Array.isArray(sessData.todos) ? sessData.todos : []);
       // context_tokens 为 0 时（如仅改标题触发的更新）保留现有估算值，避免被清零
       if (sessData.context_tokens) {
         S.contextUsage.used = sessData.context_tokens;
@@ -226,6 +229,7 @@ function handleSessionSSEEvent(action, sessData) {
       S.currentConv = null;
       S.messages = [];
       renderMessages();
+      renderTodos([]);
       document.getElementById("agent-conv-title").textContent = "选择或创建一个会话";
     }
   }

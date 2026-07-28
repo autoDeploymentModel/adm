@@ -2,7 +2,7 @@
 import { S } from "./state.js";
 import { api } from "./api.js";
 import { updateContextUsage, exitManualScrollMode, clearErrorNotices } from "./ui.js";
-import { renderMessages } from "./render.js";
+import { renderMessages, renderTodos } from "./render.js";
 import { loadConversations } from "./session.js";
 import { loadTools } from "./tools.js";
 import { setupSSEListener } from "./sse.js";
@@ -54,6 +54,7 @@ export async function switchToWorkspace(wsId, wsPath) {
   S.currentConvId = null;
   S.currentConv = null;
   renderMessages();
+  renderTodos([]);
   document.getElementById("agent-conv-title").textContent = "选择或创建一个会话";
   // 刷新对话列表（会自动选中第一个会话或创建新会话）
   await loadConversations();

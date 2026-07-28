@@ -36,6 +36,7 @@ export const listen = window.__adm_listen;
  * @property {number} agentInfoSeq
  * @property {"skill" | "lsp" | "mcp"} toolsTab
  * @property {{ skill: any[], lsp: any[], mcp: any[] }} toolsData
+ * @property {boolean} todosCollapsed
  * @property {number} initSeq
  */
 
@@ -71,5 +72,6 @@ export const S = {
   agentInfoSeq: 0,           // agentInfo 刷新序号：只应用最新一次请求的结果，防止旧响应把切换后的模型覆盖回旧值
   toolsTab: "skill",         // 工具面板当前 tab: "skill" | "lsp" | "mcp"
   toolsData: { skill: [], lsp: [], mcp: [] }, // 各 tab 工具缓存 [{name, status, statusColor, title}]
+  todosCollapsed: false,     // Todo 固定面板折叠状态（仅影响展示，不影响数据更新）
   initSeq: 0,                // init() 版本号：unmount/重新 mount 时递增，旧的在途 init 检测到过期后立即终止，防止并发 init 互相踩踏
 };

@@ -153,6 +153,7 @@ function handleConvAction(action, convId) {
               S.currentConv = null;
               S.messages = [];
               renderMessages();
+              renderTodos([]);
               document.getElementById("agent-conv-title").textContent = "选择或创建一个会话";
             }
             loadConversations();
@@ -227,6 +228,7 @@ export async function newConversation() {
     S.contextUsage.estimated = false;
     await loadConversations();
     renderMessages();
+    renderTodos([]);
     document.getElementById("agent-conv-title").textContent = resp.title || "新会话";
     updateContextUsage();
 

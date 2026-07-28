@@ -4,7 +4,7 @@ import { api } from "./api.js";
 import { parseContextSize, escapeHtml, $input } from "./utils.js";
 import { showError, showConfirm, updateStatusBar } from "./ui.js";
 import { switchToWorkspace, updateWorkspaceSelector } from "./workspace.js";
-import { updateModelDropdown } from "./model.js";
+import { updateModelDropdown, switchModel, refreshServerProviders } from "./model.js";
 
 // ===== 设置弹窗 =====
 export function showSettings() {
@@ -140,7 +140,22 @@ function renderProviderList() {
       showConfirm("确定删除云端模型「" + p.name + "」？", async function() {
         try {
           await invoke("delete_cloud_provider", { key: p.key });
+          // 同步从运行中的 server 内存配置移除（否则服务端仍持有已删 provider 直到重启）
+          if (S.serverInfo && S.serverInfo.workspace_id) {
+            await api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/config/remove", {
+              scope: 0, key: "providers." + p.key
+            }).catch(function(e) { console.warn("[agent] 同步删除 provider 到服务端失败:", e); });
+          }
+          // 删的正是当前激活的 provider：立即切回本地模型，避免 active model 悬空
+          // 导致 /agent/update 报 "active model provider not configured"、
+          // 后续 /agent/init 失败把 coordinator 置空（整个 Agent 不可用）
+          var active = S.settings.agent_default_provider || "local";
+          if (active === p.key || active.indexOf(p.key + "/") === 0) {
+            await switchModel("local", "Local Model", 0);
+          }
           S.providers = await invoke("list_cloud_providers");
+          // 下拉优先使用 S.serverProviders；必须刷新服务端快照，避免已删 provider 继续显示并可被重新选中
+          await refreshServerProviders();
           renderProviderList();
           updateModelDropdown();
         } catch (e) {
@@ -173,10 +188,25 @@ export async function addModel() {
   }
 
   try {
-    await invoke("add_cloud_provider", {
+    var addResp = await invoke("add_cloud_provider", {
       input: { name: name, base_url: baseUrl, api_key: apiKey, context_window: ctx, model_id: modelId || null, supports_images: supportsImages }
     });
+    // 关键：把新 provider 同步写进运行中的 server（/config/set 会写盘并自动重载内存）。
+    // 否则 server 只在启动时读 admAgent.json，选中新模型会报
+    // "active model provider not configured"，且后续 /agent/init 失败会把 coordinator 置空
+    if (addResp && addResp.key && S.serverInfo && S.serverInfo.workspace_id) {
+      await api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/config/set", {
+        scope: 0,
+        key: "providers." + addResp.key,
+        value: {
+          name: name, base_url: baseUrl, type: "openai-compat", api_key: apiKey,
+          models: [{ id: modelId, name: name, context_window: ctx, supports_images: supportsImages }]
+        }
+      }).catch(function(e) { console.warn("[agent] 同步新 provider 到服务端失败（重启后生效）:", e); });
+    }
     S.providers = await invoke("list_cloud_providers");
+    // 以服务端实际重载后的 provider 快照更新下拉，避免新增后继续使用旧缓存
+    await refreshServerProviders();
     renderProviderList();
     updateModelDropdown();
     addModelMsg("添加成功", false);
