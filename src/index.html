@@ -277,6 +277,9 @@
     window.__adm_invoke = invoke;
     window.__adm_listen = listen;
 
+    // 底部硬件栏（壳层常驻）禁用右键，屏蔽浏览器默认菜单
+    document.getElementById("hardware-bar").addEventListener("contextmenu", function(e) { e.preventDefault(); });
+
     // 共享状态（提升原 model_list 局部变量，跨视图共享）
     window.__adm_state = {
       systemInfo: null,

@@ -113,18 +113,11 @@ pub struct RemoteModel {
     pub model_vae: Option<String>,
 }
 
-fn default_true() -> bool {
-true
-}
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Settings {
 pub launch_params: LaunchParams,
 #[serde(default)]
 pub agent_workdir: String,
-/// 关闭窗口时最小化到系统托盘（默认启用）
-#[serde(default = "default_true")]
-pub minimize_to_tray: bool,
 /// Agent YOLO 模式：跳过所有权限确认
 #[serde(default)]
 pub agent_yolo: bool,
@@ -144,7 +137,6 @@ fn default() -> Self {
 Self {
 launch_params: LaunchParams::default(),
 agent_workdir: String::new(),
-minimize_to_tray: true,
 agent_yolo: false,
 agent_default_provider: String::new(),
 agent_reasoning_effort: String::new(),

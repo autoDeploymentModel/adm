@@ -482,6 +482,15 @@ function bindEvents() {
       showCopyPasteMenu(e, inputForCtx);
     });
   }
+
+  // 禁用其它区域右键：消息区/输入框的自定义右键已 stopPropagation 不会冒泡到这里，
+  // 其余冒泡到 .agent-root 的 contextmenu 一律屏蔽浏览器默认菜单
+  var agentRoot = document.querySelector(".agent-root");
+  if (agentRoot) {
+    agentRoot.addEventListener("contextmenu", function(e) {
+      e.preventDefault();
+    });
+  }
 }
 
 // ===== 项目初始化引导 =====

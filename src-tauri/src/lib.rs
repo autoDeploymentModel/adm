@@ -5,35 +5,9 @@ mod pages;
 use app_state::AppState;
 use pages::{agent, index, model_list, model_image, settings};
 
-use tauri::Emitter;
 use tauri::Manager;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-
-/// 读取用户设置：是否启用"关闭窗口时最小化到系统托盘"。
-/// 读取失败时默认返回 false（禁用），以提供更好的开箱体验（在 macOS 上直接退出）。
-fn read_minimize_to_tray(app: &tauri::AppHandle) -> bool {
-    use crate::common::config;
-    use crate::common::types::Settings;
-
-    let data_dir = match config::get_data_dir(Some(app)) {
-        Ok(d) => d,
-        Err(_) => return false,
-    };
-    let config_path = data_dir.join("config.json");
-    if !config_path.exists() {
-        return false;
-    }
-    let json = match std::fs::read_to_string(&config_path) {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
-    let settings: Settings = match serde_json::from_str(&json) {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
-    settings.minimize_to_tray
-}
 
 /// 显示主窗口并带到前台（跨平台）。
 ///
@@ -52,21 +26,10 @@ fn show_main_window(app: &tauri::AppHandle) {
         #[cfg(not(target_os = "macos"))]
         {
             let _ = window.set_skip_taskbar(false);
+            let _ = window.unminimize();
             let _ = window.show();
             let _ = window.set_focus();
         }
-    }
-}
-
-/// 隐藏主窗口到系统托盘（跨平台）。
-///
-/// macOS 不调用 `set_skip_taskbar(true)`，避免切换到 `Accessory` 策略导致
-/// 后续无法从托盘恢复窗口；Dock 图标保持可见（符合 macOS 习惯）。
-fn hide_main_window(window: &tauri::Window) {
-    let _ = window.hide();
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = window.set_skip_taskbar(true);
     }
 }
 
@@ -146,8 +109,11 @@ pub fn run() {
                     {
                         let app = tray.app_handle();
                         if let Some(window) = app.get_webview_window("main") {
-                            if window.is_visible().unwrap_or(false) {
-                                // 隐藏到托盘（与 hide_main_window 逻辑一致）
+                            if window.is_minimized().unwrap_or(false) {
+                                // 最小化在任务栏：恢复显示并带到前台
+                                show_main_window(app);
+                            } else if window.is_visible().unwrap_or(false) {
+                                // 隐藏到托盘（macOS 不调 set_skip_taskbar，避免 Accessory 策略）
                                 let _ = window.hide();
                                 #[cfg(not(target_os = "macos"))]
                                 {
@@ -163,37 +129,20 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            let app = window.app_handle();
-
-            // 点击右上角最小化按钮：直接隐藏到系统托盘
-            if let tauri::WindowEvent::Resized(_) = event {
-                if read_minimize_to_tray(app) && window.is_minimized().unwrap_or(false) {
-                    let _ = window.unminimize();
-                    hide_main_window(window);
-                }
-                return;
-            }
-
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 #[cfg(target_os = "macos")]
                 {
                     let _api = api; // 标记为未用
                     // macOS：点击关闭一律退出，不最小化到托盘
                     // 注意：不需要 api.prevent_close()，正常退出即可
-                    cleanup_processes(app);
+                    cleanup_processes(window.app_handle());
                 }
                 #[cfg(not(target_os = "macos"))]
                 {
-                    if read_minimize_to_tray(app) {
-                        // 最小化到托盘：拦截关闭，隐藏窗口
-                        api.prevent_close();
-                        hide_main_window(window);
-                        // 通知前端显示提示
-                        let _ = app.emit("window-minimized-to-tray", ());
-                        return;
-                    }
-                    // 未启用托盘：执行进程清理，窗口正常关闭 → 应用退出
-                    cleanup_processes(app);
+                    // Windows/Linux：拦截关闭，隐藏到系统托盘（模型继续运行）
+                    api.prevent_close();
+                    let _ = window.hide();
+                    let _ = window.set_skip_taskbar(true);
                 }
             }
         })

@@ -1004,6 +1004,10 @@ export default {
     root.innerHTML = template;
 S().currentTypeFilter = "all";
 
+    // 禁用页面右键（屏蔽浏览器默认菜单，删除弹窗在根容器内一并覆盖）
+    var listRoot = document.getElementById("model-list-root");
+    if (listRoot) listRoot.addEventListener("contextmenu", function(e) { e.preventDefault(); });
+
   setupListeners();
     init();
 
