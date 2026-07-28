@@ -12,6 +12,8 @@ export const listen = window.__adm_listen;
  * @property {any} settings { agent_yolo, agent_default_provider, ... }
  * @property {any[]} providers cloud providers list
  * @property {any[]} serverProviders admAgent 服务端 /providers 完整列表（含内置模型）
+ * @property {boolean} serverProvidersLoaded 是否已成功取得服务端 provider 快照
+ * @property {Object<string, boolean>} pendingProviderKeys 已写盘但尚未被服务端确认的 provider
  * @property {any[]} localModels 本地模型列表 (来自 scan_local_models)
  * @property {any[]} conversations 会话列表
  * @property {string | null} currentConvId
@@ -21,6 +23,7 @@ export const listen = window.__adm_listen;
  * @property {(() => void) | null} sseErrorUnlisten
  * @property {any} sseReconnectTimer
  * @property {boolean} isSending
+ * @property {{ workspaceId: string, sessionId: string, runId: string } | null} activeRun 实际运行身份，不随 UI 会话切换
  * @property {{ used: number, max: number, estimated: boolean }} contextUsage
  * @property {"current" | "all"} sessionViewMode
  * @property {{ id?: string, path: string, name: string } | null} workspaceInfo
@@ -48,6 +51,8 @@ export const S = {
   settings: null,   // { agent_yolo, agent_default_provider, ... }
   providers: [],    // cloud providers list
   serverProviders: [], // admAgent 服务端 /providers 返回的完整 provider 列表（含内置模型）
+  serverProvidersLoaded: false, // 成功取得服务端快照后为 true；空数组也代表有效快照
+  pendingProviderKeys: {}, // 已写盘但运行时同步失败的 provider，不进入模型下拉
   localModels: [],  // 本地模型列表 (来自 scan_local_models)
   conversations: [], // 会话列表
   currentConvId: null,
@@ -57,6 +62,7 @@ export const S = {
   sseErrorUnlisten: null, // SSE 错误事件 unlisten（避免重复注册）
   sseReconnectTimer: null, // SSE 重连定时器
   isSending: false,
+  activeRun: null, // { workspaceId, sessionId, runId }，计时器/取消/完成都绑定该运行
   contextUsage: { used: 0, max: 0, estimated: false },
   sessionViewMode: "current", // "current" | "all"
   workspaceInfo: null, // { id, path, name }

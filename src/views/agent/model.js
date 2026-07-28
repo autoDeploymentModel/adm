@@ -97,11 +97,20 @@ export async function refreshAgentInfo() {
 // 从 admAgent 服务端拉取完整 provider 列表（含编译内置的 provider，
 // admAgent.json 里没有、仅 CLI 能看到的内置模型也在其中）
 export async function refreshServerProviders() {
-  if (!S.serverInfo || !S.serverInfo.workspace_id) return;
+  if (!S.serverInfo || !S.serverInfo.workspace_id) return false;
   try {
     var list = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/providers");
-    if (Array.isArray(list)) S.serverProviders = list;
-  } catch (_) { /* 拉取失败时保留旧数据，下拉回退 admAgent.json 列表 */ }
+    if (!Array.isArray(list)) return false;
+    S.serverProviders = list;
+    S.serverProvidersLoaded = true;
+    // 服务端快照中已出现的 provider 已完成确认，可解除待同步状态
+    Object.keys(S.pendingProviderKeys).forEach(function(key) {
+      if (list.some(function(sp) { return sp && sp.id === key; })) delete S.pendingProviderKeys[key];
+    });
+    return true;
+  } catch (_) {
+    return false; // 拉取失败时保留最后一次已确认快照
+  }
 }
 
 // 把前端 providerKey（"local" / "local:xxx" / "provider/model" / 云端 provider key）解析成
@@ -142,10 +151,10 @@ export function updateModelDropdown() {
   });
   dropdown.appendChild(localItem);
 
-  // 云端模型：优先用服务端 /providers 列表（含 admAgent 内置模型，一个 provider 可能多个 model），
-  // 服务端不可用时回退 admAgent.json 里用户添加的列表
+  // 云端模型：运行中服务只信任 /providers 已确认快照（含 admAgent 内置模型，一个 provider 可能多个 model）；
+  // 仅在没有 serverInfo 的离线状态下回退 admAgent.json 列表
   var cloudEntries = [];
-  if (Array.isArray(S.serverProviders) && S.serverProviders.length > 0) {
+  if (S.serverProvidersLoaded) {
     S.serverProviders.forEach(function(sp) {
       if (!sp || sp.id === "local") return;
       (Array.isArray(sp.models) ? sp.models : []).forEach(function(m) {
@@ -159,16 +168,14 @@ export function updateModelDropdown() {
         });
       });
     });
-    // admAgent.json 里刚添加、服务端尚未重载的 provider 作补充
+    // 成功取得服务端快照后只展示服务端已确认条目；磁盘存在但热同步失败的 provider
+    // 仍可在设置列表中管理，但不得进入模型下拉触发不可用配置。
+  } else if (!S.serverInfo) {
+    // 仅在没有运行中服务时回退磁盘配置；服务存在但快照请求失败时不展示未经确认的云端模型。
     S.providers.forEach(function(p) {
-      var exists = S.serverProviders.some(function(sp) { return sp && sp.id === p.key; });
-      if (!exists) {
+      if (!S.pendingProviderKeys[p.key]) {
         cloudEntries.push({ key: p.key, providerId: p.key, name: p.name, context_window: p.context_window || 0, supports_images: p.supports_images === true });
       }
-    });
-  } else {
-    S.providers.forEach(function(p) {
-      cloudEntries.push({ key: p.key, providerId: p.key, name: p.name, context_window: p.context_window || 0, supports_images: p.supports_images === true });
     });
   }
 

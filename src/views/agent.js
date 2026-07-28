@@ -272,6 +272,7 @@ async function handleServerDied() {
   console.warn("[agent] admAgent server 意外退出，自动重启中...");
   showError("admAgent 服务异常退出，正在自动重启...");
   S.isSending = false;
+  S.activeRun = null;
   updateSendButton();
   clearSendSafetyTimer();
   updateStatusBar("error", null, S.contextUsage.used);

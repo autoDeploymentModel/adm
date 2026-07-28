@@ -44,8 +44,7 @@ export async function setupSSEListener() {
 // SSE 断线重连
 function reconnectSSE() {
   if (S.sseReconnectTimer) return;
-  S.isSending = false;
-  updateSendButton();
+  // SSE 短暂断线不代表运行已结束；保留 activeRun，重连后继续按原运行会话检查
   clearSendSafetyTimer();
   updateStatusBar("error", null, S.contextUsage.used);
   showError("SSE 连接断开，3 秒后重连...");
@@ -63,7 +62,8 @@ function reconnectSSE() {
         S.currentConv = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions/" + S.currentConvId);
         renderTodos(S.currentConv.todos);
       }
-      updateStatusBar("ready", null, S.contextUsage.used);
+      if (S.isSending && S.activeRun) startSendSafetyTimer();
+      updateStatusBar(S.isSending ? "busy" : "ready", null, S.contextUsage.used);
     } catch (e) {
       showError("重连失败: " + e);
     }
@@ -83,15 +83,27 @@ function handleSSEEvent(payload) {
 
   switch (eventType) {
     case "message":
-      // 收到消息事件说明 Agent 仍在活动，重置安全超时计时器（避免长任务被误判超时）
-      if (S.isSending) startSendSafetyTimer();
+      // 只有实际运行会话的消息才能续期其安全计时器，其他会话事件不得干扰
+      if (S.isSending && S.activeRun && (!actualData.session_id || actualData.session_id === S.activeRun.sessionId)) {
+        startSendSafetyTimer();
+      }
       handleMessageSSEEvent(innerType, actualData);
       break;
     case "session":
       handleSessionSSEEvent(innerType, actualData);
       break;
     case "run_complete":
+      // SSE 是 workspace 级事件流；只让当前运行自己的完成事件收尾发送态，
+      // 避免同 workspace 其它会话/排队任务的 run_complete 提前结束当前运行。
+      if (S.activeRun && (
+        (actualData.run_id && actualData.run_id !== S.activeRun.runId) ||
+        (!actualData.run_id && actualData.session_id && actualData.session_id !== S.activeRun.sessionId)
+      )) {
+        console.log("[agent] 忽略非当前运行的 run_complete:", actualData.run_id || actualData.session_id);
+        break;
+      }
       S.isSending = false;
+      S.activeRun = null;
       updateSendButton();
       clearSendSafetyTimer();
       // 本轮运行出错/被取消时明确提示（error 非空表示运行出错），

@@ -154,6 +154,7 @@ function renderProviderList() {
             await switchModel("local", "Local Model", 0);
           }
           S.providers = await invoke("list_cloud_providers");
+          delete S.pendingProviderKeys[p.key];
           // 下拉优先使用 S.serverProviders；必须刷新服务端快照，避免已删 provider 继续显示并可被重新选中
           await refreshServerProviders();
           renderProviderList();
@@ -194,22 +195,43 @@ export async function addModel() {
     // 关键：把新 provider 同步写进运行中的 server（/config/set 会写盘并自动重载内存）。
     // 否则 server 只在启动时读 admAgent.json，选中新模型会报
     // "active model provider not configured"，且后续 /agent/init 失败会把 coordinator 置空
+    var runtimeSynced = false;
+    var syncError = null;
     if (addResp && addResp.key && S.serverInfo && S.serverInfo.workspace_id) {
-      await api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/config/set", {
-        scope: 0,
-        key: "providers." + addResp.key,
-        value: {
-          name: name, base_url: baseUrl, type: "openai-compat", api_key: apiKey,
-          models: [{ id: modelId, name: name, context_window: ctx, supports_images: supportsImages }]
-        }
-      }).catch(function(e) { console.warn("[agent] 同步新 provider 到服务端失败（重启后生效）:", e); });
+      try {
+        await api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/config/set", {
+          scope: 0,
+          key: "providers." + addResp.key,
+          value: {
+            name: name, base_url: baseUrl, type: "openai-compat", api_key: apiKey,
+            models: [{ id: modelId, name: name, context_window: ctx, supports_images: supportsImages }]
+          }
+        });
+        runtimeSynced = true;
+        delete S.pendingProviderKeys[addResp.key];
+      } catch (e) {
+        syncError = e;
+        S.pendingProviderKeys[addResp.key] = true;
+        console.warn("[agent] 同步新 provider 到服务端失败（重启后生效）:", e);
+      }
+    } else if (addResp && addResp.key) {
+      S.pendingProviderKeys[addResp.key] = true;
     }
     S.providers = await invoke("list_cloud_providers");
-    // 以服务端实际重载后的 provider 快照更新下拉，避免新增后继续使用旧缓存
-    await refreshServerProviders();
+    // 只有 /config/set 成功且 /providers 快照确实包含该 key，才算运行时可用。
+    var snapshotLoaded = await refreshServerProviders();
+    var runtimeConfirmed = runtimeSynced && snapshotLoaded && S.serverProviders.some(function(sp) {
+      return sp && sp.id === addResp.key;
+    });
+    if (!runtimeConfirmed && addResp && addResp.key) S.pendingProviderKeys[addResp.key] = true;
     renderProviderList();
     updateModelDropdown();
-    addModelMsg("添加成功", false);
+    if (runtimeConfirmed) {
+      addModelMsg("添加成功", false);
+    } else {
+      addModelMsg("配置已保存，但当前服务未加载该模型；重启 Agent 后生效" + (syncError ? ": " + syncError : ""), true);
+      return;
+    }
     setTimeout(function() {
       hideAddModelDialog();
       $input("add-model-name").value = "";

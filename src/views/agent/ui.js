@@ -27,21 +27,23 @@ export function updateScrollBottomBtn() {
 // 需先向服务端确认会话是否仍在运行（is_busy），仍忙则续期计时器
 export function startSendSafetyTimer() {
   clearSendSafetyTimer();
+  var activeRun = S.activeRun;
+  if (!activeRun) return;
   S.sendSafetyTimer = setTimeout(async function() {
-    if (!S.isSending) return;
+    // 只允许为同一运行创建的计时器改变状态；旧计时器不得干扰后续运行
+    if (!S.isSending || S.activeRun !== activeRun) return;
     try {
-      if (S.serverInfo && S.currentConvId) {
-        var sess = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions/" + S.currentConvId);
-        if (S.isSending && sess && sess.is_busy) {
-          console.log("[agent] 安全超时检查：会话仍在运行，续期计时器");
-          startSendSafetyTimer();
-          return;
-        }
+      var sess = await api("GET", "/v1/workspaces/" + activeRun.workspaceId + "/sessions/" + activeRun.sessionId);
+      if (S.isSending && S.activeRun === activeRun && sess && sess.is_busy) {
+        console.log("[agent] 安全超时检查：运行会话仍在执行，续期计时器");
+        startSendSafetyTimer();
+        return;
       }
     } catch (_) {}
-    if (!S.isSending) return; // 等待查询期间 run_complete 可能已正常收尾
-    console.warn("[agent] isSending 安全超时 (3min) 且会话已不在运行，自动重置");
+    if (!S.isSending || S.activeRun !== activeRun) return; // 查询期间可能已正常收尾或开始下一轮
+    console.warn("[agent] isSending 安全超时 (3min) 且运行会话已不在执行，自动重置");
     S.isSending = false;
+    S.activeRun = null;
     updateSendButton();
     updateStatusBar("ready", null, S.contextUsage.used);
     showError("运行超时，已自动重置状态");

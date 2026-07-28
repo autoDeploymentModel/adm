@@ -32,6 +32,8 @@ pub struct AppState {
     pub sys: Mutex<System>,
     /// admAgent server 会话
     pub agent_session: Mutex<Option<AgentServerSession>>,
+    /// admAgent server 启停单飞锁：覆盖完整异步启动流程，避免并发 spawn/覆盖会话
+    pub agent_start_lock: tokio::sync::Mutex<()>,
     /// 全局标识：是否有模型成功启动（用于进入 Agent 页前的判断）
     pub model_running: Mutex<bool>,
     /// 当前运行模型是否支持图片输入（启动时按 support_images + mmproj 文件实际加载判定）
@@ -53,6 +55,7 @@ impl AppState {
             sd_download_status: Mutex::new("".to_string()),
             sys: Mutex::new(System::new_all()),
             agent_session: Mutex::new(None),
+            agent_start_lock: tokio::sync::Mutex::new(()),
             model_running: Mutex::new(false),
             model_supports_images: Mutex::new(false),
             model_generation: Mutex::new(0),

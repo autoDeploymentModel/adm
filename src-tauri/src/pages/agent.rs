@@ -648,6 +648,9 @@ pub async fn download_adm_agent(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), AppError> {
+    // 与 server 启动/停止串行化，避免下载覆盖二进制时并发拉起新进程。
+    let _start_guard = state.agent_start_lock.lock().await;
+
     // 1. 获取远程版本
     let remote_ver = fetch_update_info()
         .await?
@@ -879,6 +882,9 @@ pub async fn download_adm_agent_update(
     state: tauri::State<'_, AppState>,
     url: String,
 ) -> Result<(), AppError> {
+    // 与 server 启动/停止串行化，避免升级替换二进制时并发拉起新进程。
+    let _start_guard = state.agent_start_lock.lock().await;
+
     if url.trim().is_empty() || !url.starts_with("http") {
         bail!(
             "下载地址无效: {}，请重新检查更新",
@@ -1180,6 +1186,21 @@ pub async fn start_agent_server(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<AgentServerInfo, AppError> {
+    // 覆盖完整异步启动流程的单飞锁。第二个并发调用必须等待第一个完成，
+    // 随后直接复用已启动的会话，不能再次 stop + spawn 产生孤儿进程。
+    let _start_guard = state.agent_start_lock.lock().await;
+    {
+        let mut session = state.agent_session.lock().map_err(|e| e.to_string())?;
+        if let Some(existing) = session.as_mut() {
+            if matches!(existing.child.try_wait(), Ok(None)) {
+                return Ok(AgentServerInfo {
+                    port: existing.port,
+                    workspace_id: existing.workspace_id.clone(),
+                    client_id: existing.client_id.clone(),
+                });
+            }
+        }
+    }
     stop_agent_server_internal(&state)?;
 
     if let Err(e) = ensure_adm_agent_config(&app) {
@@ -1213,6 +1234,8 @@ pub async fn start_agent_server(
     if !workdir.is_empty() {
         cmd.arg("--cwd").arg(&workdir);
     }
+    // 启动流程在健康检查/工作区创建阶段失败时自动终止子进程，避免错误路径留下孤儿。
+    cmd.kill_on_drop(true);
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
     if let Some(parent) = agent_path.parent() {
@@ -1455,6 +1478,8 @@ fn agent_process_exited(app: &tauri::AppHandle) -> bool {
 
 #[tauri::command]
 pub async fn stop_agent_server(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
+    // 与启动共用同一把锁，避免启动尚未登记 session 时 stop 无效、随后进程又冒出来。
+    let _start_guard = state.agent_start_lock.lock().await;
     stop_agent_server_internal(&state)
 }
 

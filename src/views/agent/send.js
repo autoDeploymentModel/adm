@@ -12,15 +12,18 @@ import { clearPendingFiles } from "./attach.js";
 export async function sendMessage() {
   console.log("[agent] sendMessage() isSending:", S.isSending, "convId:", S.currentConvId);
   if (S.isSending) {
-    // 取消运行
-    if (S.currentConvId) {
+    // 取消实际运行中的会话，而不是用户后来切换到的当前 UI 会话
+    var activeRun = S.activeRun;
+    if (activeRun) {
       try {
-        await api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent/sessions/" + S.currentConvId + "/cancel");
+        await api("POST", "/v1/workspaces/" + activeRun.workspaceId + "/agent/sessions/" + activeRun.sessionId + "/cancel");
       } catch (e) {
         showError("取消失败: " + e);
+        return;
       }
     }
     S.isSending = false;
+    S.activeRun = null;
     updateSendButton();
     updateStatusBar("ready", null, S.contextUsage.used);
     clearSendSafetyTimer();
@@ -61,7 +64,12 @@ export async function sendMessage() {
     }
   }
 
+  // 在发送前固定运行身份；后续切换会话/工作区不能改变超时检查和取消目标
+  var workspaceId = S.serverInfo.workspace_id;
+  var sessionId = S.currentConvId;
+  var runId = generateRunId();
   S.isSending = true;
+  S.activeRun = { workspaceId: workspaceId, sessionId: sessionId, runId: runId };
   updateSendButton();
 
   // 立即显示用户消息（使用临时 ID，以便 SSE 到来时去重替换）
@@ -79,9 +87,8 @@ export async function sendMessage() {
   try {
     // POST /v1/workspaces/{id}/agent — fire-and-forget, 返回 202 Accepted (无响应体)
     // 实际结果通过 SSE 事件流获取
-    var runId = generateRunId();
     var body = {
-      session_id: S.currentConvId,
+      session_id: sessionId,
       prompt: text,
       run_id: runId,
     };
@@ -95,20 +102,21 @@ export async function sendMessage() {
       });
     }
     try {
-      await api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent", body);
+      await api("POST", "/v1/workspaces/" + workspaceId + "/agent", body);
     } catch (sendErr) {
       // coordinator 被失败的 init 置空（如曾切到服务端未加载的 provider）：
       // 重建后重试一次，避免用户卡在永久性的“agent coordinator not initialized”
       if (String(sendErr).indexOf("agent coordinator not initialized") < 0) throw sendErr;
       console.warn("[agent] coordinator 未初始化，尝试 /agent/init 后重发");
-      await api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent/init");
-      await api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent", body);
+      await api("POST", "/v1/workspaces/" + workspaceId + "/agent/init");
+      await api("POST", "/v1/workspaces/" + workspaceId + "/agent", body);
     }
     console.log("[agent] 消息已发送, runId:", runId);
     startSendSafetyTimer();
     updateContextUsage();
   } catch (e) {
     S.isSending = false;
+    S.activeRun = null;
     updateSendButton();
     clearSendSafetyTimer();
     updateStatusBar("ready", null, S.contextUsage.used);

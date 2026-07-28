@@ -818,7 +818,10 @@
 
       // 先异步加载模块（已缓存时瞬时完成），旧视图保持显示避免黑屏闪烁；
       // 超过 120ms 未就绪才切换为 loading 动画
-      const loadingTimer = setTimeout(showViewLoading, 120);
+      const loadingTimer = setTimeout(function() {
+        // 只允许当前最新路由展示 loading；旧路由的延迟定时器不得卸载已挂载的新视图
+        if (seq === renderSeq) showViewLoading();
+      }, 120);
       let mod = null;
       let loadErr = null;
       try {
