@@ -410,6 +410,12 @@ const MODE_MIN_CTX = { default: 25600, creative: 25600, code: 128000 };
 
 const invoke = () => window.__adm_invoke;
 
+// HTML 转义：远端 update.json 下发的版本号 / 地址会拼进弹窗 innerHTML，需真实转义防注入
+function escHtml(s) {
+  if (s == null) return "";
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
 function switchPanel(panelId) {
   console.log("[settings] 切换面板:", panelId);
   document.querySelectorAll(".nav-item").forEach((el) => el.classList.remove("active"));
@@ -667,11 +673,11 @@ async function checkUpdateNow() {
         <div class="update-title" style="font-size:20px;font-weight:600;color:#fff;text-align:center;margin-bottom:8px;">发现新版本</div>
         <div class="update-desc" style="font-size:14px;color:#a0a0c0;text-align:center;margin-bottom:20px;line-height:1.6;">有新版本可用，是否前往下载？</div>
         <div class="update-info-row" style="display:flex;justify-content:center;gap:24px;margin-bottom:20px;font-size:13px;">
-          <div class="info-item" style="text-align:center;"><div class="info-label" style="color:#8080a0;font-size:11px;">当前版本</div><div class="info-value" style="color:#e0e0e0;font-weight:500;margin-top:2px;">v${result.current_version}</div></div>
-          <div class="info-item" style="text-align:center;"><div class="info-label" style="color:#8080a0;font-size:11px;">最新版本</div><div class="info-value" style="color:#e0e0e0;font-weight:500;margin-top:2px;">v${result.remote_version}</div></div>
+          <div class="info-item" style="text-align:center;"><div class="info-label" style="color:#8080a0;font-size:11px;">当前版本</div><div class="info-value" style="color:#e0e0e0;font-weight:500;margin-top:2px;">v${escHtml(result.current_version)}</div></div>
+          <div class="info-item" style="text-align:center;"><div class="info-label" style="color:#8080a0;font-size:11px;">最新版本</div><div class="info-value" style="color:#e0e0e0;font-weight:500;margin-top:2px;">v${escHtml(result.remote_version)}</div></div>
         </div>
         <div class="update-buttons" style="display:flex;gap:12px;justify-content:center;">
-          <button class="update-btn-primary" style="background:#6c63ff;color:#fff;border:none;padding:10px 28px;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer;" onclick="window.ADM.hideUpdateDialog();window.openUrl('${result.download_url}')">下载更新</button>
+          <button class="update-btn-primary" style="background:#6c63ff;color:#fff;border:none;padding:10px 28px;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer;" onclick="window.ADM.hideUpdateDialog();window.openUrl('${escHtml(result.download_url)}')">下载更新</button>
           <button class="update-btn-secondary" style="background:rgba(255,255,255,0.1);color:#e0e0e0;border:none;padding:10px 28px;border-radius:8px;font-size:14px;cursor:pointer;" onclick="window.ADM.hideUpdateDialog()">稍后再说</button>
         </div>`;
       window.ADM.showUpdateDialog(html);

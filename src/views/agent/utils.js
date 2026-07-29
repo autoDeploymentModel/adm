@@ -125,8 +125,11 @@ export function renderMarkdown(text) {
   // 列表项
   html = html.replace(/^- (.+)$/gm, '<li style="margin-left:16px;">$1</li>');
 
-  // 链接 [text](url)
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" style="color:#6c63ff;text-decoration:none;" target="_blank">$1</a>');
+  // 链接 [text](url)：仅放行 http(s)，阻断 javascript:/data: 等危险协议
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function(_, text, url) {
+    var safe = /^https?:\/\//i.test(url.trim()) ? url : "#";
+    return '<a href="' + safe + '" style="color:#6c63ff;text-decoration:none;" target="_blank">' + text + '</a>';
+  });
 
   // 换行
   html = html.replace(/\n/g, "<br>");

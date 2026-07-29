@@ -309,6 +309,12 @@
       return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + sizes[i];
     }
 
+    // HTML 转义：远端 update.json 下发的版本号 / 地址会拼进弹窗 innerHTML，需真实转义防注入
+    function escHtml(s) {
+      if (s == null) return "";
+      return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    }
+
 
 
     // ===== 导航激活态 =====
@@ -331,6 +337,11 @@
     }
 
     function openUrl(url) {
+      // 仅允许 http(s)，防止远端下发的 download_url 被注入 javascript:/file: 等危险协议
+      if (!/^https?:\/\//i.test(String(url || "").trim())) {
+        console.warn("[index] 拒绝打开非 http(s) 链接:", url);
+        return;
+      }
       if (window.__TAURI__?.core) {
         window.__TAURI__.core.invoke("plugin:opener|open_url", { url: url });
       } else if (window.__TAURI_INTERNALS__?.invoke) {
@@ -358,11 +369,11 @@
             <div class="update-title">发现新版本</div>
             <div class="update-desc">有新版本可用，是否前往下载？</div>
             <div class="update-info-row">
-              <div class="info-item"><div class="info-label">当前版本</div><div class="info-value">v${result.current_version}</div></div>
-              <div class="info-item"><div class="info-label">最新版本</div><div class="info-value">v${result.remote_version}</div></div>
+              <div class="info-item"><div class="info-label">当前版本</div><div class="info-value">v${escHtml(result.current_version)}</div></div>
+              <div class="info-item"><div class="info-label">最新版本</div><div class="info-value">v${escHtml(result.remote_version)}</div></div>
             </div>
             <div class="update-buttons">
-              <button class="update-btn-primary" onclick="openUrl('${result.download_url}')">下载更新</button>
+              <button class="update-btn-primary" onclick="openUrl('${escHtml(result.download_url)}')">下载更新</button>
               <button class="update-btn-secondary" onclick="onSystemUpdateDismiss()">稍后再说</button>
             </div>`;
           showUpdateDialog(html);
@@ -453,8 +464,8 @@
       const isNotInstalled = !result.llamacpp_local_version || result.llamacpp_local_version === "未安装";
       llamacppIsMandatory = isNotInstalled;
 
-      const localVer = result.llamacpp_local_version || "未安装";
-      const remoteVer = result.llamacpp_remote_version || "";
+      const localVer = escHtml(result.llamacpp_local_version || "未安装");
+      const remoteVer = escHtml(result.llamacpp_remote_version || "");
       const downloadUrl = result.llamacpp_download_url;
 
       if (!downloadUrl) {
@@ -541,8 +552,8 @@
     async function startAdmAgentUpdate(result, onComplete) {
       pendingAdmAgentOnComplete = typeof onComplete === "function" ? onComplete : null;
       const isNotInstalled = !result.local_version || result.local_version === "未安装";
-      const localVer = result.local_version || "未安装";
-      const remoteVer = result.remote_version || "";
+      const localVer = escHtml(result.local_version || "未安装");
+      const remoteVer = escHtml(result.remote_version || "");
       const downloadUrl = result.download_url;
 
       if (!downloadUrl) {

@@ -469,6 +469,17 @@ function getUrlFilename(url) {
   return url ? url.split('/').pop() : null;
 }
 
+// HTML 转义：远端 model.json 内容会拼进 innerHTML / 属性，必须真实转义防注入
+function escapeHtml(s) {
+  if (s == null) return "";
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function isModelAvailable(needRam) {
   const systemInfo = S().systemInfo;
   if (!systemInfo) return false;
@@ -589,7 +600,7 @@ function renderModelTable() {
     const isDownloadingMmproj = st.downloadingMmproj[model.model_id];
     const isDownloadingDiffusion = st.downloadingDiffusion[model.model_id];
     const isDownloadingVae = st.downloadingVae[model.model_id];
-    const safeModelId = model.model_id.replace(/"/g, '"');
+    const safeModelId = escapeHtml(model.model_id);
     let downloadBtnHtml = "";
     if (downloaded) {
       downloadBtnHtml = '';
@@ -602,9 +613,9 @@ function renderModelTable() {
     } else if (downloadingProgress !== undefined) {
       downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" disabled>' + downloadingProgress + '%</button>';
     } else if (partSize && partSize > 0) {
-      downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-url="' + model.model_url.replace(/"/g, '"') + '" data-model-mmproj="' + (model.model_mmproj || '').replace(/"/g, '"') + '" data-model-diffusion="' + (model.model_diffusion || '').replace(/"/g, '"') + '" data-model-vae="' + (model.model_vae || '').replace(/"/g, '"') + '" data-model-type="' + (model.model_type || '').replace(/"/g, '"') + '" id="dl-' + safeModelId + '">继续下载</button>';
+      downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-url="' + escapeHtml(model.model_url) + '" data-model-mmproj="' + escapeHtml(model.model_mmproj || '') + '" data-model-diffusion="' + escapeHtml(model.model_diffusion || '') + '" data-model-vae="' + escapeHtml(model.model_vae || '') + '" data-model-type="' + escapeHtml(model.model_type || '') + '" id="dl-' + safeModelId + '">继续下载</button>';
     } else if (available) {
-      downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-url="' + model.model_url.replace(/"/g, '"') + '" data-model-mmproj="' + (model.model_mmproj || '').replace(/"/g, '"') + '" data-model-diffusion="' + (model.model_diffusion || '').replace(/"/g, '"') + '" data-model-vae="' + (model.model_vae || '').replace(/"/g, '"') + '" data-model-type="' + (model.model_type || '').replace(/"/g, '"') + '" id="dl-' + safeModelId + '">下载</button>';
+      downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-url="' + escapeHtml(model.model_url) + '" data-model-mmproj="' + escapeHtml(model.model_mmproj || '') + '" data-model-diffusion="' + escapeHtml(model.model_diffusion || '') + '" data-model-vae="' + escapeHtml(model.model_vae || '') + '" data-model-type="' + escapeHtml(model.model_type || '') + '" id="dl-' + safeModelId + '">下载</button>';
     } else {
       downloadBtnHtml = '<button class="btn btn-download" disabled>下载</button>';
     }
@@ -637,8 +648,8 @@ actionsHtml = '<button class="btn btn-view" id="view-' + safeModelId + '">查看
     const progressValue = downloadingProgress !== undefined ? downloadingProgress : 0;
 
     card.innerHTML =
-      '<div class="card-header"><span class="model-name" title="' + safeModelId + '">' + model.model_id + '</span>' + statusHtml + '</div>' +
-      '<div class="card-meta">' + (model.model_type || '-') + ' · ' + model.model_size + ' · 需内存 ' + model.need_ram + ' GB</div>' +
+      '<div class="card-header"><span class="model-name" title="' + safeModelId + '">' + escapeHtml(model.model_id) + '</span>' + statusHtml + '</div>' +
+      '<div class="card-meta">' + escapeHtml(model.model_type || '-') + ' · ' + escapeHtml(model.model_size) + ' · 需内存 ' + escapeHtml(model.need_ram) + ' GB</div>' +
       featuresHtml +
       '<div class="card-actions">' + downloadBtnHtml + actionsHtml + '</div>' +
       '<div class="card-progress" data-progress-wrap="' + safeModelId + '" style="display:' + (progressVisible ? 'block' : 'none') + ';">' +
