@@ -13,6 +13,10 @@ pub struct AgentServerSession {
     pub port: u16,
     /// SSE 转发任务停止标志
     pub sse_stop: Arc<AtomicBool>,
+    /// SSE 转发任务句柄：切换到不同工作区时 abort，立即断开旧连接。
+    /// 空闲 workspace 无事件到达时仅靠停止标志无法及时退出（僵尸连接会让
+    /// 被切走的 workspace "假活"，之后连接一断即被服务端 teardown → 404）
+    pub sse_task: Option<tokio::task::JoinHandle<()>>,
     /// 工作区 ID（admAgent server 启动时创建 / 连接的工作区）
     pub workspace_id: String,
     /// 客户端 ID（UUID）

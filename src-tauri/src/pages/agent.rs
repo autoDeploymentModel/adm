@@ -1371,21 +1371,23 @@ pub async fn start_agent_server(
 
     let sse_stop = Arc::new(AtomicBool::new(false));
 
+    let app2 = app.clone();
+    let ws_id = workspace_id.clone();
+    let cid = client_id.clone();
+    let sse_stop2 = sse_stop.clone();
+    let sse_task = tokio::spawn(async move {
+        let _ = forward_sse_events(&app2, port, &ws_id, &cid, sse_stop2).await;
+    });
+
     {
         let mut s = state.agent_session.lock().map_err(|e| e.to_string())?;
         *s = Some(AgentServerSession {
             child, port, sse_stop: sse_stop.clone(),
+            sse_task: Some(sse_task),
             workspace_id: workspace_id.clone(),
             client_id: client_id.clone(),
         });
     }
-
-    let app2 = app.clone();
-    let ws_id = workspace_id.clone();
-    let cid = client_id.clone();
-    tokio::spawn(async move {
-        let _ = forward_sse_events(&app2, port, &ws_id, &cid, sse_stop).await;
-    });
 
     app.emit("agent-server-ready",
         serde_json::json!({ "port": port, "workspace_id": &workspace_id })).ok();
@@ -1556,8 +1558,20 @@ pub async fn agent_subscribe_events(
     let mut s = state.agent_session.lock().map_err(|e| e.to_string())?;
     let sess = s.as_mut().ok_or("Agent server 未运行")?;
 
-    // 停止旧的 SSE 转发任务
+    // 停止旧的 SSE 转发任务（设标志，旧任务在下一个 chunk 到达时退出）
     sess.sse_stop.store(true, Ordering::Relaxed);
+    let old_task = sess.sse_task.take();
+    // 仅在切换到不同 workspace 时 abort 强制断开旧连接：
+    // - 不 abort：空闲 workspace 没有事件，旧连接无限期挂着→被切走的 workspace
+    //   靠僵尸连接"假活"，之后连接一断服务端立即 teardown，前端再用该 id 全是 404；
+    //   此时新 workspace 由创建 hold 保活（设置弹窗先 POST 创建再切换），不受影响。
+    // - 同 workspace 重订（页面挂载/断线重连）绝不能 abort：会产生零流间隙，
+    //   服务端引用计数归零直接 teardown 当前 workspace；若它是最后一个，
+    //   整个 server 立即自杀退出（表现为"admAgent 服务异常退出"）。
+    //   让旧任务凭 stop 标志自然退出，新旧流短暂重叠由服务端 streams 计数兼容。
+    if sess.workspace_id != workspace_id {
+        if let Some(task) = old_task { task.abort(); }
+    }
 
     // 创建新的停止标志并更新 session
     let new_sse_stop = Arc::new(AtomicBool::new(false));
@@ -1568,17 +1582,20 @@ pub async fn agent_subscribe_events(
 
     // 启动新的 SSE 转发任务
     let app2 = app.clone();
-    tokio::spawn(async move {
+    sess.sse_task = Some(tokio::spawn(async move {
         let _ = forward_sse_events(&app2, port, &workspace_id, &client_id, new_sse_stop).await;
-    });
+    }));
 
     Ok(())
 }
 
 #[tauri::command]
 pub async fn agent_unsubscribe_events(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
-    let s = state.agent_session.lock().map_err(|e| e.to_string())?;
-    if let Some(sess) = s.as_ref() { sess.sse_stop.store(true, Ordering::Relaxed); }
+    let mut s = state.agent_session.lock().map_err(|e| e.to_string())?;
+    if let Some(sess) = s.as_mut() {
+        sess.sse_stop.store(true, Ordering::Relaxed);
+        if let Some(task) = sess.sse_task.take() { task.abort(); }
+    }
     Ok(())
 }
 

@@ -59,25 +59,18 @@ export async function saveSettings() {
     // 如果工作目录发生了变化，切换 workspace
     if (workdir && workdir !== oldWorkdir && S.serverInfo && S.serverInfo.workspace_id) {
       try {
-        // 查找匹配的工作区
-        var newWsId = null;
-        var workspaces = await api("GET", "/v1/workspaces");
-        if (Array.isArray(workspaces)) {
-          var matched = workspaces.find(function(w) { return w.path === workdir; });
-          if (matched) newWsId = matched.id;
-        }
-        // 没有则创建
-        if (!newWsId) {
-          var newWs = await api("POST", "/v1/workspaces", {
-            path: workdir,
-            yolo: S.settings.agent_yolo || false,
-            client_id: S.clientId
-          });
-          newWsId = newWs.id;
-        }
+        // 直接 POST 创建：服务端按 path 原子去重（first-wins）并为本客户端注册创建 hold，
+        // 保证新 SSE 接上前 workspace 不会被回收。
+        // 不能用 GET 列表查找复用 id：列表里可能有靠残留连接"假活"的旧 workspace，
+        // 复用它不产生任何引用保护，随后被服务端 teardown 就会满屏 404
+        var newWs = await api("POST", "/v1/workspaces", {
+          path: workdir,
+          yolo: S.settings.agent_yolo || false,
+          client_id: S.clientId
+        });
         // 切换到新 workspace
-        if (newWsId) {
-          await switchToWorkspace(newWsId, workdir);
+        if (newWs && newWs.id) {
+          await switchToWorkspace(newWs.id, workdir);
         }
       } catch (e) {
         console.warn("[agent] 切换工作区失败:", e);

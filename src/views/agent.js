@@ -12,7 +12,7 @@ import { setupSSEListener } from "./agent/sse.js";
 import { syncYoloToServer } from "./agent/permission.js";
 import { loadTools, renderToolsList } from "./agent/tools.js";
 import { switchModel, refreshServerProviders, resolveAgentModel, updateModelDropdown, updateModelBtn } from "./agent/model.js";
-import { enableAutoCompact, switchToWorkspace, updateWorkspaceSelector } from "./agent/workspace.js";
+import { enableAutoCompact, updateWorkspaceSelector } from "./agent/workspace.js";
 import { showSettings, hideSettings, updateSettingsUI, saveSettings, checkAgentVersion, showAddModelDialog, hideAddModelDialog, addModel } from "./agent/settings_dialog.js";
 import { addPendingFiles } from "./agent/attach.js";
 
@@ -197,28 +197,7 @@ async function init() {
   // SSE 连接建立后重新加载工具列表，确保 skills_event 等发现事件不遗漏
   await loadTools();
 
-  // 工作区选择器点击
-  var wsSelector = document.getElementById("agent-workspace-selector");
-  var wsDropdown = document.getElementById("agent-workspace-dropdown");
-  if (wsSelector && wsDropdown) {
-    wsSelector.addEventListener("click", function(e) {
-      if (wsDropdown.contains(/** @type {Node} */ (e.target))) return;
-      wsDropdown.classList.toggle("show");
-    });
-    wsDropdown.addEventListener("click", function(e) {
-      var item = /** @type {HTMLElement} */ (e.target).closest(".workspace-dropdown-item");
-      if (!item) return;
-      var wsId = item.getAttribute("data-wsid");
-      var wsPath = item.getAttribute("data-wspath");
-      if (wsId && wsId !== S.serverInfo.workspace_id) {
-        wsDropdown.classList.remove("show");
-        switchToWorkspace(wsId, wsPath);
-      }
-    });
-    document.addEventListener("click", function(e) {
-      if (!wsSelector.contains(/** @type {Node} */ (e.target))) wsDropdown.classList.remove("show");
-    });
-  }
+  // 工作区选择器为纯展示，不支持点击切换（切换工作目录请去设置弹窗）
 
   // 检查项目初始化引导
   checkProjectInit();

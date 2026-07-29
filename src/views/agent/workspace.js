@@ -25,6 +25,9 @@ export async function enableAutoCompact() {
 }
 
 // ===== 工作区切换 =====
+// 仅供设置弹窗保存时调用（find-or-create 后传入新鲜的 wsId）；
+// 侧边栏工作区选择器为纯展示，不再支持点击切换
+// （服务端 workspace 在无 SSE 客户端时会被回收，下拉里的旧 id 必然失效）
 export async function switchToWorkspace(wsId, wsPath) {
   if (!wsId) return;
   console.log("[agent] 切换到工作区:", wsId, wsPath);
@@ -64,32 +67,11 @@ export async function switchToWorkspace(wsId, wsPath) {
   updateWorkspaceSelector();
 }
 
-// ===== 工作区选择器 =====
+// ===== 工作区展示（纯展示，不可点击切换） =====
 export function updateWorkspaceSelector() {
   var nameEl = document.getElementById("agent-workspace-name");
-  var dropdown = document.getElementById("agent-workspace-dropdown");
-  if (!nameEl || !dropdown) return;
+  if (!nameEl) return;
 
   nameEl.textContent = S.workspaceInfo ? S.workspaceInfo.name || "默认工作区" : "默认工作区";
   nameEl.title = S.workspaceInfo ? S.workspaceInfo.path || "" : "";
-
-  // 异步获取所有工作区并填充下拉
-  api("GET", "/v1/workspaces").then(function(workspaces) {
-    if (!Array.isArray(workspaces) || workspaces.length < 2) {
-      dropdown.innerHTML = "";
-      return;
-    }
-    var html = "";
-    for (var i = 0; i < workspaces.length; i++) {
-      var w = workspaces[i];
-      var active = w.id === (S.serverInfo ? S.serverInfo.workspace_id : null) ? ' class="workspace-dropdown-item active"' : ' class="workspace-dropdown-item"';
-      var name = w.path ? w.path.split(/[\\/]/).pop() : "工作区 " + (i + 1);
-      var path = w.path || "";
-      html += '<div' + active + ' data-wsid="' + w.id + '" data-wspath="' + path.replace(/"/g, "&quot;") + '">' +
-        '<span>' + name + '</span>' +
-        (path ? '<span class="workspace-dropdown-item-path">' + path + '</span>' : '') +
-        '</div>';
-    }
-    dropdown.innerHTML = html;
-  }).catch(function() {});
 }

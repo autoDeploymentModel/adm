@@ -272,11 +272,8 @@ export const template = `
     background: #0d1117;
     border: 1px solid #30363d;
     border-radius: 6px;
-    cursor: pointer;
-    position: relative;
     user-select: none;
   }
-  .workspace-selector:hover { border-color: #58a6ff; }
   .workspace-icon { font-size: 14px; }
   .workspace-name {
     flex: 1;
@@ -286,36 +283,6 @@ export const template = `
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .workspace-arrow { font-size: 10px; color: #8b949e; }
-  .workspace-dropdown {
-    display: none;
-    position: absolute;
-    bottom: 100%;
-    left: 0;
-    right: 0;
-    margin-bottom: 4px;
-    background: #161b22;
-    border: 1px solid #30363d;
-    border-radius: 6px;
-    max-height: 200px;
-    overflow-y: auto;
-    z-index: 100;
-  }
-  .workspace-dropdown.show { display: block; }
-  .workspace-dropdown-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 10px;
-    font-size: 12px;
-    color: #e0e0e0;
-    cursor: pointer;
-    border-bottom: 1px solid #21262d;
-  }
-  .workspace-dropdown-item:hover { background: #1c2128; }
-  .workspace-dropdown-item.active { color: #58a6ff; }
-  .workspace-dropdown-item:last-child { border-bottom: none; }
-  .workspace-dropdown-item-path { font-size: 11px; color: #8b949e; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   .settings-btn-sidebar {
     display: flex;
@@ -1184,8 +1151,6 @@ export const template = `
         <div class="workspace-selector" id="agent-workspace-selector">
           <span class="workspace-icon">📁</span>
           <span class="workspace-name" id="agent-workspace-name">默认工作区</span>
-          <span class="workspace-arrow">▾</span>
-          <div class="workspace-dropdown" id="agent-workspace-dropdown"></div>
         </div>
         <button class="settings-btn-sidebar" id="agent-settings-btn">
           <span>⚙</span>
