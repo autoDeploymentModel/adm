@@ -98,9 +98,18 @@ export async function refreshAgentInfo() {
 // admAgent.json 里没有、仅 CLI 能看到的内置模型也在其中）
 export async function refreshServerProviders() {
   if (!S.serverInfo || !S.serverInfo.workspace_id) return false;
+  var url = "/v1/workspaces/" + S.serverInfo.workspace_id + "/providers";
   try {
-    var list = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/providers");
+    var list = await api("GET", url);
     if (!Array.isArray(list)) return false;
+    // 自愈历史脏数据：旧版添加云端模型时把完整 provider（含 models 数组）同时写进了
+    // 服务端数据配置与 admAgent.json，两文件合并时数组被拼接，同一模型出现两次。
+    // 检测到 ADM 管理的 provider 存在重复 model id 时，从服务端数据配置移除该
+    // models 数组（模型定义以 admAgent.json 为准，/config/remove 会自动重载），再重取一次快照。
+    if (await cleanupDuplicatedProviderModels(list)) {
+      var relist = await api("GET", url);
+      if (Array.isArray(relist)) list = relist;
+    }
     S.serverProviders = list;
     S.serverProvidersLoaded = true;
     // 服务端快照中已出现的 provider 已完成确认，可解除待同步状态
@@ -111,6 +120,34 @@ export async function refreshServerProviders() {
   } catch (_) {
     return false; // 拉取失败时保留最后一次已确认快照
   }
+}
+
+// 检测并清理 /providers 快照里同一 provider 下重复的 model id（仅限 ADM 管理的
+// 云端 provider，避免误动内置 provider）。返回是否执行过清理。
+async function cleanupDuplicatedProviderModels(list) {
+  var cleaned = false;
+  for (var i = 0; i < list.length; i++) {
+    var sp = list[i];
+    if (!sp || !Array.isArray(sp.models)) continue;
+    if (!S.providers.some(function(p) { return p.key === sp.id; })) continue;
+    var seen = {};
+    var hasDup = sp.models.some(function(m) {
+      if (!m || !m.id) return false;
+      if (seen[m.id]) return true;
+      seen[m.id] = true;
+      return false;
+    });
+    if (!hasDup) continue;
+    try {
+      await api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/config/remove", {
+        scope: 0, key: "providers." + sp.id + ".models"
+      });
+      cleaned = true;
+    } catch (e) {
+      console.warn("[agent] 清理重复 provider models 失败:", sp.id, e);
+    }
+  }
+  return cleaned;
 }
 
 // 把前端 providerKey（"local" / "local:xxx" / "provider/model" / 云端 provider key）解析成
@@ -155,12 +192,17 @@ export function updateModelDropdown() {
   // 仅在没有 serverInfo 的离线状态下回退 admAgent.json 列表
   var cloudEntries = [];
   if (S.serverProvidersLoaded) {
+    var seenKeys = {};
     S.serverProviders.forEach(function(sp) {
       if (!sp || sp.id === "local") return;
       (Array.isArray(sp.models) ? sp.models : []).forEach(function(m) {
         if (!m || !m.id) return;
+        var key = sp.id + "/" + m.id;
+        // 兼容尚未自愈的历史重复数据：同一 provider/model 只展示一条
+        if (seenKeys[key]) return;
+        seenKeys[key] = true;
         cloudEntries.push({
-          key: sp.id + "/" + m.id,
+          key: key,
           providerId: sp.id,
           name: m.name || m.id,
           context_window: m.context_window || 0,

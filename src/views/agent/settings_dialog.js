@@ -192,20 +192,23 @@ export async function addModel() {
     var addResp = await invoke("add_cloud_provider", {
       input: { name: name, base_url: baseUrl, api_key: apiKey, context_window: ctx, model_id: modelId || null, supports_images: supportsImages }
     });
-    // 关键：把新 provider 同步写进运行中的 server（/config/set 会写盘并自动重载内存）。
+    // 关键：把新 provider 同步进运行中的 server（/config/set 会写盘并自动重载内存）。
     // 否则 server 只在启动时读 admAgent.json，选中新模型会报
-    // "active model provider not configured"，且后续 /agent/init 失败会把 coordinator 置空
+    // "active model provider not configured"，且后续 /agent/init 失败会把 coordinator 置空。
+    // 注意只写标量 api_key、不写完整 provider 对象：/config/set 落盘到服务端数据配置
+    // （Windows 为 %LOCALAPPDATA%/admAgent/admAgent.json），与 add_cloud_provider 写入的
+    // ~/.config/admAgent/admAgent.json 是两个文件，服务端加载时用 go-jsons 合并且
+    // 数组按「拼接」处理——完整 provider（含 models 数组）写两处会让同一模型在
+    // 下拉列表出现两次；写标量即可触发 SetConfigField 的自动重载，让服务端从磁盘
+    // 合并进 Rust 侧刚写入的完整 provider。
     var runtimeSynced = false;
     var syncError = null;
     if (addResp && addResp.key && S.serverInfo && S.serverInfo.workspace_id) {
       try {
         await api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/config/set", {
           scope: 0,
-          key: "providers." + addResp.key,
-          value: {
-            name: name, base_url: baseUrl, type: "openai-compat", api_key: apiKey,
-            models: [{ id: modelId, name: name, context_window: ctx, supports_images: supportsImages }]
-          }
+          key: "providers." + addResp.key + ".api_key",
+          value: apiKey
         });
         runtimeSynced = true;
         delete S.pendingProviderKeys[addResp.key];

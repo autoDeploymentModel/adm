@@ -934,6 +934,9 @@ export const template = `
   /* 云端模型管理 */
   .provider-list {
     margin-top: 8px;
+    /* 最多显示 3 个云端模型卡片（每张约 60px + 8px 间距），超出滚动 */
+    max-height: 196px;
+    overflow-y: auto;
   }
 
   .provider-card {
