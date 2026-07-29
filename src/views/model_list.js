@@ -771,7 +771,8 @@ function openImageGen(modelId) {
 
 function goModel(modelId) {
   const port = S().runningModelPort || 5678;
-  location.hash = "#/chat?model_id=" + encodeURIComponent(modelId) + "&port=" + port;
+  // 直接用系统浏览器打开模型 WebUI（壳层 openUrl 走 opener 插件）
+  window.openUrl("http://127.0.0.1:" + port);
 }
 
 function showDeleteConfirm(modelId) {

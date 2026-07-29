@@ -12,7 +12,7 @@
   所有前端源码在 `src/` 目录下，作为 `frontendDist` 原样提供。
 - **单窗口 SPA（单页应用）** + hash 路由：
   - `index.html`（外壳）含 `#view-root` 容器、底部硬件栏与导航。
-  - 5 个视图（`model_list` / `model_chat` / `model_image` / `settings` / `agent`）各自为独立 **ES 模块**（`src/views/*.js`），默认导出 `{ template, mount(root, params), unmount() }`。
+  - 4 个视图（`model_list` / `model_image` / `settings` / `agent`）各自为独立 **ES 模块**（`src/views/*.js`），默认导出 `{ template, mount(root, params), unmount() }`。模型运行后「查看模型」直接用系统浏览器打开 WebUI（`window.openUrl`），不再有 chat 视图。
   - `agent` 视图已拆分：`src/views/agent.js` 为入口（init/bindEvents/生命周期），具体逻辑在 `src/views/agent/` 子模块（state/template/api/utils/ui/render/session/attach/send/sse/permission/tools/model/workspace/settings_dialog）；跨模块共享状态统一挂在 `state.js` 的 `S` 对象上。
   - `index.html` 通过动态 `import()` 异步加载视图模块，把 `template`（含 `<style>` 的 HTML 字符串）注入 `#view-root`，调用 `mount`/`unmount` 管理生命周期。
 - CSS/JS **内联**在每个视图模块的 `template` 字符串或模块函数内，保持零运行时依赖。
@@ -34,7 +34,6 @@
 | `model_list.rs` | `fetch_model_list`, `scan_local_models`, `download_model`, `start_model`, `stop_model`, `get_model_status` |
 | `settings.rs` | `save_settings`（原子写入：`.tmp` + `rename`）, `load_settings`, `get_app_version`, `get_llamacpp_version` |
 | `model_image.rs` | `check_sd_exists`, `download_and_extract_sd`, `start_sd_generation`, `stop_sd` |
-| `model_chat.rs` | **零命令** — 纯事件驱动 |
 | `agent.rs` | `start_agent_server`, `stop_agent_server`, `get_agent_server_status`, `agent_http_request`, `agent_subscribe_events`, `agent_unsubscribe_events`, `check_adm_agent`, `download_adm_agent`, `add/list/update/delete_cloud_provider`, `prepare_adm_agent_config` |
 
 ## 关键注意事项
@@ -54,7 +53,6 @@
 - 图标：`python scripts/generate-icons.py` 从 `src-tauri/icons/source.png` 生成。
 
 ## 注意事项
-- 修改代码后记得同步更新本地改动日志 `doc/dev_log.md`。
 - admAgent api文档在 `doc/server-api.md`
 - llama-server cli 启动参数文档  windows在`doc/llamacpp.txt`，  macos在 `doc/llamacpp-macos.txt`
 - admAgent 源码在 `admAgent` 目录下，有不清楚的地方可以直接搜索源码确定后再决定怎么改，admAgent源码目录只能读，不能有任何修改和写入动作，如果真的发现是admAgent的问题，先列出问题和需要改动的地方给我审核
