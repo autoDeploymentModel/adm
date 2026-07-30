@@ -3,7 +3,7 @@ mod common;
 mod pages;
 
 use app_state::AppState;
-use pages::{agent, index, model_list, model_image, settings};
+use pages::{agent, index, model_list, model_image, settings, ilink};
 
 use tauri::Manager;
 use tauri::menu::{Menu, MenuItem};
@@ -77,6 +77,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_hwinfo::init())
         .manage(AppState::new())
+        .manage(ilink::IlinkManaged::default())
         .setup(|app| {
             // ===== 系统托盘 =====
             let show_item = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
@@ -126,6 +127,9 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+
+            // iLink 微信 Bot：已绑定且启用时自动恢复桥接（内部等待 admAgent 就绪）
+            ilink::auto_start(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -199,6 +203,15 @@ pub fn run() {
             agent::agent_unsubscribe_events,
             agent::get_adm_agent_logs,
             agent::export_agent_logs,
+            // ilink.rs - 微信 Bot 桥接
+            ilink::start_ilink_login,
+            ilink::cancel_ilink_login,
+            ilink::get_ilink_status,
+            ilink::start_ilink_bridge,
+            ilink::stop_ilink_bridge,
+            ilink::unbind_ilink,
+            ilink::set_ilink_follow,
+            ilink::set_ilink_current_session,
             // lib.rs (index.rs)
             index::minimize_to_tray,
         ])

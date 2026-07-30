@@ -225,6 +225,7 @@ const template = `
   <div id="settings-layout">
     <nav id="settings-nav">
       <div class="nav-item active" data-panel="launch-params" id="nav-launch-params">模型启动参数</div>
+      <div class="nav-item" data-panel="wxbot" id="nav-wxbot">微信 Bot</div>
       <div class="nav-item" data-panel="version" id="nav-version">系统版本号</div>
       <div class="nav-item" data-panel="about" id="nav-about">关于</div>
     </nav>
@@ -355,6 +356,58 @@ const template = `
         <button class="btn-reset" id="reset-btn">恢复默认</button>
       </div>
 
+      <div id="panel-wxbot" class="panel">
+        <div class="panel-title">微信 Bot（iLink）</div>
+
+        <div class="param-group">
+          <div class="param-group-title">绑定状态</div>
+          <div class="param-row">
+            <div class="param-label">状态</div>
+            <div class="param-input"><span id="wxbot-state" style="font-size:13px;color:#a0a0c0;">加载中…</span></div>
+          </div>
+          <div class="param-row">
+            <div class="param-label">Bot ID</div>
+            <div class="param-input"><span id="wxbot-botid" style="font-size:13px;color:#a0a0c0;">-</span></div>
+          </div>
+          <div class="param-row">
+            <div class="param-label">主人微信</div>
+            <div class="param-input">
+              <span id="wxbot-owner" style="font-size:13px;color:#a0a0c0;">-</span>
+              <div class="param-desc">首个给 Bot 发消息的微信号自动成为主人，其余人消息忽略</div>
+            </div>
+          </div>
+          <div class="param-row">
+            <div class="param-label">消息统计</div>
+            <div class="param-input"><span id="wxbot-stats" style="font-size:13px;color:#a0a0c0;">收 0 / 发 0</span></div>
+          </div>
+          <div class="param-row">
+            <div class="param-label"></div>
+            <div class="param-input" style="display:flex;gap:10px;max-width:none;">
+              <button id="wxbot-bind-btn" style="background:#6c63ff;color:#fff;border:none;padding:8px 20px;border-radius:8px;font-size:13px;cursor:pointer;">绑定微信</button>
+              <button id="wxbot-toggle-btn" style="display:none;background:rgba(255,255,255,0.1);color:#e0e0e0;border:none;padding:8px 20px;border-radius:8px;font-size:13px;cursor:pointer;">暂停</button>
+              <button id="wxbot-unbind-btn" class="btn-delete-llamacpp" style="display:none;padding:8px 20px;border-radius:8px;font-size:13px;">解绑</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="param-group">
+          <div class="param-group-title">Bot 行为</div>
+          <div class="param-row">
+            <div class="param-label">工作目录</div>
+            <div class="param-input"><span style="font-size:13px;color:#a0a0c0;">跟随 Agent 页工作目录</span><div class="param-desc">微信 Bot 与 Agent 页使用同一工作目录，在 Agent 页修改</div></div>
+          </div>
+          <div class="param-row">
+            <div class="param-label">权限</div>
+            <div class="param-input"><span style="font-size:13px;color:#a0a0c0;">跟随 Agent 页 YOLO 设置</span><div class="param-desc">开启 YOLO 则直通；未开启时微信收到权限请求回复 y/a/n 审批</div></div>
+          </div>
+        </div>
+
+        <div class="param-group">
+          <div class="param-group-title">最近活动</div>
+          <div id="wxbot-activity" style="font-size:12px;color:#8080a0;line-height:1.8;max-height:200px;overflow-y:auto;background:#0f3460;border:1px solid #2a2a4e;border-radius:6px;padding:10px 12px;">暂无活动</div>
+        </div>
+      </div>
+
       <div id="panel-version" class="panel">
         <div class="panel-title">系统版本号</div>
         <table class="version-table">
@@ -395,6 +448,19 @@ const template = `
     <div class="confirm-buttons">
       <button class="btn-cancel" id="confirm-cancel-btn">取消</button>
       <button class="btn-confirm" id="confirm-ok-btn">确定</button>
+    </div>
+  </div>
+</div>
+
+<div class="confirm-overlay" id="wxbot-qr-overlay">
+  <div class="confirm-dialog">
+    <div class="confirm-title">微信扫码绑定</div>
+    <div id="wxbot-qr-box" style="display:flex;justify-content:center;align-items:center;min-height:220px;width:220px;background:#fff;border-radius:8px;margin:0 auto 16px;">
+      <span style="color:#333;font-size:13px;">二维码加载中…</span>
+    </div>
+    <div class="confirm-message">使用微信「扫一扫」确认开启 Bot 功能</div>
+    <div class="confirm-buttons">
+      <button class="btn-cancel" id="wxbot-qr-cancel-btn">取消</button>
     </div>
   </div>
 </div>
@@ -695,14 +761,152 @@ async function checkUpdateNow() {
 
 function goBack() { location.hash = "#/list"; }
 
+// ===== 微信 Bot（iLink） =====
+
+let wxbotUnlistens = [];
+let wxbotActivities = [];
+
+function renderWxbotStatus(s) {
+  const stateEl = document.getElementById("wxbot-state");
+  if (!stateEl) return;
+  const map = {
+    stopped: s.bound ? "已暂停" : "未绑定",
+    waiting_scan: "等待扫码…",
+    running: "运行中",
+    error: "错误",
+  };
+  stateEl.textContent = (map[s.state] || s.state) + (s.error ? "：" + s.error : "");
+  stateEl.style.color = s.state === "running" ? "#4caf50" : (s.state === "error" ? "#f44336" : "#a0a0c0");
+  document.getElementById("wxbot-botid").textContent = s.bot_id || "-";
+  document.getElementById("wxbot-owner").textContent = s.owner || "-";
+  document.getElementById("wxbot-stats").textContent = "收 " + (s.msg_in || 0) + " / 发 " + (s.msg_out || 0);
+  const bindBtn = document.getElementById("wxbot-bind-btn");
+  const toggleBtn = document.getElementById("wxbot-toggle-btn");
+  const unbindBtn = document.getElementById("wxbot-unbind-btn");
+  bindBtn.textContent = s.bound ? "重新扫码" : "绑定微信";
+  toggleBtn.style.display = s.bound ? "" : "none";
+  toggleBtn.textContent = s.state === "running" ? "暂停" : "启动";
+  toggleBtn.dataset.running = s.state === "running" ? "1" : "0";
+  unbindBtn.style.display = s.bound ? "" : "none";
+}
+
+async function refreshWxbotStatus() {
+  try {
+    const s = await invoke()("get_ilink_status");
+    renderWxbotStatus(s);
+  } catch (e) {
+    console.error("[settings] 获取微信 Bot 状态失败:", e);
+  }
+}
+
+function showWxbotQr(payload) {
+  const overlay = document.getElementById("wxbot-qr-overlay");
+  const box = document.getElementById("wxbot-qr-box");
+  overlay.classList.add("show");
+  const img = payload && payload.qrcode_img ? String(payload.qrcode_img) : "";
+  const url = payload && payload.qrcode_url ? String(payload.qrcode_url) : "";
+  if (img) {
+    // qrcode_img_content 可能是 data URL / 图片地址 / 裸 base64
+    const src = img.startsWith("data:") ? img : (img.startsWith("http") ? img : "data:image/png;base64," + img);
+    box.innerHTML = '<img alt="二维码" style="width:200px;height:200px;" src="' + escHtml(src) + '">';
+  } else if (url) {
+    box.innerHTML = '<span style="color:#333;font-size:12px;word-break:break-all;padding:8px;">' + escHtml(url) + "</span>";
+  } else {
+    box.innerHTML = '<span style="color:#333;font-size:13px;">二维码加载中…</span>';
+  }
+}
+
+function hideWxbotQr() {
+  const overlay = document.getElementById("wxbot-qr-overlay");
+  if (overlay) overlay.classList.remove("show");
+}
+
+function pushWxbotActivity(p) {
+  wxbotActivities.unshift(p);
+  if (wxbotActivities.length > 50) wxbotActivities.pop();
+  const el = document.getElementById("wxbot-activity");
+  if (!el) return;
+  el.innerHTML = wxbotActivities.map(function (a) {
+    const t = new Date(a.ts || Date.now());
+    const hh = ("0" + t.getHours()).slice(-2) + ":" + ("0" + t.getMinutes()).slice(-2) + ":" + ("0" + t.getSeconds()).slice(-2);
+    const dir = a.direction === "in" ? "⬅️ 收" : (a.direction === "out" ? "➡️ 发" : "⚠️");
+    return "<div>[" + hh + "] " + dir + " " + escHtml(a.summary || "") + "</div>";
+  }).join("");
+}
+
+async function setupWxbotPanel() {
+  document.getElementById("wxbot-bind-btn").addEventListener("click", async function () {
+    try {
+      showWxbotQr(null);
+      await invoke()("start_ilink_login");
+    } catch (e) {
+      hideWxbotQr();
+      showToast("启动绑定失败: " + e, true);
+    }
+  });
+  document.getElementById("wxbot-qr-cancel-btn").addEventListener("click", async function () {
+    hideWxbotQr();
+    try { await invoke()("cancel_ilink_login"); } catch (_) {}
+  });
+  document.getElementById("wxbot-toggle-btn").addEventListener("click", async function () {
+    const running = this.dataset.running === "1";
+    try {
+      if (running) {
+        await invoke()("stop_ilink_bridge");
+        showToast("微信 Bot 已暂停");
+      } else {
+        await invoke()("start_ilink_bridge");
+        showToast("微信 Bot 已启动");
+      }
+    } catch (e) {
+      showToast("操作失败: " + e, true);
+    }
+    refreshWxbotStatus();
+  });
+  document.getElementById("wxbot-unbind-btn").addEventListener("click", async function () {
+    const ok = await showConfirmDialog("确定要解绑微信 Bot 吗？\n解绑将删除登录凭据与会话映射，需重新扫码才能使用。");
+    if (!ok) return;
+    try {
+      await invoke()("unbind_ilink");
+      showToast("已解绑微信 Bot");
+    } catch (e) {
+      showToast("解绑失败: " + e, true);
+    }
+    refreshWxbotStatus();
+  });
+
+  // 事件订阅（unmount 时统一释放，防重复绑定）
+  try {
+    const un1 = await window.__adm_listen("ilink-status", function (ev) {
+      const p = ev.payload || {};
+      if (p.state === "waiting_scan") {
+        showWxbotQr(p);
+      } else {
+        hideWxbotQr();
+        if (p.state === "running") showToast("微信 Bot 已连接");
+        if (p.state === "error" && p.error) showToast("微信 Bot: " + p.error, true);
+      }
+      refreshWxbotStatus();
+    });
+    wxbotUnlistens.push(un1);
+    const un2 = await window.__adm_listen("ilink-activity", function (ev) {
+      pushWxbotActivity(ev.payload || {});
+    });
+    wxbotUnlistens.push(un2);
+  } catch (e) {
+    console.error("[settings] 订阅微信 Bot 事件失败:", e);
+  }
+  refreshWxbotStatus();
+}
+
 export default {
   template,
   mount(root) {
     console.log("[settings] mount()");
     root.innerHTML = template;
 
-    // 禁用页面右键（屏蔽浏览器默认菜单；#confirm-overlay 是 #settings-app 的兄弟节点，需各自绑定）
-    ["settings-app", "confirm-overlay"].forEach(function(id) {
+    // 禁用页面右键（屏蔽浏览器默认菜单；#confirm-overlay / #wxbot-qr-overlay 是 #settings-app 的兄弟节点，需各自绑定）
+    ["settings-app", "confirm-overlay", "wxbot-qr-overlay"].forEach(function(id) {
       var el = document.getElementById(id);
       if (el) el.addEventListener("contextmenu", function(e) { e.preventDefault(); });
     });
@@ -726,6 +930,7 @@ export default {
     document.getElementById("confirm-ok-btn").addEventListener("click", function() { closeConfirmDialog(true); });
 
     setupAutoSave();
+    setupWxbotPanel();
 
     (async function() {
       try {
@@ -742,5 +947,11 @@ export default {
   },
   unmount() {
     console.log("[settings] unmount()");
+    // 释放微信 Bot 事件监听，防止重复绑定泄漏
+    wxbotUnlistens.forEach(function (un) {
+      try { un(); } catch (_) {}
+    });
+    wxbotUnlistens = [];
+    wxbotActivities = [];
   }
 };

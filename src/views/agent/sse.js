@@ -4,7 +4,7 @@ import { api } from "./api.js";
 import { getTextFromParts } from "./utils.js";
 import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, updateContextUsage } from "./ui.js";
 import { renderMessages, renderTodos } from "./render.js";
-import { loadConversations, refreshMessages, renderConversationList } from "./session.js";
+import { loadConversations, refreshMessages, renderConversationList, selectConversation, syncWxFollowSession } from "./session.js";
 import { showPermissionDialog, resetPermissionState } from "./permission.js";
 import { loadTools } from "./tools.js";
 import { refreshAgentInfo, reloadAgentConfig } from "./model.js";
@@ -86,6 +86,16 @@ function handleSSEEvent(payload) {
       // 只有实际运行会话的消息才能续期其安全计时器，其他会话事件不得干扰
       if (S.isSending && S.activeRun && (!actualData.session_id || actualData.session_id === S.activeRun.sessionId)) {
         startSendSafetyTimer();
+      }
+      // 未打开任何会话时，后台会话（如微信 Bot）来消息 → 自动打开该会话实时跟踪
+      if (!S.currentConvId && actualData.session_id) {
+        selectConversation(actualData.session_id);
+        break; // selectConversation 会拉取全量消息，本条事件无需重复处理
+      }
+      // SSE 是工作区级广播：非当前打开会话的消息（如微信 Bot 会话的运行）不得进入当前消息列表，
+      // 否则先被 push 显示、run_complete 后 refreshMessages 按当前会话拉取又被清掉（表现为消息闪现后消失）
+      if (actualData.session_id && actualData.session_id !== S.currentConvId) {
+        break;
       }
       handleMessageSSEEvent(innerType, actualData);
       break;
@@ -238,6 +248,7 @@ function handleSessionSSEEvent(action, sessData) {
     if (S.currentConvId === sessData.id) {
       resetPermissionState();
       S.currentConvId = null;
+      syncWxFollowSession();
       S.currentConv = null;
       S.messages = [];
       renderMessages();

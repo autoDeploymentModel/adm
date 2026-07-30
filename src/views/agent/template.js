@@ -541,6 +541,25 @@ export const template = `
   .toolbar-mode-btn.yolo { background: #e85d3a; color: #fff; }
   .toolbar-mode-btn.yolo:hover { background: #c94e30; }
 
+  /* 微信消息跟随开关（模型选择旁）：开启时微信 Bot 消息注入当前打开的会话 */
+  .toolbar-wx-btn {
+    background: rgba(255,255,255,0.08);
+    border: none;
+    color: #a0a0c0;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .toolbar-wx-btn:hover { background: rgba(255,255,255,0.15); }
+  .toolbar-wx-btn.on { background: #07c160; color: #fff; }
+  .toolbar-wx-btn.on:hover { background: #06a552; }
+
   .toolbar-model-selector {
     position: relative;
   }
@@ -1212,6 +1231,11 @@ export const template = `
             <div class="model-dropdown" id="agent-model-dropdown">
             </div>
           </div>
+          <!-- ②b 微信消息开关：开 = 微信 Bot 消息进入当前打开的会话；关 = 不接收微信消息 -->
+          <button class="toolbar-wx-btn" id="agent-wx-follow-btn" title="微信消息开关：开启后微信 Bot 消息进入当前打开的会话；关闭后不再接收微信消息">
+            <span class="wx-icon">💬</span>
+            <span class="wx-text">微信</span>
+          </button>
           <!-- ③ 上下文用量 -->
           <div class="toolbar-context-usage" id="agent-context-usage">
             <span class="usage-current">0</span>

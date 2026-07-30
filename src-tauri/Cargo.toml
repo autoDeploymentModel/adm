@@ -36,3 +36,4 @@ zip = "0.6"
 flate2 = "1.0"
 tar = "0.4"
 rand = "0.8"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }

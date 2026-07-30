@@ -270,6 +270,36 @@ function bindEvents() {
   // 新会话
   document.getElementById("agent-new-chat").addEventListener("click", newConversation);
 
+  // 微信消息开关（模型选择旁）：开 = 微信 Bot 消息注入当前打开的会话
+  // 只有微信 Bot 服务已启动（state===running）才允许开启；未启动弹提示引导去设置页。
+  (function() {
+    var wxBtn = document.getElementById("agent-wx-follow-btn");
+    if (!wxBtn) return;
+    // 读取持久化的开关状态（仅当服务运行中时才显示为开）
+    invoke("get_ilink_status").then(function(st) {
+      wxBtn.classList.toggle("on", !!(st && st.follow && st.state === "running"));
+    }).catch(function() {});
+    wxBtn.addEventListener("click", async function() {
+      var turningOn = !wxBtn.classList.contains("on");
+      if (turningOn) {
+        // 开启前先确认微信 Bot 服务已绑定且运行中
+        var st = null;
+        try { st = await invoke("get_ilink_status"); } catch (_) {}
+        if (!st || !st.bound || st.state !== "running") {
+          showConfirm("微信 Bot 服务未启动。请先到「设置 → 微信 Bot」扫码绑定并启动服务，再开启微信消息接收。", function() {});
+          return; // 不打开开关
+        }
+      }
+      wxBtn.classList.toggle("on", turningOn);
+      try {
+        await invoke("set_ilink_follow", { enabled: turningOn });
+      } catch (e) {
+        wxBtn.classList.toggle("on", !turningOn); // 失败回滚显示
+        showError("切换微信消息开关失败: " + e);
+      }
+    });
+  })();
+
   // 会话视图切换
   document.querySelectorAll(".toggle-item").forEach(function(item) {
     item.addEventListener("click", function() {

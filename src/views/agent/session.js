@@ -1,10 +1,17 @@
 // 会话管理：列表 / 选择 / 新建 / 消息刷新 / 上下文估算
-import { S } from "./state.js";
+import { S, invoke } from "./state.js";
 import { api } from "./api.js";
 import { escapeHtml, formatTime } from "./utils.js";
 import { showError, showConfirm, exitManualScrollMode, clearErrorNotices, updateContextUsage } from "./ui.js";
 import { renderMessages, renderTodos } from "./render.js";
 import { resetPermissionState } from "./permission.js";
+
+// 同步当前会话 ID 给微信 Bridge（跟随模式下微信消息以此为目标会话）；fire-and-forget
+export function syncWxFollowSession() {
+  try {
+    invoke("set_ilink_current_session", { sessionId: S.currentConvId || "" }).catch(function() {});
+  } catch (_) {}
+}
 
 // ===== 会话管理 =====
 export async function loadConversations(restoreCurrent) {
@@ -150,6 +157,7 @@ function handleConvAction(action, convId) {
             if (S.currentConvId === convId) {
               resetPermissionState();
               S.currentConvId = null;
+              syncWxFollowSession();
               S.currentConv = null;
               S.messages = [];
               renderMessages();
@@ -167,6 +175,7 @@ function handleConvAction(action, convId) {
 export async function selectConversation(convId) {
   if (convId !== S.currentConvId) { resetPermissionState(); exitManualScrollMode(); clearErrorNotices(); }
   S.currentConvId = convId;
+  syncWxFollowSession();
   renderConversationList();
 
   try {
@@ -222,6 +231,7 @@ export async function newConversation() {
     exitManualScrollMode();
     clearErrorNotices();
     S.currentConvId = resp.id;
+    syncWxFollowSession();
     S.messages = [];
     S.currentConv = resp;
     S.contextUsage.used = 0;
