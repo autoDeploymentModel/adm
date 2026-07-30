@@ -87,7 +87,7 @@ export function renderConversationList() {
 
   if (list.length === 0) {
     var emptyText = S.sessionViewMode === "current" ? "当前无选中会话" : "暂无会话";
-    container.innerHTML = '<div style="padding:12px 14px;color:#6e7681;font-size:12px;">' + emptyText + '</div>';
+    container.innerHTML = '<div style="padding:12px 14px;color:var(--c-text-4);font-size:12px;">' + emptyText + '</div>';
     return;
   }
 

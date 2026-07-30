@@ -114,7 +114,7 @@ function renderProviderList() {
   container.innerHTML = "";
 
   if (S.providers.length === 0) {
-    container.innerHTML = '<div style="color:#6e7681;font-size:12px;padding:8px 0;">暂无云端模型</div>';
+    container.innerHTML = '<div style="color:var(--c-text-4);font-size:12px;padding:8px 0;">暂无云端模型</div>';
     return;
   }
 

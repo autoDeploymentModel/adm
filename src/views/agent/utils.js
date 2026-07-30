@@ -105,11 +105,11 @@ export function renderMarkdown(text) {
 
   // 代码块 ```language\ncode```
   html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, function(_, lang, code) {
-    return '<pre style="background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:10px;margin:8px 0;overflow-x:auto;font-size:12px;"><code>' + code.trim() + "</code></pre>";
+    return '<pre style="background:var(--c-bg-deep);border:1px solid var(--c-border);border-radius:6px;padding:10px;margin:8px 0;overflow-x:auto;font-size:12px;"><code>' + code.trim() + "</code></pre>";
   });
 
   // 行内代码 `code`
-  html = html.replace(/`([^`]+)`/g, '<code style="background:#0d1117;padding:2px 6px;border-radius:3px;font-size:12px;">$1</code>');
+  html = html.replace(/`([^`]+)`/g, '<code style="background:var(--c-bg-deep);padding:2px 6px;border-radius:3px;font-size:12px;">$1</code>');
 
   // 标题 ### / ## / #
   html = html.replace(/^### (.+)$/gm, '<h3 style="margin:12px 0 6px;font-size:15px;">$1</h3>');
@@ -128,7 +128,7 @@ export function renderMarkdown(text) {
   // 链接 [text](url)：仅放行 http(s)，阻断 javascript:/data: 等危险协议
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function(_, text, url) {
     var safe = /^https?:\/\//i.test(url.trim()) ? url : "#";
-    return '<a href="' + safe + '" style="color:#6c63ff;text-decoration:none;" target="_blank">' + text + '</a>';
+    return '<a href="' + safe + '" style="color:var(--c-accent);text-decoration:none;" target="_blank">' + text + '</a>';
   });
 
   // 换行

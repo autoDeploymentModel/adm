@@ -65,7 +65,7 @@ export function showCopyPasteMenu(e, targetInput) {
   if (old) old.remove();
   var menu = document.createElement("div");
   menu.id = "agent-ctx-menu";
-  menu.style.cssText = "position:fixed;background:#1c2331;border:1px solid #30363d;border-radius:8px;padding:4px 0;z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,0.4);min-width:100px;";
+  menu.style.cssText = "position:fixed;background:var(--c-raise);border:1px solid var(--c-border);border-radius:8px;padding:4px 0;z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,0.4);min-width:100px;";
   menu.style.left = e.clientX + "px";
   menu.style.top = e.clientY + "px";
 
@@ -103,8 +103,8 @@ export function showCopyPasteMenu(e, targetInput) {
   items.forEach(function(it) {
     var mi = document.createElement("div");
     mi.textContent = it.label;
-    mi.style.cssText = "padding:6px 16px;font-size:12px;cursor:pointer;color:#b0b8c8;";
-    mi.addEventListener("mouseenter", function() { mi.style.background = "#2a3344"; });
+    mi.style.cssText = "padding:6px 16px;font-size:12px;cursor:pointer;color:var(--c-text-2);";
+    mi.addEventListener("mouseenter", function() { mi.style.background = "var(--c-raise-2)"; });
     mi.addEventListener("mouseleave", function() { mi.style.background = "transparent"; });
     mi.addEventListener("click", function() {
       menu.remove();

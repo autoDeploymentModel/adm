@@ -6,7 +6,7 @@ const template = `
   .page-title {
     font-size: 18px;
     font-weight: 600;
-    color: #ffffff;
+    color: var(--c-text-hi);
     display: flex;
     align-items: center;
     gap: 8px;
@@ -19,7 +19,7 @@ const template = `
     display: inline-block;
     width: 4px;
     height: 18px;
-    background: #6c63ff;
+    background: var(--c-accent);
     border-radius: 2px;
   }
 
@@ -50,8 +50,8 @@ const template = `
 
   .model-card {
     position: relative;
-    background: #16213e;
-    border: 1px solid #2a2a4e;
+    background: var(--c-panel);
+    border: 1px solid var(--c-border);
     border-radius: 10px;
     padding: 16px;
     display: flex;
@@ -62,7 +62,7 @@ const template = `
   }
 
   .model-card:hover {
-    border-color: #6c63ff;
+    border-color: var(--c-accent);
     transform: translateY(-2px);
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
   }
@@ -94,7 +94,7 @@ const template = `
   .model-name {
     font-weight: 600;
     font-size: 15px;
-    color: #ffffff;
+    color: var(--c-text-hi);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -103,7 +103,7 @@ const template = `
 
   .card-meta {
     font-size: 13px;
-    color: #a0a0c0;
+    color: var(--c-text-2);
   }
 
   .card-features {
@@ -118,7 +118,7 @@ const template = `
     align-items: center;
     gap: 6px;
     flex-wrap: wrap;
-    border-top: 1px solid #1a1a3e;
+    border-top: 1px solid var(--c-border-soft);
     padding-top: 12px;
     margin-top: auto;
   }
@@ -129,13 +129,13 @@ const template = `
     right: 0;
     bottom: 0;
     height: 3px;
-    background: rgba(108, 99, 255, 0.15);
+    background: rgba(var(--c-accent-rgb), 0.15);
   }
 
   .card-progress-fill {
     height: 100%;
     width: 0;
-    background: #6c63ff;
+    background: var(--c-accent);
     transition: width 0.3s ease;
   }
 
@@ -143,7 +143,7 @@ const template = `
     grid-column: 1 / -1;
     text-align: center;
     padding: 40px;
-    color: #a0a0c0;
+    color: var(--c-text-2);
   }
 
   .feature-badge {
@@ -203,12 +203,12 @@ const template = `
   }
 
   .btn-download {
-    background: #6c63ff;
+    background: var(--c-accent);
     color: #fff;
   }
 
   .btn-download:hover:not(:disabled) {
-    background: #5a52d5;
+    background: var(--c-accent-2);
   }
 
   .btn-download.downloaded {
@@ -265,7 +265,7 @@ const template = `
   }
 
   .modal-box {
-    background: #16213e;
+    background: var(--c-panel);
     border-radius: 12px;
     padding: 24px;
     min-width: 360px;
@@ -279,7 +279,7 @@ const template = `
   }
 
   .modal-box p {
-    color: #a0a0c0;
+    color: var(--c-text-2);
     font-size: 14px;
     margin-bottom: 20px;
   }
@@ -296,12 +296,12 @@ const template = `
   }
 
   .btn-cancel {
-    background: #2a2a4e;
-    color: #e0e0e0;
+    background: var(--c-border);
+    color: var(--c-text);
   }
 
   .btn-cancel:hover {
-    background: #3a3a5e;
+    background: var(--c-border-hi);
   }
 
   .btn-confirm-delete {
@@ -317,7 +317,7 @@ const template = `
     grid-column: 1 / -1;
     text-align: center;
     padding: 60px 20px;
-    color: #606080;
+    color: var(--c-text-4);
   }
 
   .empty-state p {
@@ -328,8 +328,8 @@ const template = `
     display: inline-block;
     width: 16px;
     height: 16px;
-    border: 2px solid rgba(108, 99, 255, 0.3);
-    border-top-color: #6c63ff;
+    border: 2px solid rgba(var(--c-accent-rgb), 0.3);
+    border-top-color: var(--c-accent);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
     margin-right: 8px;
@@ -394,14 +394,14 @@ const template = `
 
   .filter-bar label {
     font-size: 13px;
-    color: #a0a0c0;
+    color: var(--c-text-2);
     white-space: nowrap;
   }
 
   .filter-bar select {
-    background: #16213e;
-    color: #e0e0e0;
-    border: 1px solid #2a2a4e;
+    background: var(--c-panel);
+    color: var(--c-text);
+    border: 1px solid var(--c-border);
     border-radius: 6px;
     padding: 6px 12px;
     font-size: 13px;
@@ -411,12 +411,12 @@ const template = `
   }
 
   .filter-bar select:focus {
-    border-color: #6c63ff;
+    border-color: var(--c-accent);
   }
 
   .filter-bar .model-desc-text {
     font-size: 13px;
-    color: #8080a0;
+    color: var(--c-text-3);
     padding: 6px 0;
     flex: 1;
     overflow: hidden;

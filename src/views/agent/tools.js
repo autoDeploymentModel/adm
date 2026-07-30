@@ -124,7 +124,7 @@ export function renderToolsList() {
   container.innerHTML = "";
 
   if (tools.length === 0) {
-    container.innerHTML = '<div class="tool-item"><span class="tool-dot gray"></span><span class="tool-name" style="color:#6e7681;">暂无工具</span></div>';
+    container.innerHTML = '<div class="tool-item"><span class="tool-dot gray"></span><span class="tool-name" style="color:var(--c-text-4);">暂无工具</span></div>';
     return;
   }
 

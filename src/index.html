@@ -5,6 +5,68 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ADM</title>
   <style>
+    /* ===== 主题变量：默认「暗夜紫」，其余主题通过 <html data-theme> 覆盖 =====
+       全部前端视图内联在同一文档中，故 :root 变量对所有视图（含 agent）生效 */
+    :root {
+      --c-bg: #1a1a2e;
+      --c-bg-deep: #0d1117;
+      --c-panel: #16213e;
+      --c-panel-2: #0f3460;
+      --c-raise: #1c2331;
+      --c-raise-2: #21262d;
+      --c-border: #2a2a4e;
+      --c-border-soft: #1a1a3e;
+      --c-border-hi: #3a3a5e;
+      --c-accent: #6c63ff;
+      --c-accent-2: #5a52d5;
+      --c-accent-rgb: 108, 99, 255;
+      --c-text: #e0e0e0;
+      --c-text-2: #a0a0c0;
+      --c-text-3: #8080a0;
+      --c-text-4: #606080;
+      --c-text-hi: #ffffff;
+      --c-overlay: rgba(255, 255, 255, 0.1);
+      --c-overlay-strong: rgba(255, 255, 255, 0.2);
+    }
+    html[data-theme="vscode"] {
+      --c-bg: #1e1e1e; --c-bg-deep: #181818; --c-panel: #252526; --c-panel-2: #2d2d30;
+      --c-raise: #2a2d2e; --c-raise-2: #37373d; --c-border: #3c3c3c; --c-border-soft: #2b2b2b;
+      --c-border-hi: #4e4e52; --c-accent: #4a9eff; --c-accent-2: #3b82d6; --c-accent-rgb: 74, 158, 255;
+      --c-text: #d4d4d4; --c-text-2: #a6a6a6; --c-text-3: #858585; --c-text-4: #6a6a6a; --c-text-hi: #ffffff;
+    }
+    html[data-theme="onedark"] {
+      --c-bg: #282c34; --c-bg-deep: #21252b; --c-panel: #21252b; --c-panel-2: #2c313a;
+      --c-raise: #2c313a; --c-raise-2: #3a3f4b; --c-border: #3a3f4b; --c-border-soft: #21252b;
+      --c-border-hi: #4b5263; --c-accent: #61afef; --c-accent-2: #4d8fce; --c-accent-rgb: 97, 175, 239;
+      --c-text: #abb2bf; --c-text-2: #9da5b4; --c-text-3: #7f848e; --c-text-4: #5c6370; --c-text-hi: #ffffff;
+    }
+    html[data-theme="light"] {
+      --c-bg: #ffffff; --c-bg-deep: #f6f8fa; --c-panel: #f3f3f3; --c-panel-2: #ffffff;
+      --c-raise: #eaeaea; --c-raise-2: #e1e4e8; --c-border: #d0d7de; --c-border-soft: #e1e4e8;
+      --c-border-hi: #bcc4cc; --c-accent: #0066b8; --c-accent-2: #005a9e; --c-accent-rgb: 0, 102, 184;
+      --c-text: #1f2328; --c-text-2: #4b5563; --c-text-3: #6a737d; --c-text-4: #8a94a0; --c-text-hi: #000000;
+      --c-overlay: rgba(0, 0, 0, 0.05); --c-overlay-strong: rgba(0, 0, 0, 0.1);
+    }
+    html[data-theme="sepia"] {
+      --c-bg: #fdf6e3; --c-bg-deep: #f4ecd8; --c-panel: #eee8d5; --c-panel-2: #fbf6e6;
+      --c-raise: #e7dfc6; --c-raise-2: #ddd6bd; --c-border: #ddd2b0; --c-border-soft: #e7ddc4;
+      --c-border-hi: #cabf98; --c-accent: #b5651d; --c-accent-2: #99551a; --c-accent-rgb: 181, 101, 29;
+      --c-text: #586e75; --c-text-2: #657b83; --c-text-3: #839496; --c-text-4: #93a1a1; --c-text-hi: #073642;
+      --c-overlay: rgba(101, 90, 40, 0.08); --c-overlay-strong: rgba(101, 90, 40, 0.16);
+    }
+    html[data-theme="github"] {
+      --c-bg: #0d1117; --c-bg-deep: #010409; --c-panel: #161b22; --c-panel-2: #21262d;
+      --c-raise: #1c2128; --c-raise-2: #21262d; --c-border: #30363d; --c-border-soft: #21262d;
+      --c-border-hi: #444c56; --c-accent: #4493f8; --c-accent-2: #2f81f7; --c-accent-rgb: 68, 147, 248;
+      --c-text: #c9d1d9; --c-text-2: #adbac7; --c-text-3: #8b949e; --c-text-4: #6e7681; --c-text-hi: #ffffff;
+    }
+    html[data-theme="dracula"] {
+      --c-bg: #282a36; --c-bg-deep: #21222c; --c-panel: #21222c; --c-panel-2: #343746;
+      --c-raise: #343746; --c-raise-2: #44475a; --c-border: #44475a; --c-border-soft: #343746;
+      --c-border-hi: #6272a4; --c-accent: #bd93f9; --c-accent-2: #a77bea; --c-accent-rgb: 189, 147, 249;
+      --c-text: #f8f8f2; --c-text-2: #d5d6e0; --c-text-3: #a0a1b8; --c-text-4: #6272a4; --c-text-hi: #ffffff;
+    }
+
     * {
       margin: 0;
       padding: 0;
@@ -13,8 +75,8 @@
 
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      background: #1a1a2e;
-      color: #e0e0e0;
+      background: var(--c-bg);
+      color: var(--c-text);
       height: 100vh;
       display: flex;
       flex-direction: column;
@@ -34,7 +96,7 @@
       overflow: hidden;
       display: flex;
       flex-direction: column;
-      background: #1a1a2e;
+      background: var(--c-bg);
     }
 
     #view-root.hidden { display: none; }
@@ -43,11 +105,11 @@
       display: flex;
       align-items: center;
       gap: 0;
-      background: #0f3460;
+      background: var(--c-panel-2);
       padding: 4px 16px;
       font-size: 12px;
-      color: #a0a0c0;
-      border-top: 1px solid #1a1a3e;
+      color: var(--c-text-2);
+      border-top: 1px solid var(--c-border-soft);
       flex-shrink: 0;
     }
 
@@ -57,7 +119,7 @@
       cursor: pointer;
       font-size: 13px;
       padding: 2px 10px;
-      border-right: 1px solid #2a2a4e;
+      border-right: 1px solid var(--c-border);
       margin-right: 10px;
       transition: color 0.2s;
       display: flex;
@@ -79,21 +141,21 @@
     #home-btn:hover,
     #settings-btn:hover,
     #agent-btn:hover {
-      color: #6c63ff;
+      color: var(--c-accent);
     }
 
     #home-btn.active,
     #settings-btn.active,
     #agent-btn.active {
-      background: rgba(108, 99, 255, 0.20);
-      color: #ffffff;
+      background: rgba(var(--c-accent-rgb), 0.20);
+      color: var(--c-text-hi);
       border-radius: 6px;
       border-right-color: transparent;
     }
     #home-btn.active .btn-icon,
     #settings-btn.active .btn-icon,
     #agent-btn.active .btn-icon {
-      color: #6c63ff;
+      color: var(--c-accent);
     }
 
     #hw-items {
@@ -104,7 +166,7 @@
 
     .hw-item {
       padding: 0 12px;
-      border-right: 1px solid #2a2a4e;
+      border-right: 1px solid var(--c-border);
     }
 
     .hw-item:last-child {
@@ -112,7 +174,7 @@
     }
 
     .hw-label {
-      color: #c0c0e0;
+      color: var(--c-text-2);
       margin-right: 4px;
       white-space: nowrap;
       max-width: 200px;
@@ -123,7 +185,7 @@
     }
 
     .hw-value {
-      color: #f0f0ff;
+      color: var(--c-text-hi);
       font-weight: 600;
     }
 
@@ -144,8 +206,8 @@
       display: flex;
     }
     #update-dialog {
-      background: #16213e;
-      border: 1px solid #2a2a4e;
+      background: var(--c-panel);
+      border: 1px solid var(--c-border);
       border-radius: 12px;
       padding: 28px 32px;
       max-width: 460px;
@@ -153,28 +215,28 @@
       box-shadow: 0 8px 32px rgba(0,0,0,0.5);
     }
     #update-dialog .update-icon { font-size: 40px; text-align: center; margin-bottom: 12px; }
-    #update-dialog .update-title { font-size: 20px; font-weight: 600; color: #ffffff; text-align: center; margin-bottom: 8px; }
-    #update-dialog .update-desc { font-size: 14px; color: #a0a0c0; text-align: center; margin-bottom: 20px; line-height: 1.6; }
+    #update-dialog .update-title { font-size: 20px; font-weight: 600; color: var(--c-text-hi); text-align: center; margin-bottom: 8px; }
+    #update-dialog .update-desc { font-size: 14px; color: var(--c-text-2); text-align: center; margin-bottom: 20px; line-height: 1.6; }
     #update-dialog .update-info-row { display: flex; justify-content: center; gap: 24px; margin-bottom: 20px; font-size: 13px; }
     #update-dialog .update-info-row .info-item { text-align: center; }
-    #update-dialog .update-info-row .info-label { color: #8080a0; font-size: 11px; }
-    #update-dialog .update-info-row .info-value { color: #e0e0e0; font-weight: 500; margin-top: 2px; }
+    #update-dialog .update-info-row .info-label { color: var(--c-text-3); font-size: 11px; }
+    #update-dialog .update-info-row .info-value { color: var(--c-text); font-weight: 500; margin-top: 2px; }
     #update-dialog .update-buttons { display: flex; gap: 12px; justify-content: center; }
-    #update-dialog .update-btn-primary { background: #6c63ff; color: #fff; border: none; padding: 10px 28px; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; transition: background 0.2s; }
-    #update-dialog .update-btn-primary:hover { background: #5a52d5; }
-    #update-dialog .update-btn-secondary { background: rgba(255, 255, 255, 0.1); color: #e0e0e0; border: none; padding: 10px 28px; border-radius: 8px; font-size: 14px; cursor: pointer; transition: background 0.2s; }
-    #update-dialog .update-btn-secondary:hover { background: rgba(255, 255, 255, 0.2); }
-    #update-dialog .checking-text { text-align: center; color: #8080a0; font-size: 14px; padding: 20px 0; }
-    #update-dialog .checking-text .spinner { display: inline-block; width: 20px; height: 20px; border: 2px solid #2a2a4e; border-top-color: #6c63ff; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; vertical-align: middle; }
+    #update-dialog .update-btn-primary { background: var(--c-accent); color: #fff; border: none; padding: 10px 28px; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; transition: background 0.2s; }
+    #update-dialog .update-btn-primary:hover { background: var(--c-accent-2); }
+    #update-dialog .update-btn-secondary { background: var(--c-overlay); color: var(--c-text); border: none; padding: 10px 28px; border-radius: 8px; font-size: 14px; cursor: pointer; transition: background 0.2s; }
+    #update-dialog .update-btn-secondary:hover { background: var(--c-overlay-strong); }
+    #update-dialog .checking-text { text-align: center; color: var(--c-text-3); font-size: 14px; padding: 20px 0; }
+    #update-dialog .checking-text .spinner { display: inline-block; width: 20px; height: 20px; border: 2px solid var(--c-border); border-top-color: var(--c-accent); border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; vertical-align: middle; }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .llamacpp-progress-bar { width: 100%; height: 6px; background: #2a2a4e; border-radius: 3px; margin-top: 12px; overflow: hidden; }
-    .llamacpp-progress-fill { height: 100%; background: #6c63ff; border-radius: 3px; transition: width 0.3s ease; }
-    .llamacpp-status-text { font-size: 12px; color: #8080a0; margin-top: 6px; text-align: center; }
+    .llamacpp-progress-bar { width: 100%; height: 6px; background: var(--c-border); border-radius: 3px; margin-top: 12px; overflow: hidden; }
+    .llamacpp-progress-fill { height: 100%; background: var(--c-accent); border-radius: 3px; transition: width 0.3s ease; }
+    .llamacpp-status-text { font-size: 12px; color: var(--c-text-3); margin-top: 6px; text-align: center; }
 
     /* 视图切换 loading 动画（模块加载超时才显示，避免瞬时切换时 spinner 闪烁） */
     .view-loading { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 14px; }
-    .view-loading-spinner { width: 36px; height: 36px; border: 3px solid #2a2a4e; border-top-color: #6c63ff; border-radius: 50%; animation: spin 0.8s linear infinite; }
-    .view-loading-text { font-size: 13px; color: #8080a0; }
+    .view-loading-spinner { width: 36px; height: 36px; border: 3px solid var(--c-border); border-top-color: var(--c-accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+    .view-loading-text { font-size: 13px; color: var(--c-text-3); }
 
     /* Agent 下载弹窗 */
     #agent-download-overlay {
@@ -190,10 +252,10 @@
       align-items: center;
     }
     #agent-download-overlay.show { display: flex; }
-    .agent-download-dialog { background: #16213e; border: 1px solid #2a2a4e; border-radius: 12px; padding: 28px 32px; max-width: 460px; width: 90%; box-shadow: 0 8px 32px rgba(0,0,0,0.5); text-align: center; }
+    .agent-download-dialog { background: var(--c-panel); border: 1px solid var(--c-border); border-radius: 12px; padding: 28px 32px; max-width: 460px; width: 90%; box-shadow: 0 8px 32px rgba(0,0,0,0.5); text-align: center; }
     .agent-download-dialog .ad-icon { font-size: 40px; margin-bottom: 12px; }
-    .agent-download-dialog .ad-title { font-size: 20px; font-weight: 600; color: #ffffff; margin-bottom: 8px; }
-    .agent-download-dialog .ad-desc { font-size: 14px; color: #a0a0c0; margin-bottom: 20px; line-height: 1.6; }
+    .agent-download-dialog .ad-title { font-size: 20px; font-weight: 600; color: var(--c-text-hi); margin-bottom: 8px; }
+    .agent-download-dialog .ad-desc { font-size: 14px; color: var(--c-text-2); margin-bottom: 20px; line-height: 1.6; }
 
     .global-toast {
       position: fixed;
@@ -201,18 +263,41 @@
       top: 50%;
       transform: translate(-50%, -50%);
       background: rgba(20,20,40,0.96);
-      color: #e0e0e0;
+      color: var(--c-text);
       padding: 18px 28px;
       border-radius: 10px;
       font-size: 15px;
       z-index: 9999;
-      border: 1px solid #4a4a7e;
+      border: 1px solid var(--c-border-hi);
       box-shadow: 0 8px 30px rgba(0,0,0,0.5);
       cursor: default;
     }
 
 
   </style>
+  <script>
+    // 主题：尽早同步应用（在 body 渲染前），避免首屏闪烁
+    window.__ADM_THEMES = [
+      { id: "default", name: "暗夜紫",      colors: ["#1a1a2e", "#16213e", "#6c63ff"] },
+      { id: "vscode",  name: "VS Code 深色", colors: ["#1e1e1e", "#252526", "#4a9eff"] },
+      { id: "onedark", name: "One Dark",     colors: ["#282c34", "#21252b", "#61afef"] },
+      { id: "github",  name: "GitHub 深色",  colors: ["#0d1117", "#161b22", "#4493f8"] },
+      { id: "dracula", name: "Dracula",      colors: ["#282a36", "#44475a", "#bd93f9"] },
+      { id: "light",   name: "白色亮色",    colors: ["#ffffff", "#f3f3f3", "#0066b8"] },
+      { id: "sepia",   name: "淡黄护眼",    colors: ["#fdf6e3", "#eee8d5", "#b5651d"] }
+    ];
+    window.getTheme = function () {
+      try { return localStorage.getItem("adm-theme") || "vscode"; } catch (_) { return "vscode"; }
+    };
+    window.applyTheme = function (id) {
+      var valid = window.__ADM_THEMES.some(function (t) { return t.id === id; });
+      var theme = valid ? id : "default";
+      if (theme === "default") document.documentElement.removeAttribute("data-theme");
+      else document.documentElement.setAttribute("data-theme", theme);
+      try { localStorage.setItem("adm-theme", theme); } catch (_) {}
+    };
+    window.applyTheme(window.getTheme());
+  </script>
 </head>
 <body>
   <!-- 更新弹窗 -->
@@ -679,12 +764,12 @@
         const overlay = document.createElement("div");
         overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;display:flex;justify-content:center;align-items:center;";
         overlay.innerHTML =
-          '<div style="background:#16213e;border:1px solid #2a2a4e;border-radius:12px;padding:28px 32px;max-width:420px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.5);text-align:center;">' +
+          '<div style="background:var(--c-panel);border:1px solid var(--c-border);border-radius:12px;padding:28px 32px;max-width:420px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.5);text-align:center;">' +
             '<div style="font-size:36px;margin-bottom:12px;">⚠️</div>' +
-            '<div class="sc-msg" style="font-size:14px;color:#e0e0e0;line-height:1.7;margin-bottom:20px;white-space:pre-line;"></div>' +
+            '<div class="sc-msg" style="font-size:14px;color:var(--c-text);line-height:1.7;margin-bottom:20px;white-space:pre-line;"></div>' +
             '<div style="display:flex;gap:12px;justify-content:center;">' +
-              '<button data-act="cancel" style="background:rgba(255,255,255,0.1);color:#e0e0e0;border:none;padding:10px 28px;border-radius:8px;font-size:14px;cursor:pointer;">取消</button>' +
-              '<button data-act="ok" style="background:#6c63ff;color:#fff;border:none;padding:10px 28px;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer;">确定</button>' +
+              '<button data-act="cancel" style="background:var(--c-overlay);color:var(--c-text);border:none;padding:10px 28px;border-radius:8px;font-size:14px;cursor:pointer;">取消</button>' +
+              '<button data-act="ok" style="background:var(--c-accent);color:#fff;border:none;padding:10px 28px;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer;">确定</button>' +
             '</div>' +
           '</div>';
         overlay.querySelector(".sc-msg").textContent = message;
@@ -714,7 +799,7 @@
       const fill = document.getElementById("agent-progress-fill");
       const text = document.getElementById("agent-status-text");
       if (fill) fill.style.width = "0%";
-      if (text) { text.textContent = "准备下载..."; text.style.color = "#8080a0"; }
+      if (text) { text.textContent = "准备下载..."; text.style.color = "var(--c-text-3)"; }
       document.getElementById("agent-download-overlay").classList.add("show");
     }
 

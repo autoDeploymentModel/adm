@@ -236,13 +236,13 @@ async function reconcileSendingState() {
 function showDownloadGuide() {
   var area = document.getElementById("agent-msg-area");
   if (area) {
-    area.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:16px;color:#b0b8c8;">' +
+    area.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:16px;color:var(--c-text-2);">' +
       '<div style="font-size:48px;">📦</div>' +
       '<div style="font-size:16px;font-weight:600;">需要下载 admAgent 工具</div>' +
-      '<div style="font-size:13px;color:#8b949e;text-align:center;max-width:400px;">' +
+      '<div style="font-size:13px;color:var(--c-text-3);text-align:center;max-width:400px;">' +
         'admAgent 是 Agent 功能的核心组件，需要下载后才能使用。<br>请点击下方按钮开始下载。' +
       '</div>' +
-      '<button id="agent-download-btn" style="background:#6c63ff;color:#fff;border:none;padding:10px 24px;border-radius:8px;font-size:14px;cursor:pointer;">' +
+      '<button id="agent-download-btn" style="background:var(--c-accent);color:#fff;border:none;padding:10px 24px;border-radius:8px;font-size:14px;cursor:pointer;">' +
         '下载 admAgent' +
       '</button>' +
       '</div>';
@@ -581,8 +581,8 @@ function showProjectInitDialog() {
 
   // 显示初始化引导提示
   var initDiv = document.createElement("div");
-  initDiv.style.cssText = "background:rgba(108,99,255,0.1);border:1px solid #6c63ff;border-radius:8px;padding:12px;margin-bottom:16px;";
-  initDiv.innerHTML = "<strong>� 项目初始化</strong><p style='margin-top:4px;font-size:12px;color:#b0b8c8;'>检测到项目需要初始化，建议运行初始化流程以启用完整功能。</p>";
+  initDiv.style.cssText = "background:rgba(var(--c-accent-rgb),0.1);border:1px solid var(--c-accent);border-radius:8px;padding:12px;margin-bottom:16px;";
+  initDiv.innerHTML = "<strong>� 项目初始化</strong><p style='margin-top:4px;font-size:12px;color:var(--c-text-2);'>检测到项目需要初始化，建议运行初始化流程以启用完整功能。</p>";
   body.insertBefore(initDiv, body.firstChild);
 }
 

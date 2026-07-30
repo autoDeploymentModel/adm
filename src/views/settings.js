@@ -10,32 +10,32 @@ const template = `
     display: flex;
     align-items: center;
     padding: 10px 16px;
-    background: #0f3460;
-    border-bottom: 1px solid #1a1a3e;
+    background: var(--c-panel-2);
+    border-bottom: 1px solid var(--c-border-soft);
     flex-shrink: 0;
     gap: 12px;
   }
 
   .back-btn {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--c-overlay);
     border: none;
-    color: #e0e0e0;
+    color: var(--c-text);
     padding: 6px 14px;
     border-radius: 6px;
     cursor: pointer;
     font-size: 13px;
     transition: background 0.2s;
   }
-  .back-btn:hover { background: rgba(255, 255, 255, 0.2); }
+  .back-btn:hover { background: var(--c-overlay-strong); }
 
-  #settings-header .title { font-size: 16px; font-weight: 600; color: #ffffff; }
+  #settings-header .title { font-size: 16px; font-weight: 600; color: var(--c-text-hi); }
 
   #settings-layout { display: flex; flex: 1; overflow: hidden; }
 
   #settings-nav {
     width: 180px;
-    background: #16213e;
-    border-right: 1px solid #1a1a3e;
+    background: var(--c-panel);
+    border-right: 1px solid var(--c-border-soft);
     padding: 12px 0;
     flex-shrink: 0;
     overflow-y: auto;
@@ -45,15 +45,15 @@ const template = `
     padding: 10px 20px;
     cursor: pointer;
     font-size: 14px;
-    color: #a0a0c0;
+    color: var(--c-text-2);
     transition: all 0.2s;
     border-left: 3px solid transparent;
   }
-  .nav-item:hover { background: rgba(108, 99, 255, 0.08); color: #e0e0e0; }
+  .nav-item:hover { background: rgba(var(--c-accent-rgb), 0.08); color: var(--c-text); }
   .nav-item.active {
-    background: rgba(108, 99, 255, 0.12);
-    color: #6c63ff;
-    border-left-color: #6c63ff;
+    background: rgba(var(--c-accent-rgb), 0.12);
+    color: var(--c-accent);
+    border-left-color: var(--c-accent);
     font-weight: 500;
   }
 
@@ -65,7 +65,7 @@ const template = `
   .panel-title {
     font-size: 16px;
     font-weight: 600;
-    color: #ffffff;
+    color: var(--c-text-hi);
     margin-bottom: 20px;
     display: flex;
     align-items: center;
@@ -76,7 +76,7 @@ const template = `
     display: inline-block;
     width: 4px;
     height: 16px;
-    background: #6c63ff;
+    background: var(--c-accent);
     border-radius: 2px;
   }
 
@@ -85,42 +85,60 @@ const template = `
   .param-group-title {
     font-size: 13px;
     font-weight: 600;
-    color: #6c63ff;
+    color: var(--c-accent);
     text-transform: uppercase;
     letter-spacing: 0.5px;
     margin-bottom: 12px;
     padding-bottom: 6px;
-    border-bottom: 1px solid #2a2a4e;
+    border-bottom: 1px solid var(--c-border);
   }
 
   .param-row { display: flex; align-items: center; margin-bottom: 10px; gap: 12px; }
 
-  .param-label { width: 160px; font-size: 13px; color: #a0a0c0; flex-shrink: 0; }
-  .param-label .param-key { font-size: 11px; color: #606080; margin-top: 2px; }
+  .param-label { width: 160px; font-size: 13px; color: var(--c-text-2); flex-shrink: 0; }
+  .param-label .param-key { font-size: 11px; color: var(--c-text-4); margin-top: 2px; }
 
   .param-input { flex: 1; max-width: 300px; }
   .param-input input, .param-input select {
     width: 100%;
     padding: 7px 12px;
-    background: #0f3460;
-    border: 1px solid #2a2a4e;
+    background: var(--c-panel-2);
+    border: 1px solid var(--c-border);
     border-radius: 6px;
-    color: #e0e0e0;
+    color: var(--c-text);
     font-size: 13px;
     outline: none;
     transition: border-color 0.2s;
   }
-  .param-input input:focus, .param-input select:focus { border-color: #6c63ff; }
+  .param-input input:focus, .param-input select:focus { border-color: var(--c-accent); }
   .param-input select { cursor: pointer; }
-  .param-input select option { background: #0f3460; color: #e0e0e0; }
+  .param-input select option { background: var(--c-panel-2); color: var(--c-text); }
   .param-input .checkbox-wrap { display: flex; align-items: center; gap: 8px; }
-  .param-input input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: #6c63ff; }
+  .param-input input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: var(--c-accent); }
 
-  .param-desc { font-size: 11px; color: #606080; margin-top: 2px; }
+  .param-desc { font-size: 11px; color: var(--c-text-4); margin-top: 2px; }
+
+  /* ===== 主题卡片 ===== */
+  .theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; max-width: 660px; }
+  .theme-card {
+    border: 2px solid var(--c-border);
+    border-radius: 10px;
+    padding: 10px;
+    cursor: pointer;
+    background: var(--c-panel);
+    transition: border-color 0.2s, transform 0.1s;
+  }
+  .theme-card:hover { border-color: var(--c-accent); transform: translateY(-2px); }
+  .theme-card.active { border-color: var(--c-accent); box-shadow: 0 0 0 1px var(--c-accent); }
+  .theme-card .theme-preview { display: flex; height: 46px; border-radius: 6px; overflow: hidden; border: 1px solid var(--c-border-soft); }
+  .theme-card .theme-preview span { flex: 1; }
+  .theme-card .theme-name { font-size: 13px; color: var(--c-text); margin-top: 8px; display: flex; align-items: center; gap: 6px; }
+  .theme-card .theme-check { color: var(--c-accent); font-weight: 700; visibility: hidden; }
+  .theme-card.active .theme-check { visibility: visible; }
 
   .btn-reset {
-    background: rgba(255, 255, 255, 0.1);
-    color: #e0e0e0;
+    background: var(--c-overlay);
+    color: var(--c-text);
     border: none;
     padding: 10px 28px;
     border-radius: 8px;
@@ -130,7 +148,7 @@ const template = `
     margin-top: 16px;
     margin-left: 12px;
   }
-  .btn-reset:hover { background: rgba(255, 255, 255, 0.2); }
+  .btn-reset:hover { background: var(--c-overlay-strong); }
 
   .btn-delete-llamacpp {
     background: #d32f2f;
@@ -146,16 +164,16 @@ const template = `
   .btn-delete-llamacpp:hover { background: #b71c1c; }
 
   .version-table { width: 100%; max-width: 500px; }
-  .version-table tr { border-bottom: 1px solid #1a1a3e; }
+  .version-table tr { border-bottom: 1px solid var(--c-border-soft); }
   .version-table td { padding: 12px 0; font-size: 14px; }
-  .version-table td:first-child { color: #a0a0c0; width: 140px; }
-  .version-table td:last-child { color: #e0e0e0; font-weight: 500; }
+  .version-table td:first-child { color: var(--c-text-2); width: 140px; }
+  .version-table td:last-child { color: var(--c-text); font-weight: 500; }
 
   .about-content { max-width: 500px; }
-  .about-content h3 { font-size: 20px; color: #ffffff; margin-bottom: 8px; }
-  .about-content .about-subtitle { font-size: 13px; color: #6c63ff; margin-bottom: 20px; }
-  .about-content p { font-size: 14px; color: #a0a0c0; line-height: 1.8; margin-bottom: 12px; }
-  .about-content a { color: #6c63ff; text-decoration: none; }
+  .about-content h3 { font-size: 20px; color: var(--c-text-hi); margin-bottom: 8px; }
+  .about-content .about-subtitle { font-size: 13px; color: var(--c-accent); margin-bottom: 20px; }
+  .about-content p { font-size: 14px; color: var(--c-text-2); line-height: 1.8; margin-bottom: 12px; }
+  .about-content a { color: var(--c-accent); text-decoration: none; }
   .about-content a:hover { text-decoration: underline; }
 
   .save-toast {
@@ -200,8 +218,8 @@ const template = `
   }
   .confirm-overlay.show { display: flex; }
   .confirm-dialog {
-    background: #16213e;
-    border: 1px solid #2a2a4e;
+    background: var(--c-panel);
+    border: 1px solid var(--c-border);
     border-radius: 12px;
     padding: 28px 32px;
     max-width: 400px;
@@ -209,13 +227,13 @@ const template = `
     box-shadow: 0 8px 32px rgba(0,0,0,0.5);
     text-align: center;
   }
-  .confirm-dialog .confirm-title { font-size: 18px; font-weight: 600; color: #ffffff; margin-bottom: 12px; }
-  .confirm-dialog .confirm-message { font-size: 14px; color: #c0c0e0; line-height: 1.6; margin-bottom: 24px; white-space: pre-line; }
+  .confirm-dialog .confirm-title { font-size: 18px; font-weight: 600; color: var(--c-text-hi); margin-bottom: 12px; }
+  .confirm-dialog .confirm-message { font-size: 14px; color: var(--c-text-2); line-height: 1.6; margin-bottom: 24px; white-space: pre-line; }
   .confirm-dialog .confirm-buttons { display: flex; gap: 12px; justify-content: center; }
   .confirm-dialog .btn-confirm { background: #d32f2f; color: #fff; border: none; padding: 8px 28px; border-radius: 8px; font-size: 14px; cursor: pointer; transition: background 0.2s; }
   .confirm-dialog .btn-confirm:hover { background: #b71c1c; }
-  .confirm-dialog .btn-cancel { background: rgba(255, 255, 255, 0.1); color: #e0e0e0; border: none; padding: 8px 28px; border-radius: 8px; font-size: 14px; cursor: pointer; transition: background 0.2s; }
-  .confirm-dialog .btn-cancel:hover { background: rgba(255, 255, 255, 0.2); }
+  .confirm-dialog .btn-cancel { background: var(--c-overlay); color: var(--c-text); border: none; padding: 8px 28px; border-radius: 8px; font-size: 14px; cursor: pointer; transition: background 0.2s; }
+  .confirm-dialog .btn-cancel:hover { background: var(--c-overlay-strong); }
 </style>
 <div id="settings-app">
   <div id="settings-header">
@@ -225,6 +243,7 @@ const template = `
   <div id="settings-layout">
     <nav id="settings-nav">
       <div class="nav-item active" data-panel="launch-params" id="nav-launch-params">模型启动参数</div>
+      <div class="nav-item" data-panel="appearance" id="nav-appearance">外观主题</div>
       <div class="nav-item" data-panel="wxbot" id="nav-wxbot">微信 Bot</div>
       <div class="nav-item" data-panel="version" id="nav-version">系统版本号</div>
       <div class="nav-item" data-panel="about" id="nav-about">关于</div>
@@ -356,6 +375,15 @@ const template = `
         <button class="btn-reset" id="reset-btn">恢复默认</button>
       </div>
 
+      <div id="panel-appearance" class="panel">
+        <div class="panel-title">外观主题</div>
+        <div class="param-group">
+          <div class="param-group-title">主题配色</div>
+          <div class="param-desc" style="margin-bottom:14px;">选择界面配色，风格参考主流 VS Code 主题，点击即可一键切换（立即生效）</div>
+          <div id="theme-grid" class="theme-grid"></div>
+        </div>
+      </div>
+
       <div id="panel-wxbot" class="panel">
         <div class="panel-title">微信 Bot（iLink）</div>
 
@@ -363,28 +391,28 @@ const template = `
           <div class="param-group-title">绑定状态</div>
           <div class="param-row">
             <div class="param-label">状态</div>
-            <div class="param-input"><span id="wxbot-state" style="font-size:13px;color:#a0a0c0;">加载中…</span></div>
+            <div class="param-input"><span id="wxbot-state" style="font-size:13px;color:var(--c-text-2);">加载中…</span></div>
           </div>
           <div class="param-row">
             <div class="param-label">Bot ID</div>
-            <div class="param-input"><span id="wxbot-botid" style="font-size:13px;color:#a0a0c0;">-</span></div>
+            <div class="param-input"><span id="wxbot-botid" style="font-size:13px;color:var(--c-text-2);">-</span></div>
           </div>
           <div class="param-row">
             <div class="param-label">主人微信</div>
             <div class="param-input">
-              <span id="wxbot-owner" style="font-size:13px;color:#a0a0c0;">-</span>
+              <span id="wxbot-owner" style="font-size:13px;color:var(--c-text-2);">-</span>
               <div class="param-desc">首个给 Bot 发消息的微信号自动成为主人，其余人消息忽略</div>
             </div>
           </div>
           <div class="param-row">
             <div class="param-label">消息统计</div>
-            <div class="param-input"><span id="wxbot-stats" style="font-size:13px;color:#a0a0c0;">收 0 / 发 0</span></div>
+            <div class="param-input"><span id="wxbot-stats" style="font-size:13px;color:var(--c-text-2);">收 0 / 发 0</span></div>
           </div>
           <div class="param-row">
             <div class="param-label"></div>
             <div class="param-input" style="display:flex;gap:10px;max-width:none;">
-              <button id="wxbot-bind-btn" style="background:#6c63ff;color:#fff;border:none;padding:8px 20px;border-radius:8px;font-size:13px;cursor:pointer;">绑定微信</button>
-              <button id="wxbot-toggle-btn" style="display:none;background:rgba(255,255,255,0.1);color:#e0e0e0;border:none;padding:8px 20px;border-radius:8px;font-size:13px;cursor:pointer;">暂停</button>
+              <button id="wxbot-bind-btn" style="background:var(--c-accent);color:#fff;border:none;padding:8px 20px;border-radius:8px;font-size:13px;cursor:pointer;">绑定微信</button>
+              <button id="wxbot-toggle-btn" style="display:none;background:var(--c-overlay);color:var(--c-text);border:none;padding:8px 20px;border-radius:8px;font-size:13px;cursor:pointer;">暂停</button>
               <button id="wxbot-unbind-btn" class="btn-delete-llamacpp" style="display:none;padding:8px 20px;border-radius:8px;font-size:13px;">解绑</button>
             </div>
           </div>
@@ -394,17 +422,17 @@ const template = `
           <div class="param-group-title">Bot 行为</div>
           <div class="param-row">
             <div class="param-label">工作目录</div>
-            <div class="param-input"><span style="font-size:13px;color:#a0a0c0;">跟随 Agent 页工作目录</span><div class="param-desc">微信 Bot 与 Agent 页使用同一工作目录，在 Agent 页修改</div></div>
+            <div class="param-input"><span style="font-size:13px;color:var(--c-text-2);">跟随 Agent 页工作目录</span><div class="param-desc">微信 Bot 与 Agent 页使用同一工作目录，在 Agent 页修改</div></div>
           </div>
           <div class="param-row">
             <div class="param-label">权限</div>
-            <div class="param-input"><span style="font-size:13px;color:#a0a0c0;">跟随 Agent 页 YOLO 设置</span><div class="param-desc">开启 YOLO 则直通；未开启时微信收到权限请求回复 y/a/n 审批</div></div>
+            <div class="param-input"><span style="font-size:13px;color:var(--c-text-2);">跟随 Agent 页 YOLO 设置</span><div class="param-desc">开启 YOLO 则直通；未开启时微信收到权限请求回复 y/a/n 审批</div></div>
           </div>
         </div>
 
         <div class="param-group">
           <div class="param-group-title">最近活动</div>
-          <div id="wxbot-activity" style="font-size:12px;color:#8080a0;line-height:1.8;max-height:200px;overflow-y:auto;background:#0f3460;border:1px solid #2a2a4e;border-radius:6px;padding:10px 12px;">暂无活动</div>
+          <div id="wxbot-activity" style="font-size:12px;color:var(--c-text-3);line-height:1.8;max-height:200px;overflow-y:auto;background:var(--c-panel-2);border:1px solid var(--c-border);border-radius:6px;padding:10px 12px;">暂无活动</div>
         </div>
       </div>
 
@@ -415,7 +443,7 @@ const template = `
           <tr>
             <td style="padding-top:20px;" colspan="2">
               <button class="btn-save" id="check-update-btn" style="margin-top:0;font-size:13px;padding:8px 20px;">检查新版本</button>
-              <span id="update-status" style="font-size:12px;color:#8080a0;margin-left:12px;"></span>
+              <span id="update-status" style="font-size:12px;color:var(--c-text-3);margin-left:12px;"></span>
             </td>
           </tr>
           <tr><td>Tauri 版本</td><td>2.11.2</td></tr>
@@ -469,7 +497,7 @@ const template = `
   <div class="confirm-dialog">
     <div class="confirm-title">输入配对码</div>
     <div class="confirm-message" id="wxbot-code-hint">请输入微信手机端显示的配对数字：</div>
-    <input id="wxbot-code-input" type="text" inputmode="numeric" autocomplete="off" style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.06);color:#fff;font-size:16px;letter-spacing:2px;text-align:center;margin-bottom:16px;">
+    <input id="wxbot-code-input" type="text" inputmode="numeric" autocomplete="off" style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid var(--c-overlay-strong);background:rgba(255,255,255,0.06);color:#fff;font-size:16px;letter-spacing:2px;text-align:center;margin-bottom:16px;">
     <div class="confirm-buttons">
       <button class="btn-cancel" id="wxbot-code-cancel-btn">取消</button>
       <button class="btn-confirm" id="wxbot-code-ok-btn">确定</button>
@@ -749,14 +777,14 @@ async function checkUpdateNow() {
       const html = `
         <div class="update-icon" style="font-size:40px;text-align:center;margin-bottom:12px;">📥</div>
         <div class="update-title" style="font-size:20px;font-weight:600;color:#fff;text-align:center;margin-bottom:8px;">发现新版本</div>
-        <div class="update-desc" style="font-size:14px;color:#a0a0c0;text-align:center;margin-bottom:20px;line-height:1.6;">有新版本可用，是否前往下载？</div>
+        <div class="update-desc" style="font-size:14px;color:var(--c-text-2);text-align:center;margin-bottom:20px;line-height:1.6;">有新版本可用，是否前往下载？</div>
         <div class="update-info-row" style="display:flex;justify-content:center;gap:24px;margin-bottom:20px;font-size:13px;">
-          <div class="info-item" style="text-align:center;"><div class="info-label" style="color:#8080a0;font-size:11px;">当前版本</div><div class="info-value" style="color:#e0e0e0;font-weight:500;margin-top:2px;">v${escHtml(result.current_version)}</div></div>
-          <div class="info-item" style="text-align:center;"><div class="info-label" style="color:#8080a0;font-size:11px;">最新版本</div><div class="info-value" style="color:#e0e0e0;font-weight:500;margin-top:2px;">v${escHtml(result.remote_version)}</div></div>
+          <div class="info-item" style="text-align:center;"><div class="info-label" style="color:var(--c-text-3);font-size:11px;">当前版本</div><div class="info-value" style="color:var(--c-text);font-weight:500;margin-top:2px;">v${escHtml(result.current_version)}</div></div>
+          <div class="info-item" style="text-align:center;"><div class="info-label" style="color:var(--c-text-3);font-size:11px;">最新版本</div><div class="info-value" style="color:var(--c-text);font-weight:500;margin-top:2px;">v${escHtml(result.remote_version)}</div></div>
         </div>
         <div class="update-buttons" style="display:flex;gap:12px;justify-content:center;">
-          <button class="update-btn-primary" style="background:#6c63ff;color:#fff;border:none;padding:10px 28px;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer;" onclick="window.ADM.hideUpdateDialog();window.openUrl('${escHtml(result.download_url)}')">下载更新</button>
-          <button class="update-btn-secondary" style="background:rgba(255,255,255,0.1);color:#e0e0e0;border:none;padding:10px 28px;border-radius:8px;font-size:14px;cursor:pointer;" onclick="window.ADM.hideUpdateDialog()">稍后再说</button>
+          <button class="update-btn-primary" style="background:var(--c-accent);color:#fff;border:none;padding:10px 28px;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer;" onclick="window.ADM.hideUpdateDialog();window.openUrl('${escHtml(result.download_url)}')">下载更新</button>
+          <button class="update-btn-secondary" style="background:var(--c-overlay);color:var(--c-text);border:none;padding:10px 28px;border-radius:8px;font-size:14px;cursor:pointer;" onclick="window.ADM.hideUpdateDialog()">稍后再说</button>
         </div>`;
       window.ADM.showUpdateDialog(html);
     } else {
@@ -768,10 +796,38 @@ async function checkUpdateNow() {
     statusEl.textContent = "检查失败: " + e;
     statusEl.style.color = "#f44336";
   }
-  setTimeout(() => { statusEl.textContent = ""; statusEl.style.color = "#8080a0"; }, 5000);
+  setTimeout(() => { statusEl.textContent = ""; statusEl.style.color = "var(--c-text-3)"; }, 5000);
 }
 
 function goBack() { location.hash = "#/list"; }
+
+// ===== 外观主题 =====
+
+function renderThemeGrid() {
+  const grid = document.getElementById("theme-grid");
+  if (!grid) return;
+  const themes = window.__ADM_THEMES || [];
+  const current = (typeof window.getTheme === "function" ? window.getTheme() : "default");
+  grid.innerHTML = themes.map(function (t) {
+    const active = t.id === current ? " active" : "";
+    const sw = (t.colors || []).map(function (c) {
+      return '<span style="background:' + escHtml(c) + ';"></span>';
+    }).join("");
+    return '<div class="theme-card' + active + '" data-theme-id="' + escHtml(t.id) + '">' +
+             '<div class="theme-preview">' + sw + '</div>' +
+             '<div class="theme-name"><span class="theme-check">\u2714</span>' + escHtml(t.name) + '</div>' +
+           '</div>';
+  }).join("");
+  grid.querySelectorAll(".theme-card").forEach(function (card) {
+    card.addEventListener("click", function () {
+      const id = card.dataset.themeId;
+      if (typeof window.applyTheme === "function") window.applyTheme(id);
+      grid.querySelectorAll(".theme-card").forEach(function (c) { c.classList.remove("active"); });
+      card.classList.add("active");
+      showToast("已切换主题");
+    });
+  });
+}
 
 // ===== 微信 Bot（iLink） =====
 
@@ -788,7 +844,7 @@ function renderWxbotStatus(s) {
     error: "错误",
   };
   stateEl.textContent = (map[s.state] || s.state) + (s.error ? "：" + s.error : "");
-  stateEl.style.color = s.state === "running" ? "#4caf50" : (s.state === "error" ? "#f44336" : "#a0a0c0");
+  stateEl.style.color = s.state === "running" ? "#4caf50" : (s.state === "error" ? "#f44336" : "var(--c-text-2)");
   document.getElementById("wxbot-botid").textContent = s.bot_id || "-";
   document.getElementById("wxbot-owner").textContent = s.owner || "-";
   document.getElementById("wxbot-stats").textContent = "收 " + (s.msg_in || 0) + " / 发 " + (s.msg_out || 0);
@@ -986,6 +1042,7 @@ export default {
 
     setupAutoSave();
     setupWxbotPanel();
+    renderThemeGrid();
 
     (async function() {
       try {

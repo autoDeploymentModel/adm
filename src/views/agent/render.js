@@ -256,10 +256,10 @@ function buildPartElement(part, partIdx, role, msgKey) {
       details.setAttribute("data-key", partKey);
       var summary = document.createElement("summary");
       summary.textContent = "💭 推理过程";
-      summary.style.cssText = "cursor:pointer;font-size:12px;color:#8b949e;";
+      summary.style.cssText = "cursor:pointer;font-size:12px;color:var(--c-text-3);";
       details.appendChild(summary);
       var reasoningContent = document.createElement("div");
-      reasoningContent.style.cssText = "padding:8px;color:#8b949e;font-style:italic;font-size:12px;white-space:pre-wrap;";
+      reasoningContent.style.cssText = "padding:8px;color:var(--c-text-3);font-style:italic;font-size:12px;white-space:pre-wrap;";
       reasoningContent.textContent = partData.thinking || "";
       details.appendChild(reasoningContent);
       return details;
@@ -271,10 +271,10 @@ function buildPartElement(part, partIdx, role, msgKey) {
       var toolSummary = document.createElement("summary");
       var finished = partData.finished !== false;
       toolSummary.textContent = "🔧 " + (partData.name || "tool") + (finished ? " (已完成)" : " (执行中)");
-      toolSummary.style.cssText = "cursor:pointer;font-size:12px;color:#8b949e;";
+      toolSummary.style.cssText = "cursor:pointer;font-size:12px;color:var(--c-text-3);";
       toolDetails.appendChild(toolSummary);
       var toolInput = document.createElement("div");
-      toolInput.style.cssText = "padding:8px;font-family:monospace;font-size:11px;color:#b0b8c8;white-space:pre-wrap;background:#0d1117;border-radius:4px;margin-top:4px;";
+      toolInput.style.cssText = "padding:8px;font-family:monospace;font-size:11px;color:var(--c-text-2);white-space:pre-wrap;background:var(--c-bg-deep);border-radius:4px;margin-top:4px;";
       try {
         toolInput.textContent = "输入: " + JSON.stringify(JSON.parse(partData.input || "{}"), null, 2);
       } catch (_) {
@@ -293,7 +293,7 @@ function buildPartElement(part, partIdx, role, msgKey) {
       resultSummary.style.cssText = "cursor:pointer;font-size:12px;color:" + (isError ? "#ff6b6b" : "#43a047") + ";";
       resultDetails.appendChild(resultSummary);
       var resultContent = document.createElement("div");
-      resultContent.style.cssText = "padding:8px;font-family:monospace;font-size:11px;color:#b0b8c8;white-space:pre-wrap;background:#0d1117;border-radius:4px;margin-top:4px;max-height:300px;overflow-y:auto;";
+      resultContent.style.cssText = "padding:8px;font-family:monospace;font-size:11px;color:var(--c-text-2);white-space:pre-wrap;background:var(--c-bg-deep);border-radius:4px;margin-top:4px;max-height:300px;overflow-y:auto;";
       resultContent.textContent = partData.content || partData.data || "";
       resultDetails.appendChild(resultContent);
       return resultDetails;
@@ -302,7 +302,7 @@ function buildPartElement(part, partIdx, role, msgKey) {
       // 用户消息的 finish 已在 isPartRenderable 中过滤
       var finishDiv = document.createElement("div");
       finishDiv.className = "msg-finish";
-      finishDiv.style.cssText = "border-top:1px solid #30363d;padding-top:4px;margin-top:4px;font-size:11px;color:#6e7681;";
+      finishDiv.style.cssText = "border-top:1px solid var(--c-border);padding-top:4px;margin-top:4px;font-size:11px;color:var(--c-text-4);";
       var reason = partData.reason || "完成";
       finishDiv.textContent = "── " + reason + " ──";
       return finishDiv;
@@ -310,20 +310,20 @@ function buildPartElement(part, partIdx, role, msgKey) {
     case "shell_command":
       var shellDiv = document.createElement("div");
       shellDiv.className = "msg-shell-command";
-      shellDiv.style.cssText = "font-family:monospace;font-size:11px;background:#0d1117;border-radius:4px;padding:8px;margin-top:4px;";
+      shellDiv.style.cssText = "font-family:monospace;font-size:11px;background:var(--c-bg-deep);border-radius:4px;padding:8px;margin-top:4px;";
       var cmdDiv = document.createElement("div");
-      cmdDiv.style.cssText = "color:#6c63ff;";
+      cmdDiv.style.cssText = "color:var(--c-accent);";
       cmdDiv.textContent = "$ " + (partData.command || "");
       shellDiv.appendChild(cmdDiv);
       if (partData.output) {
         var outDiv = document.createElement("div");
-        outDiv.style.cssText = "color:#b0b8c8;white-space:pre-wrap;margin-top:4px;";
+        outDiv.style.cssText = "color:var(--c-text-2);white-space:pre-wrap;margin-top:4px;";
         outDiv.textContent = partData.output;
         shellDiv.appendChild(outDiv);
       }
       if (partData.exit_code !== undefined) {
         var exitDiv = document.createElement("div");
-        exitDiv.style.cssText = "color:#6e7681;margin-top:4px;";
+        exitDiv.style.cssText = "color:var(--c-text-4);margin-top:4px;";
         exitDiv.textContent = "退出码: " + partData.exit_code;
         shellDiv.appendChild(exitDiv);
       }
@@ -337,14 +337,14 @@ function buildPartElement(part, partIdx, role, msgKey) {
 
     case "binary":
       var binDiv = document.createElement("div");
-      binDiv.style.cssText = "font-size:12px;color:#8b949e;padding:4px 0;";
+      binDiv.style.cssText = "font-size:12px;color:var(--c-text-3);padding:4px 0;";
       binDiv.textContent = "📎 附件: " + (partData.path || "file") + " (" + (partData.mime_type || "unknown") + ")";
       return binDiv;
 
     default:
       // 未知类型，显示原始 JSON
       var unknownDiv = document.createElement("div");
-      unknownDiv.style.cssText = "font-size:11px;color:#6e7681;";
+      unknownDiv.style.cssText = "font-size:11px;color:var(--c-text-4);";
       unknownDiv.textContent = JSON.stringify(part);
       return unknownDiv;
   }
