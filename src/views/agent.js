@@ -5,7 +5,7 @@ import { template } from "./agent/template.js";
 import { S, invoke, listen } from "./agent/state.js";
 import { api } from "./agent/api.js";
 import { generateUUID, isMsgAreaAtBottom, autoResize, $input } from "./agent/utils.js";
-import { updateStatusBar, updateContextUsage, updateModeToggle, updateSendButton, exitManualScrollMode, clearSendSafetyTimer, showError, showConfirm, showCopyPasteMenu, updateScrollBottomBtn } from "./agent/ui.js";
+import { updateStatusBar, updateContextUsage, updateModeToggle, updateSendButton, exitManualScrollMode, startSendSafetyTimer, clearSendSafetyTimer, showError, showConfirm, showCopyPasteMenu, updateScrollBottomBtn } from "./agent/ui.js";
 import { loadConversations, renderConversationList, selectConversation, newConversation } from "./agent/session.js";
 import { sendMessage } from "./agent/send.js";
 import { setupSSEListener } from "./agent/sse.js";
@@ -194,6 +194,11 @@ async function init() {
   // 监听 SSE 事件
   await setupSSEListener();
 
+  // 发送态对账：S 是模块级状态，isSending/activeRun 跨挂载周期残留；
+  // unmount 期间 SSE 监听器已解绑，run_complete 在页面切走时到达会永久丢失，
+  // 重新挂载后必须以服务端 is_busy 为准校准，否则「正在思考」永远卡住
+  await reconcileSendingState();
+
   // SSE 连接建立后重新加载工具列表，确保 skills_event 等发现事件不遗漏
   await loadTools();
 
@@ -201,6 +206,30 @@ async function init() {
 
   // 检查项目初始化引导
   checkProjectInit();
+}
+
+// 重新挂载后校准残留的发送态：运行会话仍忙则恢复「取消」按钮与安全计时器，
+// 已结束（run_complete 在切走期间丢失）则重置，updateSendButton 会同步移除思考指示器
+async function reconcileSendingState() {
+  if (!S.isSending) return;
+  var run = S.activeRun;
+  var busy = false;
+  if (run) {
+    try {
+      var sess = await api("GET", "/v1/workspaces/" + run.workspaceId + "/sessions/" + run.sessionId);
+      busy = !!(sess && sess.is_busy);
+    } catch (_) {}
+  }
+  if (busy) {
+    updateSendButton();
+    startSendSafetyTimer();
+  } else {
+    console.warn("[agent] 挂载对账：残留 isSending 但运行会话已结束，重置发送态");
+    S.isSending = false;
+    S.activeRun = null;
+    updateSendButton();
+    updateStatusBar("ready", null, S.contextUsage.used);
+  }
 }
 
 // 显示下载引导
