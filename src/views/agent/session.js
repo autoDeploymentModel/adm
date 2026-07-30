@@ -138,7 +138,20 @@ function handleConvAction(action, convId) {
       var defaultName = oldConv ? (oldConv.title || oldConv.name || "") : "";
       var newName = prompt("重命名会话:", defaultName);
       if (newName && newName !== defaultName) {
-        api("PUT", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions/" + convId, { title: newName })
+        // 服务端 PUT 是整行更新且 session id 取自 body（忽略路径 sid），
+        // 必须回传完整会话字段，否则报 sql: no rows / token 统计被清零。
+        // 服务端按 Go 字段名解码（大小写不敏感但不做下划线映射），
+        // 因此 token 类字段需用驼峰别名传递。
+        var body = {
+          id: convId,
+          title: newName,
+          cost: oldConv ? (oldConv.cost || 0) : 0,
+          todos: oldConv ? (oldConv.todos || []) : [],
+          PromptTokens: oldConv ? (oldConv.prompt_tokens || 0) : 0,
+          CompletionTokens: oldConv ? (oldConv.completion_tokens || 0) : 0,
+          SummaryMessageID: oldConv ? (oldConv.summary_message_id || "") : ""
+        };
+        api("PUT", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions/" + convId, body)
           .then(function() {
             if (oldConv) { oldConv.title = newName; oldConv.name = newName; }
             if (S.currentConvId === convId && S.currentConv) { S.currentConv.title = newName; }
