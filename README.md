@@ -45,6 +45,69 @@ ADM 不只是模型启动器，更内置了开箱即用的 **Agent**，把你的
 
 ---
 
+## 编译与部署
+
+### 环境准备
+
+| 依赖 | 版本 | 说明 |
+| --- | --- | --- |
+| [Rust](https://www.rust-lang.org/tools/install) | stable | Tauri 后端编译 |
+| [Node.js](https://nodejs.org/) | 22+ | 前端工具链 |
+| [pnpm](https://pnpm.io/) | 9+ | 包管理器（不要使用 npm / yarn） |
+
+> Windows 还需安装 [Visual Studio C++ 生成工具](https://visualstudio.microsoft.com/visual-cpp-build-tools/)（MSVC）；macOS 需安装 Xcode Command Line Tools（`xcode-select --install`）。
+
+### 开发调试
+
+```bash
+# 安装依赖
+pnpm install
+
+# 热重载开发模式
+pnpm tauri dev
+
+# 前端类型检查（tsc --noEmit）
+pnpm typecheck
+```
+
+前端为原生 HTML/CSS/JS（无框架、无打包工具），源码位于 `src/`，修改后刷新即生效；Rust 后端源码位于 `src-tauri/src/`。
+
+### 生产构建
+
+```bash
+# 当前平台构建
+pnpm tauri build
+
+# 指定平台构建
+pnpm tauri:build:windows   # Windows x64（NSIS 安装包）
+pnpm tauri:build:macos     # macOS
+pnpm tauri:build:linux     # Linux x64
+```
+
+构建产物位于 `src-tauri/target/<target>/release/bundle/` 目录。
+
+### 签名与发布
+
+```bash
+# 构建 + 自签名一条龙
+pnpm release:windows   # = tauri:build:windows + sign:windows
+pnpm release:macos     # = tauri:build:macos + sign:macos
+
+# macOS 用户提示「已损坏」时的修复脚本
+pnpm fix:macos
+```
+
+### CI 自动发布
+
+CI 配置见 `.github/workflows/build.yml`，推送 `v*` 标签即自动构建并发布 GitHub Release（Windows `x64-setup.exe` + macOS `aarch64.dmg`，均含自签名）：
+
+```bash
+git tag v0.1.2
+git push origin v0.1.2
+```
+
+---
+
 ## 联系方式
 
 - **项目地址**：https://github.com/autoDeploymentModel/adm
