@@ -464,6 +464,18 @@ const template = `
     </div>
   </div>
 </div>
+
+<div class="confirm-overlay" id="wxbot-code-overlay">
+  <div class="confirm-dialog">
+    <div class="confirm-title">输入配对码</div>
+    <div class="confirm-message" id="wxbot-code-hint">请输入微信手机端显示的配对数字：</div>
+    <input id="wxbot-code-input" type="text" inputmode="numeric" autocomplete="off" style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.06);color:#fff;font-size:16px;letter-spacing:2px;text-align:center;margin-bottom:16px;">
+    <div class="confirm-buttons">
+      <button class="btn-cancel" id="wxbot-code-cancel-btn">取消</button>
+      <button class="btn-confirm" id="wxbot-code-ok-btn">确定</button>
+    </div>
+  </div>
+</div>
 `;
 
 const PRESET_MODES = {
@@ -821,6 +833,38 @@ function hideWxbotQr() {
   if (overlay) overlay.classList.remove("show");
 }
 
+function showWxbotCode(retry) {
+  hideWxbotQr();
+  const overlay = document.getElementById("wxbot-code-overlay");
+  if (!overlay) return;
+  const hint = document.getElementById("wxbot-code-hint");
+  if (hint) hint.textContent = retry ? "配对码错误，请重新输入微信手机端显示的数字：" : "请输入微信手机端显示的配对数字：";
+  const input = document.getElementById("wxbot-code-input");
+  if (input) input.value = "";
+  overlay.classList.add("show");
+  if (input) setTimeout(function () { input.focus(); }, 50);
+}
+
+function hideWxbotCode() {
+  const overlay = document.getElementById("wxbot-code-overlay");
+  if (overlay) overlay.classList.remove("show");
+}
+
+async function submitWxbotCode() {
+  const input = document.getElementById("wxbot-code-input");
+  const code = input ? String(input.value || "").trim() : "";
+  if (!code) {
+    showToast("请先输入配对码", true);
+    return;
+  }
+  try {
+    await invoke()("submit_ilink_verify_code", { code: code });
+    hideWxbotCode();
+  } catch (e) {
+    showToast("提交配对码失败: " + e, true);
+  }
+}
+
 function pushWxbotActivity(p) {
   wxbotActivities.unshift(p);
   if (wxbotActivities.length > 50) wxbotActivities.pop();
@@ -846,6 +890,14 @@ async function setupWxbotPanel() {
   });
   document.getElementById("wxbot-qr-cancel-btn").addEventListener("click", async function () {
     hideWxbotQr();
+    try { await invoke()("cancel_ilink_login"); } catch (_) {}
+  });
+  document.getElementById("wxbot-code-ok-btn").addEventListener("click", submitWxbotCode);
+  document.getElementById("wxbot-code-input").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") submitWxbotCode();
+  });
+  document.getElementById("wxbot-code-cancel-btn").addEventListener("click", async function () {
+    hideWxbotCode();
     try { await invoke()("cancel_ilink_login"); } catch (_) {}
   });
   document.getElementById("wxbot-toggle-btn").addEventListener("click", async function () {
@@ -881,8 +933,11 @@ async function setupWxbotPanel() {
       const p = ev.payload || {};
       if (p.state === "waiting_scan") {
         showWxbotQr(p);
+      } else if (p.state === "waiting_verify_code") {
+        showWxbotCode(!!p.retry);
       } else {
         hideWxbotQr();
+        hideWxbotCode();
         if (p.state === "running") showToast("微信 Bot 已连接");
         if (p.state === "error" && p.error) showToast("微信 Bot: " + p.error, true);
       }
@@ -906,7 +961,7 @@ export default {
     root.innerHTML = template;
 
     // 禁用页面右键（屏蔽浏览器默认菜单；#confirm-overlay / #wxbot-qr-overlay 是 #settings-app 的兄弟节点，需各自绑定）
-    ["settings-app", "confirm-overlay", "wxbot-qr-overlay"].forEach(function(id) {
+    ["settings-app", "confirm-overlay", "wxbot-qr-overlay", "wxbot-code-overlay"].forEach(function(id) {
       var el = document.getElementById(id);
       if (el) el.addEventListener("contextmenu", function(e) { e.preventDefault(); });
     });

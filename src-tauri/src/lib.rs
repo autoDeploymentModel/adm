@@ -206,6 +206,7 @@ pub fn run() {
             // ilink.rs - 微信 Bot 桥接
             ilink::start_ilink_login,
             ilink::cancel_ilink_login,
+            ilink::submit_ilink_verify_code,
             ilink::get_ilink_status,
             ilink::start_ilink_bridge,
             ilink::stop_ilink_bridge,
