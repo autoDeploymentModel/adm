@@ -18,7 +18,7 @@ export function hideSettings() {
 
 export function updateSettingsUI() {
   var workdir = $input("settings-workdir");
-  var yoloCheck = $input("settings-yolo");
+  var planCheck = $input("settings-plan");
   var reasoningSelect = $input("settings-reasoning-effort");
   var tempInput = $input("settings-temperature");
 
@@ -27,8 +27,8 @@ export function updateSettingsUI() {
     workdir.value = dir || "";
   }).catch(function() {});
 
-  // YOLO
-  yoloCheck.checked = !!S.settings.agent_yolo;
+  // Plan 模式
+  planCheck.checked = !!S.settings.agent_plan_mode;
 
   // 推理强度
   reasoningSelect.value = S.settings.agent_reasoning_effort || "";
@@ -50,7 +50,7 @@ export async function saveSettings() {
 
     // 保存 agent 设置到 config
     var s = await invoke("load_settings");
-    s.agent_yolo = S.settings.agent_yolo || false;
+    s.agent_plan_mode = S.settings.agent_plan_mode || false;
     s.agent_default_provider = S.settings.agent_default_provider || "local";
     s.agent_reasoning_effort = S.settings.agent_reasoning_effort || "";
     s.agent_temperature = S.settings.agent_temperature || null;
@@ -65,7 +65,7 @@ export async function saveSettings() {
         // 复用它不产生任何引用保护，随后被服务端 teardown 就会满屏 404
         var newWs = await api("POST", "/v1/workspaces", {
           path: workdir,
-          yolo: S.settings.agent_yolo || false,
+          yolo: true, // 审批模式已移除：权限请求直通，Plan 模式靠服务端只读工具集约束
           client_id: S.clientId
         });
         // 切换到新 workspace

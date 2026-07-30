@@ -1,124 +1,42 @@
-// 权限确认弹窗与 YOLO 同步
+// Agent 模式同步（执行/Plan）与权限请求自动处理
+// 审批弹窗已移除：执行模式 = YOLO 直通（服务端 skip=true，不产生权限请求）；
+// Plan 模式 = 服务端只挂载只读工具（/agent/mode plan=true），模型无法修改和写入。
 import { S } from "./state.js";
 import { api } from "./api.js";
-import { escapeHtml } from "./utils.js";
 import { showError } from "./ui.js";
 
-// ===== 权限确认弹窗 =====
-// 同类操作识别 key：工具名 + 操作类型（不含路径/参数，保证"记住"对同工具不同文件也生效）
-function permissionKey(data) {
-  return (data.tool_name || data.tool || "unknown") + "|" + (data.action || data.operation || "");
-}
+// 切换/新建会话、切换工作区时的清理钩子。
+// 弹窗与排队逻辑已删除，保留空实现以兼容各调用点（session/sse/workspace）。
+export function resetPermissionState() {}
 
-// 切换/新建会话时重置权限记忆与队列（"允许本次会话"仅对当前会话生效）
-export function resetPermissionState() {
-  S.permissionAutoAllow = {};
-  S.pendingPermissions = [];
-  S.currentPermission = null;
-  var overlay = document.getElementById("agent-permission-overlay");
-  if (overlay) overlay.classList.remove("show");
-}
-
-// 自动放行（已记住的同类操作，不弹窗）
-function autoGrantPermission(data) {
-  api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/permissions/grant", {
-    permission: data, action: "allow"
-  }).catch(function(e) { showError("权限自动放行失败: " + e); });
-}
-
-// 将 YOLO 状态实时同步到 admAgent 服务端（POST /permissions/skip），中途切换立即生效。
-// 服务端的 yolo 只在创建工作区时传入一次，之后必须靠此接口更新，否则只改本地 config.json 不生效
-export async function syncYoloToServer() {
+// 将本地模式实时同步到 admAgent 服务端，中途切换立即生效（下一轮 run 时生效）。
+// - permissions/skip 恒为 true：审批模式已移除，权限请求不再弹窗；
+// - agent/mode 按 Plan 开关同步：Plan 模式下服务端只保留只读工具集。
+// 服务端状态只在创建工作区时传入一次，之后必须靠这两个接口更新。
+export async function syncModeToServer() {
   if (!S.serverInfo || !S.serverInfo.workspace_id) return;
   try {
     await api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/permissions/skip", {
-      skip: !!S.settings.agent_yolo
+      skip: true
     });
   } catch (e) {
-    console.warn("[agent] 同步 YOLO 状态到服务端失败:", e);
+    console.warn("[agent] 同步 skip 状态到服务端失败:", e);
   }
-  // 开启 YOLO 时，把已在等待的权限请求（当前弹窗 + 队列）全部放行并关闭弹窗，
-  // 避免切换前已发出的请求继续卡住本轮对话
-  if (S.settings.agent_yolo) {
-    var waiting = [];
-    if (S.currentPermission) { waiting.push(S.currentPermission); S.currentPermission = null; }
-    waiting = waiting.concat(S.pendingPermissions);
-    S.pendingPermissions = [];
-    var overlay = document.getElementById("agent-permission-overlay");
-    if (overlay) overlay.classList.remove("show");
-    waiting.forEach(autoGrantPermission);
+  try {
+    await api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent/mode", {
+      plan: !!S.settings.agent_plan_mode
+    });
+  } catch (e) {
+    console.warn("[agent] 同步 Plan 模式到服务端失败:", e);
+    showError("同步 Plan 模式失败（旧版 admAgent 不支持，请更新）: " + e);
   }
 }
 
-export function showPermissionDialog(data) {
-  // YOLO 模式下直接放行（兼容切换瞬间服务端 skip 尚未生效、仍发来请求的竞态）
-  if (S.settings && S.settings.agent_yolo) { autoGrantPermission(data); return; }
-  // 客户端已记住该类操作 → 直接放行，不再弹窗
-  if (S.permissionAutoAllow[permissionKey(data)]) { autoGrantPermission(data); return; }
-  // 去重：同一请求的重复事件忽略（SSE 重连/重复监听器可能送达多次）
-  if (S.currentPermission && S.currentPermission.id && S.currentPermission.id === data.id) return;
-  if (S.pendingPermissions.some(function(p) { return p.id && p.id === data.id; })) return;
-  // 弹窗已打开 → 排队，避免覆盖当前请求导致前一个请求永远得不到应答
-  if (S.currentPermission) { S.pendingPermissions.push(data); return; }
-  renderPermissionDialog(data);
-}
-
-// 处理队列中的下一个权限请求（命中记忆的自动放行，否则弹窗）
-function processNextPermission() {
-  while (S.pendingPermissions.length > 0) {
-    var next = S.pendingPermissions.shift();
-    if (S.permissionAutoAllow[permissionKey(next)]) { autoGrantPermission(next); continue; }
-    renderPermissionDialog(next);
-    return;
-  }
-}
-
-function renderPermissionDialog(data) {
-  var overlay = document.getElementById("agent-permission-overlay");
-  var body = document.getElementById("agent-permission-body");
-  if (!overlay || !body) return;
-
-  var tool = data.tool_name || data.tool || "unknown";
-  var operation = data.action || data.operation || "";
-  var description = data.description || "";
-  var detail = "";
-  if (data.params) {
-    try { detail = JSON.stringify(data.params, null, 2); } catch (_) { detail = String(data.params); }
-  } else if (data.path) {
-    detail = "路径: " + data.path;
-  }
-
-  body.innerHTML =
-    '<div style="margin-bottom:8px;"><strong>工具:</strong> ' + escapeHtml(tool) + '</div>' +
-    (operation ? '<div style="margin-bottom:8px;"><strong>操作:</strong> ' + escapeHtml(operation) + '</div>' : '') +
-    (description ? '<div style="margin-bottom:8px;"><strong>描述:</strong> ' + escapeHtml(description) + '</div>' : '') +
-    (detail ? '<div><strong>详情:</strong><div class="permission-detail-box">' + escapeHtml(detail) + '</div></div>' : '');
-
-  S.currentPermission = data;
-  var skipEl = /** @type {HTMLInputElement} */ (document.getElementById("agent-permission-skip"));
-  if (skipEl) skipEl.checked = false; // 勾选状态不跨弹窗残留
-  overlay.classList.add("show");
-
-  // 绑定按钮
-  var grantPermission = async function(action) {
-    var skip = skipEl ? skipEl.checked : false;
-    // "允许本次会话" 或勾选"不再询问" → 客户端记住，同类请求后续自动放行
-    if (action !== "deny" && (action === "allow_session" || skip)) {
-      S.permissionAutoAllow[permissionKey(data)] = true;
-    }
-    overlay.classList.remove("show");
-    S.currentPermission = null;
-    try {
-      await api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/permissions/grant", {
-        permission: data, action: action
-      });
-    } catch (e) {
-      showError("权限处理失败: " + e);
-    }
-    processNextPermission();
-  };
-
-  document.getElementById("agent-permission-allow").onclick = function() { grantPermission("allow"); };
-  document.getElementById("agent-permission-allow-session").onclick = function() { grantPermission("allow_session"); };
-  document.getElementById("agent-permission-deny").onclick = function() { grantPermission("deny"); };
+// SSE permission_request 兜底处理：正常情况下 skip=true 服务端不会发权限请求，
+// 只有同步瞬间的竞态才可能到达这里 → 直接放行（执行模式本就直通；
+// Plan 模式下服务端只有只读工具，放行的也只能是读操作）。
+export function handlePermissionRequest(data) {
+  api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/permissions/grant", {
+    permission: data, action: "allow"
+  }).catch(function(e) { console.warn("[agent] 权限自动放行失败:", e); });
 }

@@ -538,8 +538,8 @@ export const template = `
     white-space: nowrap;
   }
   .toolbar-mode-btn:hover { background: rgba(255,255,255,0.15); }
-  .toolbar-mode-btn.yolo { background: #e85d3a; color: #fff; }
-  .toolbar-mode-btn.yolo:hover { background: #c94e30; }
+  .toolbar-mode-btn.plan { background: #2b6cb0; color: #fff; }
+  .toolbar-mode-btn.plan:hover { background: #245a94; }
 
   /* 微信消息跟随开关（模型选择旁）：开启时微信 Bot 消息注入当前打开的会话 */
   .toolbar-wx-btn {
@@ -1064,7 +1064,7 @@ export const template = `
   @keyframes working-dot-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.5; transform: scale(0.85); } }
   @keyframes dot-bounce { 0%, 80%, 100% { transform: translateY(0); } 40% { transform: translateY(-6px); } }
 
-  /* 权限确认弹窗 */
+  /* 确认弹窗（showConfirm 复用，原权限审批弹窗样式骨架） */
   .permission-overlay {
     display: none;
     position: fixed;
@@ -1120,14 +1120,6 @@ export const template = `
     justify-content: flex-end;
     gap: 8px;
     flex-wrap: wrap;
-  }
-  .permission-skip-row {
-    padding: 0 20px 12px;
-    font-size: 12px;
-    color: var(--c-text-3);
-    display: flex;
-    align-items: center;
-    gap: 6px;
   }
 </style>
 
@@ -1217,10 +1209,10 @@ export const template = `
         <div class="attach-preview-area" id="agent-attach-preview"></div>
         <!-- 底部工具栏: ⚡Agent | 模型▾ | 上下文用量 | 📎 📤发送 -->
         <div class="agent-input-toolbar">
-          <!-- ① 工作模式切换 -->
-          <button class="toolbar-mode-btn" id="agent-mode-toggle" title="点击切换 YOLO 模式（跳过权限确认）">
+          <!-- ① 工作模式切换：执行 ↔ Plan（只读计划） -->
+          <button class="toolbar-mode-btn" id="agent-mode-toggle" title="点击切换 Plan 模式（只读调研并产出计划，不修改文件）">
             <span class="mode-icon">⚡</span>
-            <span class="mode-text">Agent</span>
+            <span class="mode-text">执行</span>
           </button>
           <!-- ② 模型选择下拉 -->
           <div class="toolbar-model-selector">
@@ -1287,13 +1279,13 @@ export const template = `
           </div>
         </div>
         <div class="param-row">
-          <div class="param-label">YOLO 模式</div>
+          <div class="param-label">Plan 模式</div>
           <div class="param-input">
             <div class="checkbox-wrap">
-              <input type="checkbox" id="settings-yolo">
-              <span>跳过所有权限确认</span>
+              <input type="checkbox" id="settings-plan">
+              <span>只读计划模式</span>
             </div>
-            <div class="param-desc">开启后 Agent 执行操作不再弹窗确认</div>
+            <div class="param-desc">开启后 Agent 只能读取/检索代码并产出实施计划，不会修改任何文件；关闭则为执行模式（直接执行修改）</div>
           </div>
         </div>
       </div>
@@ -1363,27 +1355,6 @@ export const template = `
         <div id="add-model-msg" style="font-size:12px;min-height:18px;line-height:18px;"></div>
         <button class="settings-btn settings-btn-primary" id="add-model-submit" style="align-self:flex-start;">添加</button>
       </div>
-    </div>
-  </div>
-</div>
-
-<!-- 权限确认弹窗 -->
-<div class="permission-overlay" id="agent-permission-overlay">
-  <div class="permission-modal">
-    <div class="permission-header">
-      <span class="permission-icon">⚠️</span>
-      <span class="permission-title">权限确认</span>
-    </div>
-    <div class="permission-body" id="agent-permission-body">
-    </div>
-    <div class="permission-skip-row">
-      <input type="checkbox" id="agent-permission-skip">
-      <span>本次会话不再询问此类操作</span>
-    </div>
-    <div class="permission-footer">
-      <button class="settings-btn settings-btn-secondary" id="agent-permission-deny">拒绝</button>
-      <button class="settings-btn settings-btn-secondary" id="agent-permission-allow-session">允许本次会话</button>
-      <button class="settings-btn settings-btn-primary" id="agent-permission-allow">允许</button>
     </div>
   </div>
 </div>

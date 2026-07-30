@@ -9,7 +9,7 @@ import { updateStatusBar, updateContextUsage, updateModeToggle, updateSendButton
 import { loadConversations, renderConversationList, selectConversation, newConversation } from "./agent/session.js";
 import { sendMessage } from "./agent/send.js";
 import { setupSSEListener } from "./agent/sse.js";
-import { syncYoloToServer } from "./agent/permission.js";
+import { syncModeToServer } from "./agent/permission.js";
 import { loadTools, renderToolsList } from "./agent/tools.js";
 import { switchModel, refreshServerProviders, resolveAgentModel, updateModelDropdown, updateModelBtn } from "./agent/model.js";
 import { enableAutoCompact, updateWorkspaceSelector } from "./agent/workspace.js";
@@ -91,7 +91,7 @@ async function init() {
         if (!S.workspaceInfo) {
           const newWs = await api("POST", "/v1/workspaces", {
             path: workdir,
-            yolo: S.settings.agent_yolo || false,
+            yolo: true, // 审批模式已移除：权限请求直通，Plan 模式靠服务端只读工具集约束
             client_id: S.clientId
           });
           S.workspaceInfo = { id: newWs.id, path: newWs.path, name: newWs.path.split(/[\\/]/).pop() };
@@ -151,8 +151,8 @@ async function init() {
       console.warn("[agent] 获取 agentInfo 失败:", e);
     }
 
-    // 把本地 YOLO 设置同步到服务端（复用已有工作区时服务端保留的是旧状态，可能与本地不一致）
-    await syncYoloToServer();
+    // 把本地模式（skip 直通 + Plan 开关）同步到服务端（复用已有工作区时服务端保留的是旧状态，可能与本地不一致）
+    await syncModeToServer();
 
     // 全局默认开启自动压缩（Compact 模式）
     await enableAutoCompact();
@@ -366,9 +366,9 @@ function bindEvents() {
     S.settings.agent_reasoning_effort = $input("settings-reasoning-effort").value;
     var tempVal = $input("settings-temperature").value;
     S.settings.agent_temperature = tempVal ? parseFloat(tempVal) : null;
-    S.settings.agent_yolo = $input("settings-yolo").checked;
+    S.settings.agent_plan_mode = $input("settings-plan").checked;
     await saveSettings();
-    await syncYoloToServer();
+    await syncModeToServer();
     hideSettings();
     updateModeToggle();
     updateModelBtn();
@@ -383,13 +383,13 @@ function bindEvents() {
   // 云端模型管理
   document.getElementById("agent-add-cloud-btn").addEventListener("click", showAddModelDialog);
 
-  // 模式切换 (工具栏)
+  // 模式切换 (工具栏)：执行 ↔ Plan（只读计划）
   document.getElementById("agent-mode-toggle").addEventListener("click", async function() {
-    S.settings.agent_yolo = !S.settings.agent_yolo;
+    S.settings.agent_plan_mode = !S.settings.agent_plan_mode;
     updateModeToggle();
     await saveSettings();
-    // 实时同步到服务端，对话中途切换立即生效
-    await syncYoloToServer();
+    // 实时同步到服务端，对话中途切换下一轮生效
+    await syncModeToServer();
   });
 
   // 模型下拉
@@ -610,9 +610,6 @@ export default {
     // 使在途 init() 失效，防止切走后旧 init 继续执行、或与下次 mount 的新 init 并发互踩
     S.initSeq++;
     S.pendingFiles = [];
-    // 重置权限弹窗状态（避免残留的 currentPermission 导致重新进入后新请求被误判为"弹窗已打开"而永久排队）
-    S.pendingPermissions = [];
-    S.currentPermission = null;
     // 重置手动滚动模式
     exitManualScrollMode();
     clearSendSafetyTimer();

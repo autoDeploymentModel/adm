@@ -1120,6 +1120,42 @@ POST /v1/workspaces/{id}/permissions/grant
 
 ---
 
+### 7.4 获取 Agent 模式
+
+```
+GET /v1/workspaces/{id}/agent/mode
+```
+
+**响应** `200 OK`（`proto.AgentModeRequest`）：
+
+```json
+{
+  "plan": false
+}
+```
+
+---
+
+### 7.5 设置 Agent 模式（Plan / 执行）
+
+```
+POST /v1/workspaces/{id}/agent/mode
+```
+
+设置 Agent 运行模式。`plan: true` 为 Plan（只读计划）模式：下一轮 run 起服务端只挂载只读工具（glob/grep/ls/view/lsp 只读系/sourcegraph/fetch/web_search/agent/todos/bash），其中 bash 仅允许只读命令白名单（git log/status/diff 等，拒绝链式命令）；移除全部写/执行工具与 MCP 工具，并在系统提示词追加 Plan 指令（只调研、产出实施计划）；`plan: false` 恢复完整执行模式。状态按工作区独立，中途切换对下一轮对话生效。
+
+**请求体**（`proto.AgentModeRequest`）：
+
+```json
+{
+  "plan": true
+}
+```
+
+**响应**：`200 OK`（无响应体）
+
+---
+
 ## 8. 文件追踪接口
 
 ### 8.1 列出会话追踪文件
@@ -1657,6 +1693,8 @@ GUI 启动时应生成一个全局唯一的 `client_id` 并在整个生命周期
 | 29 | GET | `/v1/workspaces/{id}/permissions/skip` | 获取跳过权限状态 |
 | 30 | POST | `/v1/workspaces/{id}/permissions/skip` | 设置跳过权限 |
 | 31 | POST | `/v1/workspaces/{id}/permissions/grant` | 授权权限请求 |
+| 31a | GET | `/v1/workspaces/{id}/agent/mode` | 获取 Agent 模式（Plan/执行） |
+| 31b | POST | `/v1/workspaces/{id}/agent/mode` | 设置 Agent 模式（Plan/执行） |
 | 32 | GET | `/v1/workspaces/{id}/agent` | Agent 信息 |
 | 33 | POST | `/v1/workspaces/{id}/agent` | 发送消息给 Agent |
 | 34 | POST | `/v1/workspaces/{id}/agent/init` | 初始化 Agent |

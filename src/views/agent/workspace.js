@@ -6,7 +6,7 @@ import { renderMessages, renderTodos } from "./render.js";
 import { loadConversations } from "./session.js";
 import { loadTools } from "./tools.js";
 import { setupSSEListener } from "./sse.js";
-import { resetPermissionState, syncYoloToServer } from "./permission.js";
+import { resetPermissionState, syncModeToServer } from "./permission.js";
 
 // ===== 会话上下文压缩 =====
 // 全局默认开启自动压缩（Compact 模式）：上下文接近上限时服务端自动生成摘要压缩，
@@ -36,8 +36,8 @@ export async function switchToWorkspace(wsId, wsPath) {
 
   // 重新初始化 Agent
   try { await api("POST", "/v1/workspaces/" + wsId + "/agent/init"); } catch (_) {}
-  // 同步 YOLO 状态到新工作区（各工作区的 skip 状态独立，保留的可能是旧值）
-  await syncYoloToServer();
+  // 同步模式状态到新工作区（各工作区的 skip/plan 状态独立，保留的可能是旧值）
+  await syncModeToServer();
   // 确保新工作区也开启自动压缩（全局配置，幂等调用仅作兑底）
   await enableAutoCompact();
   // 刷新 agentInfo

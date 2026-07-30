@@ -9,7 +9,7 @@
 //   section 3: 运行时（IlinkRuntime / IlinkManaged）与 Tauri 命令
 //   section 4: 扫码登录流程（bot.login）
 //   section 5: Bridge 主循环（bot.run 收消息 → admAgent）
-//   section 6: admAgent SSE 订阅（run_complete / permission_request → 回复微信）
+//   section 6: admAgent SSE 订阅（run_complete → 回复微信）
 //   section 7: 消息转换工具（markdown 降级 / 分段）
 
 use crate::app_state::AppState;
@@ -34,8 +34,6 @@ use wechatbot::{BotOptions, ContentType, WeChatBot, WeChatBotError};
 
 /// 单条微信消息最大字符数，超出按此分段
 const WX_CHUNK_CHARS: usize = 1800;
-/// 微信端权限确认超时（秒），超时自动拒绝
-const PERM_TIMEOUT_SECS: u64 = 120;
 /// admAgent server 自动拉起的重试冷却（秒）
 const AGENT_AUTOSTART_COOLDOWN_SECS: u64 = 60;
 /// 配对码（登录时微信手机端显示的数字）输入等待超时（秒）
@@ -173,8 +171,6 @@ struct BridgeShared {
     client_id: String,
     /// run_id → 回投路由（run_complete 可能不带 run_id，需支持按 session_id 回退匹配）
     runs: HashMap<String, RunRoute>,
-    /// 微信用户 ID → 待审批的权限请求 payload（wechat_approve 模式）
-    pending_perm: HashMap<String, Value>,
 }
 
 /// Bridge 运行时：bot / SSE 两个 tokio 任务共享一个 Arc
@@ -845,30 +841,6 @@ async fn handle_incoming(rt: &Arc<IlinkRuntime>, msg: wechatbot::IncomingMessage
     emit_activity(&rt.app, "in", &from, &summary);
     flow_log(&rt.app, "inbound", &format!("from={} atts={} text={}", short_wx_id(&from), attachments.len(), text));
 
-    // 有待审批权限时优先匹配 y/a/n（仅纯文本消息参与审批/指令匹配）
-    let has_pending = { attachments.is_empty() && rt.shared.lock().await.pending_perm.contains_key(&from) };
-    if has_pending {
-        let ans = text.to_lowercase();
-        match ans.as_str() {
-            "y" | "yes" | "1" | "允许" | "同意" => {
-                resolve_permission(rt, &from, "allow").await;
-                return;
-            }
-            "a" | "all" | "3" | "本会话允许" => {
-                resolve_permission(rt, &from, "allow_session").await;
-                return;
-            }
-            "n" | "no" | "2" | "拒绝" => {
-                resolve_permission(rt, &from, "deny").await;
-                return;
-            }
-            _ => {
-                send_wx_text(rt, &from, "⚠️ 有待处理的权限请求，请先回复：y 允许 / a 本会话全部允许 / n 拒绝").await;
-                return;
-            }
-        }
-    }
-
     // 控制指令（本地处理，不进 Agent；带图片时不视为指令）
     if attachments.is_empty() && text.starts_with('/') {
         handle_command(rt, &from, &text).await;
@@ -901,11 +873,11 @@ async fn handle_command(rt: &Arc<IlinkRuntime>, from: &str, text: &str) {
             let (port, ws) = backend_of(rt).await;
             let s = load_settings(&rt.app);
             let workdir = if s.agent_workdir.is_empty() { "（跟随 Agent 页）".to_string() } else { s.agent_workdir.clone() };
-            let perm = if s.agent_yolo { "YOLO（直通）" } else { "微信内审批 y/a/n" };
+            let mode = if s.agent_plan_mode { "Plan（只读计划）" } else { "执行（直接修改）" };
             let mut lines = vec![
                 "📊 状态".to_string(),
                 format!("工作目录：{}", workdir),
-                format!("权限：跟随 Agent 页（{}）", perm),
+                format!("模式：跟随 Agent 页（{}）", mode),
             ];
             match (port, ws) {
                 (Some(port), Some(ws)) => {
@@ -1206,7 +1178,7 @@ async fn sse_loop(rt: Arc<IlinkRuntime>) {
 }
 
 /// 采用 Agent 页所在工作区（不再自建独立工作区），使微信会话在桌面端 Agent 页可见。
-/// 最小侵入原则：仅在 Agent 未就绪时才 init，仅在 skip 与期望不一致时才设置。
+/// 最小侵入原则：仅在 Agent 未就绪时才 init，仅在状态与期望不一致时才设置。
 async fn adopt_workspace(rt: &Arc<IlinkRuntime>, port: u16, ws: &str) -> Result<(), AppError> {
     let ready = match agent_get(rt, port, &format!("/v1/workspaces/{}/agent", ws)).await {
         Ok((200, info)) => info.get("is_ready").and_then(|b| b.as_bool()).unwrap_or(false),
@@ -1219,14 +1191,24 @@ async fn adopt_workspace(rt: &Arc<IlinkRuntime>, port: u16, ws: &str) -> Result<
         }
         flow_log(&rt.app, "adopt_init", &format!("ws={} 未就绪，已 init", ws));
     }
-    let want_skip = load_settings(&rt.app).agent_yolo;
+    // 审批模式已移除：权限请求恒直通（skip=true），只读约束由 Plan 模式的服务端工具集承担
     let cur_skip = match agent_get(rt, port, &format!("/v1/workspaces/{}/permissions/skip", ws)).await {
         Ok((200, v)) => v.get("skip").and_then(|b| b.as_bool()),
         _ => None,
     };
-    if cur_skip != Some(want_skip) {
-        let _ = agent_post(rt, port, &format!("/v1/workspaces/{}/permissions/skip", ws), &json!({ "skip": want_skip })).await;
-        flow_log(&rt.app, "adopt_skip", &format!("ws={} skip {:?} -> {}", ws, cur_skip, want_skip));
+    if cur_skip != Some(true) {
+        let _ = agent_post(rt, port, &format!("/v1/workspaces/{}/permissions/skip", ws), &json!({ "skip": true })).await;
+        flow_log(&rt.app, "adopt_skip", &format!("ws={} skip {:?} -> true", ws, cur_skip));
+    }
+    // 同步 Plan 模式（跟随 Agent 页设置；旧版 admAgent 无此接口时忽略失败）
+    let want_plan = load_settings(&rt.app).agent_plan_mode;
+    let cur_plan = match agent_get(rt, port, &format!("/v1/workspaces/{}/agent/mode", ws)).await {
+        Ok((200, v)) => v.get("plan").and_then(|b| b.as_bool()),
+        _ => None,
+    };
+    if cur_plan != Some(want_plan) {
+        let _ = agent_post(rt, port, &format!("/v1/workspaces/{}/agent/mode", ws), &json!({ "plan": want_plan })).await;
+        flow_log(&rt.app, "adopt_plan", &format!("ws={} plan {:?} -> {}", ws, cur_plan, want_plan));
     }
     let mut s = rt.shared.lock().await;
     s.port = Some(port);
@@ -1289,108 +1271,16 @@ async fn handle_sse_event(rt: &Arc<IlinkRuntime>, v: &Value, event_name: &str) {
             send_wx_text(rt, &wx, &reply).await;
         }
         "permission_request" => {
-            let session_id = inner.get("session_id").and_then(|s| s.as_str()).unwrap_or("");
-            if session_id.is_empty() {
-                return;
-            }
-            let wx = {
-                let s = rt.shared.lock().await;
-                s.runs
-                    .values()
-                    .find(|r| r.session_id == session_id)
-                    .map(|r| r.wx_user.clone())
-            };
-            let Some(wx) = wx else { return };
-            let perm_id = inner.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string();
-            let tool = inner.get("tool_name").and_then(|t| t.as_str()).unwrap_or("未知工具");
-            let desc = inner.get("description").and_then(|d| d.as_str()).unwrap_or("");
-            rt.shared.lock().await.pending_perm.insert(wx.clone(), inner.clone());
-            send_wx_text(
-                rt,
-                &wx,
-                &format!(
-                    "⚠️ Agent 请求权限\n工具：{}\n操作：{}\n\n回复 y 允许 / a 本会话全部允许 / n 拒绝（{} 秒内未回复自动拒绝）",
-                    tool, desc, PERM_TIMEOUT_SECS
-                ),
-            )
-            .await;
-            let rt2 = rt.clone();
-            let wx2 = wx.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_secs(PERM_TIMEOUT_SECS)).await;
-                let still_pending = {
-                    let s = rt2.shared.lock().await;
-                    s.pending_perm
-                        .get(&wx2)
-                        .and_then(|p| p.get("id"))
-                        .and_then(|i| i.as_str())
-                        .map(|i| i == perm_id)
-                        .unwrap_or(false)
-                };
-                if still_pending {
-                    resolve_permission(&rt2, &wx2, "deny").await;
-                    send_wx_text(&rt2, &wx2, "⏱️ 权限请求超时，已自动拒绝。").await;
-                }
-            });
-        }
-        "permission_notification" => {
-            let pid = inner
-                .get("id")
-                .or_else(|| inner.get("request_id"))
-                .and_then(|i| i.as_str())
-                .unwrap_or("");
-            if pid.is_empty() {
-                return;
-            }
-            let wx = {
-                let mut s = rt.shared.lock().await;
-                let hit = s
-                    .pending_perm
-                    .iter()
-                    .find(|(_, p)| p.get("id").and_then(|i| i.as_str()) == Some(pid))
-                    .map(|(k, _)| k.clone());
-                if let Some(ref k) = hit {
-                    s.pending_perm.remove(k);
-                }
-                hit
-            };
-            if let Some(wx) = wx {
-                send_wx_text(rt, &wx, "ℹ️ 该权限请求已在电脑端处理。").await;
+            // 审批模式已移除：skip=true 下正常不会收到；同步瞬间的竞态请求直接放行，
+            // 避免微信触发的运行被卡住（Plan 模式下服务端只挂载只读工具，放行的也只能是读操作）
+            let (port, ws) = backend_of(rt).await;
+            if let (Some(port), Some(ws)) = (port, ws) {
+                let body = json!({ "permission": inner, "action": "allow" });
+                let _ = agent_post(rt, port, &format!("/v1/workspaces/{}/permissions/grant", ws), &body).await;
+                flow_log(&rt.app, "perm_auto_allow", "权限请求已自动放行（审批模式已移除）");
             }
         }
         _ => {}
-    }
-}
-
-/// 提交权限审批结果到 admAgent
-async fn resolve_permission(rt: &Arc<IlinkRuntime>, from: &str, action: &str) {
-    let perm = { rt.shared.lock().await.pending_perm.remove(from) };
-    let Some(perm) = perm else { return };
-    let (port, ws) = backend_of(rt).await;
-    let (port, ws) = match (port, ws) {
-        (Some(p), Some(w)) => (p, w),
-        _ => {
-            send_wx_text(rt, from, "❌ Agent 服务未就绪，权限处理失败。").await;
-            return;
-        }
-    };
-    let body = json!({ "permission": perm, "action": action });
-    match agent_post(rt, port, &format!("/v1/workspaces/{}/permissions/grant", ws), &body).await {
-        Ok((200, v)) => {
-            let resolved = v.get("resolved").and_then(|r| r.as_bool()).unwrap_or(true);
-            let reply = if !resolved {
-                "ℹ️ 该权限请求已在电脑端处理。".to_string()
-            } else {
-                match action {
-                    "allow" => "✅ 已允许本次操作。".to_string(),
-                    "allow_session" => "✅ 已允许本会话内所有同类操作。".to_string(),
-                    _ => "🚫 已拒绝该操作。".to_string(),
-                }
-            };
-            send_wx_text(rt, from, &reply).await;
-        }
-        Ok((st, _)) => send_wx_text(rt, from, &format!("❌ 权限处理失败：HTTP {}", st)).await,
-        Err(e) => send_wx_text(rt, from, &format!("❌ 权限处理失败：{}", e)).await,
     }
 }
 

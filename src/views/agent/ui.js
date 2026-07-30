@@ -146,14 +146,17 @@ export function updateModeToggle() {
   var btn = document.getElementById("agent-mode-toggle");
   if (!btn) return;
   var modeText = btn.querySelector(".mode-text");
-  if (S.settings.agent_yolo) {
-    if (modeText) modeText.textContent = "YOLO";
-    btn.classList.add("yolo");
-    btn.title = "当前为 YOLO 模式（跳过权限确认），点击切换为常规模式";
+  var modeIcon = btn.querySelector(".mode-icon");
+  if (S.settings.agent_plan_mode) {
+    if (modeText) modeText.textContent = "Plan";
+    if (modeIcon) modeIcon.textContent = "📋";
+    btn.classList.add("plan");
+    btn.title = "当前为 Plan 模式（只读调研并产出计划，不修改任何文件），点击切换为执行模式";
   } else {
-    if (modeText) modeText.textContent = "Agent";
-    btn.classList.remove("yolo");
-    btn.title = "当前为常规模式，点击切换 YOLO 模式（跳过权限确认）";
+    if (modeText) modeText.textContent = "执行";
+    if (modeIcon) modeIcon.textContent = "⚡";
+    btn.classList.remove("plan");
+    btn.title = "当前为执行模式（直接执行修改），点击切换 Plan 模式（只读计划）";
   }
 }
 

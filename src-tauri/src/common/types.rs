@@ -118,9 +118,9 @@ pub struct Settings {
 pub launch_params: LaunchParams,
 #[serde(default)]
 pub agent_workdir: String,
-/// Agent YOLO 模式：跳过所有权限确认
+/// Agent Plan 模式：只读调研并产出计划，不修改任何文件（false = 执行模式直通）
 #[serde(default)]
-pub agent_yolo: bool,
+pub agent_plan_mode: bool,
 /// Agent 默认 Provider（如 "local" / "xiaomimimo" 等）
 #[serde(default)]
 pub agent_default_provider: String,
@@ -137,7 +137,7 @@ fn default() -> Self {
 Self {
 launch_params: LaunchParams::default(),
 agent_workdir: String::new(),
-agent_yolo: false,
+agent_plan_mode: false,
 agent_default_provider: String::new(),
 agent_reasoning_effort: String::new(),
 agent_temperature: None,

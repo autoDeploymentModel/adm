@@ -425,8 +425,8 @@ const template = `
             <div class="param-input"><span style="font-size:13px;color:var(--c-text-2);">跟随 Agent 页工作目录</span><div class="param-desc">微信 Bot 与 Agent 页使用同一工作目录，在 Agent 页修改</div></div>
           </div>
           <div class="param-row">
-            <div class="param-label">权限</div>
-            <div class="param-input"><span style="font-size:13px;color:var(--c-text-2);">跟随 Agent 页 YOLO 设置</span><div class="param-desc">开启 YOLO 则直通；未开启时微信收到权限请求回复 y/a/n 审批</div></div>
+            <div class="param-label">模式</div>
+            <div class="param-input"><span style="font-size:13px;color:var(--c-text-2);">跟随 Agent 页模式设置</span><div class="param-desc">执行模式直接执行修改；Plan 模式只读调研并产出计划，不修改任何文件</div></div>
           </div>
         </div>
 

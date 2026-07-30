@@ -5,7 +5,7 @@ import { getTextFromParts } from "./utils.js";
 import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, updateContextUsage } from "./ui.js";
 import { renderMessages, renderTodos } from "./render.js";
 import { loadConversations, refreshMessages, renderConversationList, selectConversation, syncWxFollowSession } from "./session.js";
-import { showPermissionDialog, resetPermissionState } from "./permission.js";
+import { handlePermissionRequest, resetPermissionState } from "./permission.js";
 import { loadTools } from "./tools.js";
 import { refreshAgentInfo, reloadAgentConfig } from "./model.js";
 
@@ -147,7 +147,8 @@ function handleSSEEvent(payload) {
       }
       break;
     case "permission_request":
-      showPermissionDialog(actualData);
+      // 审批弹窗已移除：skip=true 下正常不会收到，竞态到达时自动放行
+      handlePermissionRequest(actualData);
       break;
     case "permission_notification":
       // 权限处理结果通知，可忽略或更新 UI

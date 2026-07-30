@@ -9,7 +9,7 @@ export const listen = window.__adm_listen;
  * @property {Array<() => void>} unlisteners
  * @property {string | null} clientId UUID，客户端标识
  * @property {{ port?: number, workspace_id: string } | null} serverInfo
- * @property {any} settings { agent_yolo, agent_default_provider, ... }
+ * @property {any} settings { agent_plan_mode, agent_default_provider, ... }
  * @property {any[]} providers cloud providers list
  * @property {any[]} serverProviders admAgent 服务端 /providers 完整列表（含内置模型）
  * @property {boolean} serverProvidersLoaded 是否已成功取得服务端 provider 快照
@@ -30,9 +30,6 @@ export const listen = window.__adm_listen;
  * @property {any} agentInfo Agent 状态信息 (当前模型等)
  * @property {any[]} pendingFiles 待发送附件 [{name, type, size, base64, dataUrl}]
  * @property {any} sendSafetyTimer
- * @property {Object<string, boolean>} permissionAutoAllow
- * @property {any[]} pendingPermissions
- * @property {any} currentPermission
  * @property {boolean} manualScrollMode
  * @property {any} manualModeExitTimer
  * @property {boolean} pendingModelReload
@@ -48,7 +45,7 @@ export const S = {
   unlisteners: [],
   clientId: null,   // UUID，客户端标识
   serverInfo: null, // { port, workspace_id }
-  settings: null,   // { agent_yolo, agent_default_provider, ... }
+  settings: null,   // { agent_plan_mode, agent_default_provider, ... }
   providers: [],    // cloud providers list
   serverProviders: [], // admAgent 服务端 /providers 返回的完整 provider 列表（含内置模型）
   serverProvidersLoaded: false, // 成功取得服务端快照后为 true；空数组也代表有效快照
@@ -69,9 +66,6 @@ export const S = {
   agentInfo: null,    // Agent 状态信息 (当前模型等)
   pendingFiles: [],   // 待发送附件列表 [{name, type, size, base64, dataUrl}]
   sendSafetyTimer: null, // isSending 安全超时定时器（3分钟无任何 SSE 活动则自动重置，收到消息事件会续期）
-  permissionAutoAllow: {}, // 客户端"本次会话记住"缓存 key: tool|action → true（服务端 allow_session 按 工具+操作+路径 匹配，路径变化仍会弹窗，客户端兜底）
-  pendingPermissions: [],  // 弹窗打开期间到达的后续权限请求队列（避免覆盖当前请求导致其永远得不到应答）
-  currentPermission: null, // 当前弹窗正在处理的权限请求
   manualScrollMode: false,   // 手动模式：鼠标在消息区内，暂停自动滚底，保留滚动位置与折叠块展开状态
   manualModeExitTimer: null, // 鼠标离开消息区 1 秒后恢复自动模式的定时器
   pendingModelReload: false, // 切换模型时 /agent/update 失败（如会话繁忙）→ 挂起，run_complete/下次发送前重试
