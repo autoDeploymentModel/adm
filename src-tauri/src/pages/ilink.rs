@@ -777,7 +777,7 @@ async fn handle_incoming(rt: &Arc<IlinkRuntime>, msg: wechatbot::IncomingMessage
         send_wx_text(rt, &from, "微信消息接收已关闭。请在电脑端 Agent 页模型选择旁开启「💬 微信」开关。").await;
         return;
     }
-    // 提取文本：文本消息直接取；语音消息取转写文字；其余类型暂不支持
+    // 提取文本：文本消息直接取；语音消息取转写文字
     let mut text = msg.text.trim().to_string();
     if text.is_empty() && matches!(msg.content_type, ContentType::Voice) {
         text = msg
@@ -789,18 +789,64 @@ async fn handle_incoming(rt: &Arc<IlinkRuntime>, msg: wechatbot::IncomingMessage
             .trim()
             .to_string();
     }
-    if text.is_empty() {
+    // 图片消息：用 crate 的 download 拉取并解密原图，转 base64 附件随消息转发
+    // （admAgent POST /agent 支持 attachments，与桌面端发图同一通道）
+    let mut attachments: Vec<Value> = Vec::new();
+    if matches!(msg.content_type, ContentType::Image) {
+        match rt.bot.download(&msg).await {
+            Ok(Some(media)) => {
+                let ext = media
+                    .format
+                    .clone()
+                    .unwrap_or_default()
+                    .trim_start_matches('.')
+                    .to_lowercase();
+                let mime = match ext.as_str() {
+                    "png" => "image/png",
+                    "gif" => "image/gif",
+                    "bmp" => "image/bmp",
+                    "webp" => "image/webp",
+                    _ => "image/jpeg",
+                };
+                let name = media
+                    .file_name
+                    .clone()
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or_else(|| format!("wechat-image.{}", if ext.is_empty() { "jpg" } else { ext.as_str() }));
+                flow_log(&rt.app, "inbound_image", &format!("from={} bytes={} mime={} name={}", short_wx_id(&from), media.data.len(), mime, name));
+                attachments.push(json!({
+                    "file_name": name,
+                    "mime_type": mime,
+                    "content": base64::engine::general_purpose::STANDARD.encode(&media.data),
+                }));
+            }
+            Ok(None) => {
+                // 消息里没有可下载的媒体引用（如仅缩略图未就绪）
+                flow_log(&rt.app, "inbound_image", &format!("from={} download 返回 None", short_wx_id(&from)));
+                send_wx_text(rt, &from, "❌ 图片获取失败（消息中未找到可下载的媒体），请重发。").await;
+                return;
+            }
+            Err(e) => {
+                eprintln!("[ilink] 下载微信图片失败: {}", e);
+                flow_log(&rt.app, "inbound_image", &format!("from={} 下载失败: {}", short_wx_id(&from), e));
+                send_wx_text(rt, &from, &format!("❌ 图片下载失败：{}", e)).await;
+                return;
+            }
+        }
+    }
+    if text.is_empty() && attachments.is_empty() {
         if !matches!(msg.content_type, ContentType::Text) {
-            send_wx_text(rt, &from, "暂不支持该消息类型，请发送文字。").await;
+            send_wx_text(rt, &from, "暂不支持该消息类型，请发送文字或图片。").await;
         }
         return;
     }
     rt.msg_in.fetch_add(1, Ordering::Relaxed);
-    emit_activity(&rt.app, "in", &from, &text);
-    flow_log(&rt.app, "inbound", &format!("from={} text={}", short_wx_id(&from), text));
+    let summary = if text.is_empty() { "[图片]".to_string() } else { text.clone() };
+    emit_activity(&rt.app, "in", &from, &summary);
+    flow_log(&rt.app, "inbound", &format!("from={} atts={} text={}", short_wx_id(&from), attachments.len(), text));
 
-    // 有待审批权限时优先匹配 y/a/n
-    let has_pending = { rt.shared.lock().await.pending_perm.contains_key(&from) };
+    // 有待审批权限时优先匹配 y/a/n（仅纯文本消息参与审批/指令匹配）
+    let has_pending = { attachments.is_empty() && rt.shared.lock().await.pending_perm.contains_key(&from) };
     if has_pending {
         let ans = text.to_lowercase();
         match ans.as_str() {
@@ -823,13 +869,13 @@ async fn handle_incoming(rt: &Arc<IlinkRuntime>, msg: wechatbot::IncomingMessage
         }
     }
 
-    // 控制指令（本地处理，不进 Agent）
-    if text.starts_with('/') {
+    // 控制指令（本地处理，不进 Agent；带图片时不视为指令）
+    if attachments.is_empty() && text.starts_with('/') {
         handle_command(rt, &from, &text).await;
         return;
     }
 
-    forward_to_agent(rt, &from, &text).await;
+    forward_to_agent(rt, &from, &text, attachments).await;
 }
 
 /// 微信端控制指令：/stop /status /help
@@ -911,7 +957,8 @@ async fn backend_of(rt: &Arc<IlinkRuntime>) -> (Option<u16>, Option<String>) {
 
 /// 转发消息给 admAgent（fire-and-forget，结果由 SSE run_complete 回投）。
 /// 微信消息直接注入桌面当前打开的会话（开关已在 handle_incoming 入口校验）。
-async fn forward_to_agent(rt: &Arc<IlinkRuntime>, from: &str, text: &str) {
+/// attachments：图片等附件（base64），与桌面端 send.js 的 attachments 字段同格式。
+async fn forward_to_agent(rt: &Arc<IlinkRuntime>, from: &str, text: &str, attachments: Vec<Value>) {
     let (port, ws) = backend_of(rt).await;
     let (port, ws) = match (port, ws) {
         (Some(p), Some(w)) => (p, w),
@@ -920,6 +967,26 @@ async fn forward_to_agent(rt: &Arc<IlinkRuntime>, from: &str, text: &str) {
             return;
         }
     };
+    // 带图时校验当前模型是否支持图片（对齐桌面端 send.js 的 supports_images 检查），
+    // 否则图片会被模型静默忽略，用户以为 Agent 看到了图
+    if !attachments.is_empty() {
+        if let Ok((200, info)) = agent_get(rt, port, &format!("/v1/workspaces/{}/agent", ws)).await {
+            let supports = info
+                .get("model")
+                .and_then(|m| m.get("supports_images"))
+                .and_then(|b| b.as_bool())
+                .unwrap_or(false);
+            if !supports {
+                let model = info
+                    .get("model")
+                    .and_then(|m| m.get("id"))
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("未知");
+                send_wx_text(rt, from, &format!("❌ 当前模型（{}）不支持图片，请在电脑端切换到支持图片的模型后重发。", model)).await;
+                return;
+            }
+        }
+    }
     // 目标会话 = 桌面当前打开的会话（从 slots 读，跨 Bridge 重启存活）；未打开时提示用户
     let sid = match current_follow_session(&rt.app) {
         Some(s) if !s.is_empty() => s,
@@ -933,10 +1000,17 @@ async fn forward_to_agent(rt: &Arc<IlinkRuntime>, from: &str, text: &str) {
         run_id.clone(),
         RunRoute { wx_user: from.to_string(), session_id: sid.clone() },
     );
-    flow_log(&rt.app, "forward", &format!("run_id={} session={} port={} prompt={}", run_id, sid, port, text));
-    // 前置来源标注，让 Agent 上下文可区分远程消息
-    let prompt = format!("[来自微信远程消息]\n{}", text);
-    let body = json!({ "session_id": sid, "run_id": run_id, "prompt": prompt });
+    flow_log(&rt.app, "forward", &format!("run_id={} session={} port={} atts={} prompt={}", run_id, sid, port, attachments.len(), text));
+    // 前置来源标注，让 Agent 上下文可区分远程消息；纯图无文字时给默认提示词
+    let prompt = if text.is_empty() {
+        "[来自微信远程消息]\n（用户发来一张图片，请查看并处理）".to_string()
+    } else {
+        format!("[来自微信远程消息]\n{}", text)
+    };
+    let mut body = json!({ "session_id": sid, "run_id": run_id, "prompt": prompt });
+    if !attachments.is_empty() {
+        body["attachments"] = Value::Array(attachments);
+    }
     match agent_post(rt, port, &format!("/v1/workspaces/{}/agent", ws), &body).await {
         Ok((202, _)) | Ok((200, _)) => {
             flow_log(&rt.app, "forward_ok", &format!("run_id={} 已提交 admAgent（等待 run_complete 回复）", run_id));

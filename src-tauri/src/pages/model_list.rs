@@ -673,6 +673,11 @@ pub async fn start_model(
     state.set_model_running(true);
     state.bump_model_generation(); // 模型重启代次 +1，供 Agent 页判断是否需要重启 admAgent
 
+    // 同步本地模型能力（supports_images 等）给运行中的 admAgent：
+    // 服务端只在启动时读 admAgent.json，若它先于模型启动（如微信 Bridge 自动拉起），
+    // 不同步会导致视觉模型被误判为不支持图片（图片附件被静默丢弃）
+    crate::pages::agent::sync_local_model_capabilities(app.clone());
+
     app.emit(
         "model-started",
         serde_json::json!({

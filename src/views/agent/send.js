@@ -87,9 +87,11 @@ export async function sendMessage() {
   try {
     // POST /v1/workspaces/{id}/agent — fire-and-forget, 返回 202 Accepted (无响应体)
     // 实际结果通过 SSE 事件流获取
+    // admAgent 要求 prompt 非空（纯图片附件会被 ValidateCall 拒绝："prompt is empty"），
+    // 只发附件不输文字时补默认提示词（能走到这里 text 为空时 filesToSend 必非空）
     var body = {
       session_id: sessionId,
-      prompt: text,
+      prompt: text || "（用户发来附件，请查看并处理）",
       run_id: runId,
     };
     if (filesToSend.length > 0) {

@@ -315,6 +315,69 @@ pub async fn prepare_adm_agent_config(app: tauri::AppHandle) -> Result<(), AppEr
     ensure_adm_agent_config(&app)
 }
 
+/// 模型启动成功后同步本地模型能力（supports_images / context_window）到 admAgent：
+/// 1) ensure_adm_agent_config 把最新能力写入 admAgent.json；
+/// 2) 若 server 正在运行，POST /config/set 写一个无害标量触发服务端写盘+从磁盘全量重载
+///    （服务端只在启动时读配置，SetConfigField 是唯一的热重载入口；
+///    不能直接写 models 数组元素：/config/set 落盘到服务端数据配置文件，
+///    与 Rust 写的 admAgent.json 合并时数组按拼接处理，会造成模型重复）；
+/// 3) POST /agent/update 重建 coordinator 内的 agent，使新 ModelInfo 即时生效
+///    （否则 GET /agent 仍报旧 supports_images，图片附件会被 coordinator 静默丢弃）。
+/// 失败静默：server 未运行时下次启动自然读到新配置。
+pub fn sync_local_model_capabilities(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = ensure_adm_agent_config(&app) {
+            eprintln!("[admAgent] 同步本地模型能力：写 admAgent.json 失败: {}", e);
+            return;
+        }
+        let (port, ws) = {
+            let state = app.state::<AppState>();
+            let mut guard = match state.agent_session.lock() {
+                Ok(g) => g,
+                Err(_) => return,
+            };
+            match guard.as_mut() {
+                Some(s) => {
+                    if matches!(s.child.try_wait(), Ok(None)) {
+                        (s.port, s.workspace_id.clone())
+                    } else {
+                        return; // 进程已退出：下次启动会读新配置
+                    }
+                }
+                _ => return, // server 未运行：启动时会读新配置，无需热同步
+            }
+        };
+        let client = match reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(3))
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+        {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        // 写无害标量触发服务端重载（合并进刚更新的 admAgent.json）
+        let set_url = format!("http://127.0.0.1:{}/v1/workspaces/{}/config/set", port, ws);
+        let body = serde_json::json!({ "scope": 0, "key": "providers.local.name", "value": "Local" });
+        match client.post(&set_url).json(&body).send().await {
+            Ok(r) if r.status().is_success() => {}
+            Ok(r) => {
+                eprintln!("[admAgent] 同步本地模型能力：/config/set HTTP {}", r.status());
+                return;
+            }
+            Err(e) => {
+                eprintln!("[admAgent] 同步本地模型能力：/config/set 失败: {}", e);
+                return;
+            }
+        }
+        // 重建 agent 使新 ModelInfo 生效；agent 未 init 时此接口报错属正常（init 时自然用新配置）
+        let update_url = format!("http://127.0.0.1:{}/v1/workspaces/{}/agent/update", port, ws);
+        match client.post(&update_url).json(&serde_json::json!({})).send().await {
+            Ok(r) => eprintln!("[admAgent] 同步本地模型能力：/agent/update HTTP {}", r.status()),
+            Err(e) => eprintln!("[admAgent] 同步本地模型能力：/agent/update 失败: {}", e),
+        }
+    });
+}
+
 // ===== 添加云端模型 Provider =====
 
 /// 把一个云端模型名称转成 admAgent.json providers 下的 JSON key（仅保留 ASCII 字母数字，转小写）。
