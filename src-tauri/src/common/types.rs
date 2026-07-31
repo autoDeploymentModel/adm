@@ -181,14 +181,6 @@ pub struct UpdateCheckResult {
 }
 
 #[derive(Serialize, Clone)]
-pub struct AdmAgentUpdateCheck {
-    pub needs_update: bool,
-    pub remote_version: Option<String>,
-    pub local_version: Option<String>,
-    pub download_url: Option<String>,
-}
-
-#[derive(Serialize, Clone)]
 pub struct PartFileProgress {
     pub model_id: String,
     pub existing_size: u64,
