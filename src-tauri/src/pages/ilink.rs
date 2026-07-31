@@ -1318,7 +1318,7 @@ async fn handle_sse_event(rt: &Arc<IlinkRuntime>, v: &Value, event_name: &str) {
                 return;
             };
             let wx = route.wx_user;
-            let error = inner.get("error").and_then(|e| e.as_str()).unwrap_or("");
+            let error = format_run_error(inner.get("error"));
             let cancelled = inner.get("cancelled").and_then(|c| c.as_bool()).unwrap_or(false);
             let text = inner.get("text").and_then(|t| t.as_str()).unwrap_or("");
             flow_log(&rt.app, "run_complete", &format!("wx={} run_id={} error={} cancelled={} text_len={}", short_wx_id(&wx), run_id, error, cancelled, text.chars().count()));
@@ -1344,6 +1344,29 @@ async fn handle_sse_event(rt: &Arc<IlinkRuntime>, v: &Value, event_name: &str) {
             }
         }
         _ => {}
+    }
+}
+
+/// 提取 run_complete 的 error 字段为可读文本：error 可能是字符串，也可能是结构化对象
+/// （如 {"error":{"message":"rpm exhausted","type":"quota_exceeded_error"}}）。
+/// 若只用 as_str() 取值，对象型错误会被当成"无错误"，导致配额报错等被误报为"任务完成"。
+fn format_run_error(err: Option<&Value>) -> String {
+    let Some(err) = err else { return String::new() };
+    match err {
+        Value::Null => String::new(),
+        Value::String(s) => s.clone(),
+        Value::Object(_) => {
+            // 兼容内层嵌套：{"error":{...}} 优先取内层
+            let inner = err.get("error").filter(|e| e.is_object()).unwrap_or(err);
+            match inner.get("message").and_then(|m| m.as_str()).filter(|m| !m.is_empty()) {
+                Some(msg) => match inner.get("type").and_then(|t| t.as_str()) {
+                    Some(t) if !t.is_empty() => format!("{} ({})", msg, t),
+                    _ => msg.to_string(),
+                },
+                None => err.to_string(),
+            }
+        }
+        other => other.to_string(),
     }
 }
 

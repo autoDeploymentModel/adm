@@ -71,6 +71,20 @@ function reconnectSSE() {
   }, 3000);
 }
 
+// 格式化运行错误：error 可能是字符串或结构化对象（如 {"error":{"message":"rpm exhausted","type":"quota_exceeded_error"}}），
+// 直接字符串拼接对象会显示 "[object Object]"，需提取 message 优先展示，兜底 JSON 序列化
+function formatRunError(err) {
+  if (typeof err === "string") return err;
+  if (err && typeof err === "object") {
+    var inner = (err.error && typeof err.error === "object") ? err.error : err;
+    if (typeof inner.message === "string" && inner.message) {
+      return inner.message + (inner.type ? " (" + inner.type + ")" : "");
+    }
+    try { return JSON.stringify(err); } catch (_) { return String(err); }
+  }
+  return String(err || "");
+}
+
 function handleSSEEvent(payload) {
   if (!payload) return;
   console.log("[agent] SSE 事件:", payload.type || payload?.data?.type, "数据:", JSON.stringify(payload).substring(0, 150));
@@ -117,14 +131,14 @@ function handleSSEEvent(payload) {
       S.activeRun = null;
       updateSendButton();
       clearSendSafetyTimer();
-      console.log("[agent] run_complete 收尾发送态: run_id=" + (actualData.run_id || "") + " session=" + (actualData.session_id || "") + " error=" + (actualData.error || "") + " cancelled=" + !!actualData.cancelled);
+      console.log("[agent] run_complete 收尾发送态: run_id=" + (actualData.run_id || "") + " session=" + (actualData.session_id || "") + " error=" + formatRunError(actualData.error) + " cancelled=" + !!actualData.cancelled);
       // 本轮运行出错/被取消时明确提示（error 非空表示运行出错），
       // 否则服务端中断本轮时 UI 静默停止，表现为"会话突然中断"却无任何说明
       if (actualData && actualData.error) {
         console.warn("[agent] run_complete 携带错误:", JSON.stringify(actualData));
         var ctxHint = (S.contextUsage.max > 0 && S.contextUsage.used >= S.contextUsage.max * 0.9)
           ? "（上下文已接近上限 " + S.contextUsage.used + "/" + S.contextUsage.max + "，建议新建会话继续）" : "";
-        showError("本轮对话中断: " + actualData.error + ctxHint);
+        showError("本轮对话中断: " + formatRunError(actualData.error) + ctxHint);
         updateStatusBar("error", null, S.contextUsage.used);
         // 运行出错时不自动续跑（避免在持续性错误上循环烧 token）
         resetAutoContinue();
@@ -168,8 +182,7 @@ function handleSSEEvent(payload) {
       // Agent 事件（错误/响应/摘要）：error 可能是字符串或对象，统一展示并留完整日志便于排查
       if (actualData && actualData.error) {
         console.warn("[agent] agent_event 错误:", JSON.stringify(actualData).substring(0, 500));
-        var aerr = typeof actualData.error === "string" ? actualData.error : JSON.stringify(actualData.error);
-        showError("Agent 错误: " + aerr);
+        showError("Agent 错误: " + formatRunError(actualData.error));
       }
       break;
     case "file":
