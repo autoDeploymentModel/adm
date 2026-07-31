@@ -59,7 +59,7 @@ This file provides guidance to Qoder (qoder.com) when working with code in this 
 - **Agent loop 抖动恢复体系**（`admAgent/internal/agent/agent_loop_llm.go`）：空 stop 重试（上限 3）、叙述性 stop 重试、推理超限（软阈值按 reasoning_effort 分档，丢弃+nudge+重试 1 次）、未完成 todos nudge（**进度感知**：连续 3 次无进展才放弃，有进展（todo 完成或 edit/write/bash 等实质副作用工具成功）即清零计数，硬熔断总上限 10 次）、假完成检测。重试耗尽后本轮**无 error 静默结束**（run_complete 不带错误），UI 侧表现为“突然停了”。
 - **Plan 模式 = 纯规划**：工具白名单（`config.ResolvePlanModeTools`）只含只读工具，**不含 edit/write/download/todos/MCP**；bash 在工具内部按只读命令白名单校验；计划以正文文本输出，todo 追踪只属于执行模式；todo-nudge 在 todos 工具不在目录时自动跳过。
 - **前端自动续跑**（`src/views/agent/autocontinue.js`）：本轮正常结束但 todos 未完成时自动发“继续”开新轮（每轮重置服务端 nudge 预算）；上限 10 轮、连续 2 轮无进展自动停；仅续跑本客户端发起的任务；Plan 模式、出错、取消、切走会话均不触发；开关存 localStorage（`agent_auto_continue`，默认开）。
-- **Agent 设置**：`agent_yolo` / `agent_default_provider` / `agent_reasoning_effort` / `agent_temperature` 存储在 `config.json`（Settings 结构体），前端通过 `load_settings` / `save_settings` 读写。
+- **Agent 设置**：`agent_plan_mode` / `agent_default_provider` / `agent_reasoning_effort` / `agent_temperature` / `debug_logging` 存储在 `config.json`（Settings 结构体），前端通过 `load_settings` / `save_settings` 读写。
 - **Windows**：`main.rs` 中的 `#![windows_subsystem = "windows"]` + `build.rs` 中的 `/SUBSYSTEM:WINDOWS` 隐藏控制台。
 
 ## 构建与发布
