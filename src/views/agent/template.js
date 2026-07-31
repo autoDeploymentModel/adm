@@ -896,14 +896,6 @@ export const template = `
     accent-color: var(--c-accent);
   }
 
-  .settings-footer {
-    padding: 12px 20px;
-    border-top: 1px solid var(--c-border);
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-  }
-
   .settings-btn {
     padding: 6px 16px;
     border-radius: 6px;
@@ -1328,18 +1320,14 @@ export const template = `
         <button class="btn-add-cloud" id="agent-add-cloud-btn">+ 添加云端模型</button>
       </div>
     </div>
-    <div class="settings-footer">
-      <button class="settings-btn settings-btn-secondary" id="agent-settings-cancel">取消</button>
-      <button class="settings-btn settings-btn-primary" id="agent-settings-save">保存</button>
-    </div>
   </div>
 </div>
 
-<!-- 模型添加弹窗 -->
+<!-- 模型添加/修改弹窗（标题与提交按钮文案由 settings_dialog.js 按模式切换） -->
 <div class="add-model-overlay" id="agent-add-model-overlay">
   <div class="settings-modal" style="width:440px;">
     <div class="settings-header">
-      <span class="settings-title">添加云端模型</span>
+      <span class="settings-title" id="add-model-title">添加云端模型</span>
       <button class="settings-close" id="agent-add-model-close">✕</button>
     </div>
     <div class="settings-body">

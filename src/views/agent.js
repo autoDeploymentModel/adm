@@ -330,16 +330,20 @@ function bindEvents() {
   // 设置按钮 (在侧栏底部)
   document.getElementById("agent-settings-btn").addEventListener("click", showSettings);
   document.getElementById("agent-settings-close").addEventListener("click", hideSettings);
-  document.getElementById("agent-settings-cancel").addEventListener("click", hideSettings);
-  document.getElementById("agent-settings-save").addEventListener("click", doSaveAndClose);
 
-  // 浏览工作目录
+  // 设置项即时生效：任一字段变更立即应用并持久化（无保存/取消按钮）
+  ["settings-plan", "settings-auto-continue", "settings-debug-logging", "settings-reasoning-effort", "settings-temperature"].forEach(function(id) {
+    $input(id).addEventListener("change", applySettings);
+  });
+
+  // 浏览工作目录（选完目录后自动关闭设置弹窗）
   document.getElementById("settings-browse-btn").addEventListener("click", async function() {
     try {
       var dir = await invoke("pick_workdir_folder");
       if (dir) {
         $input("settings-workdir").value = dir;
-        await doSaveAndClose();
+        await applySettings();
+        hideSettings();
       }
     } catch (_) {}
   });
@@ -355,11 +359,11 @@ function bindEvents() {
 
   // 工作目录输入框变更时自动保存
   $input("settings-workdir").addEventListener("change", async function() {
-    if ($input("settings-workdir").value.trim()) await doSaveAndClose();
+    if ($input("settings-workdir").value.trim()) await applySettings();
   });
 
-  // 从所有设置弹窗字段读取并保存，然后关闭
-  async function doSaveAndClose() {
+  // 从所有设置弹窗字段读取并保存（即时生效，弹窗保持打开）
+  async function applySettings() {
     S.settings.agent_reasoning_effort = normalizeReasoningEffort($input("settings-reasoning-effort").value);
     var tempVal = $input("settings-temperature").value;
     S.settings.agent_temperature = tempVal ? parseFloat(tempVal) : null;
@@ -380,7 +384,6 @@ function bindEvents() {
     }
     await saveSettings();
     await syncModeToServer();
-    hideSettings();
     updateModeToggle();
     updateModelBtn();
     var selectedKey = S.settings.agent_default_provider || "local";
