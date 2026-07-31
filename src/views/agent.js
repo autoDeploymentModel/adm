@@ -344,6 +344,15 @@ function bindEvents() {
     } catch (_) {}
   });
 
+  // 打开调试日志目录（在系统文件管理器中定位 adm_api_debug.log）
+  document.getElementById("settings-open-log-dir").addEventListener("click", async function() {
+    try {
+      await invoke("open_debug_log_dir");
+    } catch (e) {
+      showError("打开日志目录失败: " + e);
+    }
+  });
+
   // 工作目录输入框变更时自动保存
   $input("settings-workdir").addEventListener("change", async function() {
     if ($input("settings-workdir").value.trim()) await doSaveAndClose();
@@ -356,6 +365,19 @@ function bindEvents() {
     S.settings.agent_temperature = tempVal ? parseFloat(tempVal) : null;
     S.settings.agent_plan_mode = $input("settings-plan").checked;
     setAutoContinueEnabled($input("settings-auto-continue").checked);
+    // 调试模式：先同步后端开关（实时生效 + 开启时首次截断日志），再随 settings 持久化。
+    // 后端切换失败（如日志文件创建失败）时必须回滚状态，否则会把 debug_logging=true
+    // 写盘，造成“勾选着、配置为开、实际没记录”的假开启态（且跨重启延续）。
+    var debugLogging = $input("settings-debug-logging").checked;
+    try {
+      await invoke("set_debug_logging", { enabled: debugLogging });
+      S.settings.debug_logging = debugLogging;
+    } catch (e) {
+      console.warn("[agent] 切换调试日志失败:", e);
+      S.settings.debug_logging = false;
+      $input("settings-debug-logging").checked = false;
+      showError("开启调试日志失败: " + e);
+    }
     await saveSettings();
     await syncModeToServer();
     hideSettings();

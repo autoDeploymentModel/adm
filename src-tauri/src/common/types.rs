@@ -130,6 +130,9 @@ pub agent_reasoning_effort: String,
 /// Agent 采样温度
 #[serde(default)]
 pub agent_temperature: Option<f64>,
+/// 调试模式：开启后在软件根目录记录 admAgent API/SSE 交互日志（每次重启自动清空）
+#[serde(default)]
+pub debug_logging: bool,
 }
 
 impl Default for Settings {
@@ -141,6 +144,7 @@ agent_plan_mode: false,
 agent_default_provider: String::new(),
 agent_reasoning_effort: String::new(),
 agent_temperature: None,
+debug_logging: false,
 }
 }
 }

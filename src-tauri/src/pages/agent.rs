@@ -1005,10 +1005,12 @@ async fn forward_sse_events(
                 // 避免在死进程上无限空转、前端只能看到 "admAgent server 未运行"
                 if agent_process_exited(app) {
                     println!("[agent] forward_sse_events: admAgent 进程已退出，通知前端自动重启");
+                    api_debug_log(|| "SSE ! admAgent 进程已退出，通知前端自动重启".to_string());
                     let _ = app.emit("agent-server-died", serde_json::json!({}));
                     return Ok(());
                 }
                 println!("[agent] forward_sse_events 连接失败: {}", e);
+                api_debug_log(|| format!("SSE ! 连接失败: {}", e));
                 tokio::time::sleep(Duration::from_secs(3)).await; continue;
             }
         };
@@ -1017,6 +1019,7 @@ async fn forward_sse_events(
             tokio::time::sleep(Duration::from_secs(3)).await; continue;
         }
         println!("[agent] forward_sse_events SSE 已连接 workspace: {}", workspace_id);
+        api_debug_log(|| format!("SSE = 已连接 workspace={} client={}", workspace_id, client_id));
 
         use futures_util::StreamExt;
         let mut stream = resp.bytes_stream();
@@ -1038,6 +1041,8 @@ async fn forward_sse_events(
                 if !event_data.is_empty() {
                     let payload: serde_json::Value = serde_json::from_str(&event_data)
                         .unwrap_or(serde_json::json!({ "raw": event_data }));
+                    // 只写关键事件；流式增量/快照等噪音返回 None 不落盘。
+                    api_debug_log(|| summarize_sse_event(&payload).unwrap_or_default());
                     let _ = app.emit("agent-sse-event", serde_json::json!({ "type": event_type, "data": payload }));
                 }
             }
@@ -1046,6 +1051,7 @@ async fn forward_sse_events(
         // 任何等待都在扩大 server 自杀的竞争窗口
         if !stop.load(Ordering::Relaxed) {
             println!("[agent] forward_sse_events 流断开，立即重连");
+            api_debug_log(|| "SSE ! 流断开，立即重连".to_string());
         }
     }
 }
@@ -1058,6 +1064,150 @@ fn agent_process_exited(app: &tauri::AppHandle) -> bool {
     match s.as_mut() {
         Some(sess) => matches!(sess.child.try_wait(), Ok(Some(_))),
         None => false,
+    }
+}
+
+// ===== 调试模式：admAgent API 交互日志（运行时开关，正式发布版也可用）=====
+//
+// 由设置里的“调试模式”开关控制（Settings.debug_logging，持久化到
+// config.json）：启动时恢复、前端实时切换。关闭时 log_enabled 为 false，
+// api_debug_log 一次 atomic load 即返回，无任何开销也不产生文件。
+
+static LOG_ENABLED: AtomicBool = AtomicBool::new(false);
+// 日志文件句柄：None = 尚未打开 / 打开失败。开关打开时截断重建，
+// 为“每次重启软件自动清空上次日志”：重启后首次 enable 时 File::create 截断。
+static LOG_FILE: std::sync::OnceLock<std::sync::Mutex<Option<std::fs::File>>> = std::sync::OnceLock::new();
+
+fn log_file_cell() -> &'static std::sync::Mutex<Option<std::fs::File>> {
+    LOG_FILE.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// 调试日志文件路径：app 数据目录（与 config.json 同处）下的 adm_api_debug.log。
+/// 不用 exe 同目录：正式安装下 Windows 的 Program Files 不可写、macOS 会污染
+/// .app 签名；app 数据目录始终可写且不影响安装包完整性。
+fn api_debug_log_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let dir = config::get_data_dir(Some(app)).ok()?;
+    Some(dir.join("adm_api_debug.log"))
+}
+
+/// 开启调试日志：首次开启（含重启后）截断重建日志文件（清空上次），
+/// 已处于开启态时幂等返回（不重复截断）——否则调试期间每次保存设置
+/// 都会把本会话已积累的日志清空（排查中断时往往会顺手改模型/参数）。
+/// 返回日志文件路径供前端展示。
+fn enable_api_debug_log(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let path = api_debug_log_path(app)?;
+    if LOG_ENABLED.load(Ordering::Relaxed) {
+        return Some(path); // 已开启：保持追加，不重复截断
+    }
+    let file = std::fs::File::create(&path).ok()?; // 截断：从关到开 / 重启后首次全新
+    if let Ok(mut cell) = log_file_cell().lock() {
+        *cell = Some(file);
+    }
+    LOG_ENABLED.store(true, Ordering::Relaxed);
+    println!("[agent] 调试日志已开启: {}", path.display());
+    Some(path)
+}
+
+/// 关闭调试日志：置位关关、释放句柄并删除日志文件，避免过期日志残留
+/// （否则“打开日志目录”会定位到一份不再更新的旧日志，容易误读）。
+fn disable_api_debug_log(app: &tauri::AppHandle) {
+    LOG_ENABLED.store(false, Ordering::Relaxed);
+    if let Ok(mut cell) = log_file_cell().lock() {
+        *cell = None;
+    }
+    if let Some(path) = api_debug_log_path(app) {
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+/// 单行日志内容去换行 + 截断。
+fn api_log_snippet(s: &str, max: usize) -> String {
+    let flat = s.replace('\n', " ↵ ");
+    flat.chars().take(max).collect()
+}
+
+/// 写一条 admAgent API 交互日志。开关关闭时一次 atomic load 即返回（闭包
+/// 不执行，无格式化开销）。与 devtools 控制台的 [agent] API / SSE 日志对应：
+/// 所有前端请求都经 agent_http_request 代理、所有 SSE 事件都经
+/// forward_sse_events 转发，在这两处落盘即可完整复盘对话中断问题。
+/// 行格式：`{epoch_ms} {HH:MM:SS.mmm UTC} {内容}`，与 admAgent.log 对时时
+/// 本地时间 = UTC + 本机时区偏移。
+fn api_debug_log<F: FnOnce() -> String>(line: F) {
+    if !LOG_ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+    use std::io::Write;
+    if let Ok(mut cell) = log_file_cell().lock() {
+        if let Some(f) = cell.as_mut() {
+            let content = line();
+            // 空内容（如 summarize_sse_event 对噪音事件返回 None）不写，
+            // 避免产生只有时间戳的空行。
+            if content.is_empty() { return; }
+            let ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            let secs = ms / 1000;
+            let _ = writeln!(
+                f, "{} {:02}:{:02}:{:02}.{:03}Z {}",
+                ms, (secs / 3600) % 24, (secs / 60) % 60, secs % 60, ms % 1000,
+                content
+            );
+        }
+    }
+}
+
+/// 把一条 SSE 事件精简为一行可排查摘要；返回 None 表示这类事件是噪音
+/// （流式 message updated 增量、session token 快照等），不写日志。
+/// 只保留能定位“对话为何中断/卡住”的关键节点：运行收尾、错误、权限、
+/// 消息创建节奏、连接生命周期。SSE data 结构：
+/// `{ type: <事件类型>, payload: { type: created|updated|deleted, payload: {..} } }`。
+fn summarize_sse_event(payload: &serde_json::Value) -> Option<String> {
+    let ev = payload.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    let inner = payload.pointer("/payload/type").and_then(|v| v.as_str()).unwrap_or("");
+    let data = payload.pointer("/payload/payload");
+    // 取 data 下的字符串字段（数字/布尔转成字面量），缺失返回空串。
+    let field = |k: &str| -> String {
+        match data.and_then(|d| d.get(k)) {
+            Some(serde_json::Value::String(s)) => s.clone(),
+            Some(v) => v.to_string(),
+            None => String::new(),
+        }
+    };
+    match ev {
+        // 运行收尾：最关键的一条。error 非空 = 服务端报错中断；
+        // cancelled = 被取消；两者皆空 = 正常收尾（叙述性 stop / 完成）。
+        "run_complete" => {
+            let err = field("error");
+            let has_err = !err.is_empty() && err != "null";
+            let flag = if has_err { "! run_complete" } else { "< run_complete" };
+            Some(format!(
+                "{} run_id={} session={} error={} cancelled={} msg_id={}",
+                flag, field("run_id"), field("session_id"), err, field("cancelled"), field("message_id")
+            ))
+        }
+        // Agent 事件：错误 / 摘要（summarize）。
+        "agent_event" => {
+            let err = field("error");
+            let has_err = !err.is_empty() && err != "null";
+            let flag = if has_err { "! agent_event" } else { "< agent_event" };
+            Some(format!("{} type={} session={} error={}", flag, field("type"), field("session_id"), err))
+        }
+        // 消息节奏：只记 created（新建 user/assistant/tool 消息），跳过 updated
+        // 的流式增量（一轮上百条 thinking 是主噪音）。能看出“这轮到底产出了
+        // 哪些消息”——全程只一条 assistant 无 tool = 叙述性 stop。
+        "message" => {
+            if inner != "created" { return None; }
+            Some(format!("< message created role={} id={}", field("role"), field("id")))
+        }
+        // 权限请求 / 结果：Plan/Yolo 下一般直通，出现即值得记。
+        "permission_request" => Some(format!("< permission_request tool={} session={}", field("tool_name"), field("session_id"))),
+        "permission_notification" => Some(format!("< permission_notification granted={}", field("granted"))),
+        // session 快照（context_tokens/is_busy 每次 token 变化都推）、file/lsp/
+        // mcp/skills 等杂项：噪音，跳过。解析失败的原始事件仍记一行以便发现异常。
+        "session" => None,
+        "" if payload.get("raw").is_some() => Some(format!("< raw {}", api_log_snippet(&payload.get("raw").and_then(|v| v.as_str()).unwrap_or(""), 200))),
+        _ => None,
     }
 }
 
@@ -1095,6 +1245,17 @@ pub async fn agent_http_request(
         }
     };
     let url = format!("http://127.0.0.1:{}{}", port, path);
+    let started = std::time::Instant::now();
+    // 只读 GET 多为高频轮询（每轮 run 后刷 /agent /sessions /messages），是主噪音：
+    // 成功时不记，只在出错时留痕；改状态的操作（发消息/切模式/权限）才记请求行。
+    let is_get = method.eq_ignore_ascii_case("GET");
+    if !is_get {
+        api_debug_log(|| format!(
+            "HTTP > {} {}{}",
+            method.to_uppercase(), path,
+            body.as_ref().map(|b| format!(" body={}", api_log_snippet(&b.to_string(), 800))).unwrap_or_default()
+        ));
+    }
     let client = reqwest::Client::builder().timeout(Duration::from_secs(120)).build()
         .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
     let req = match method.to_uppercase().as_str() {
@@ -1103,24 +1264,33 @@ pub async fn agent_http_request(
         "PATCH" => client.patch(&url), _ => bail!("不支持的 HTTP 方法: {}", method),
     };
     let req = if let Some(b) = body { req.json(&b) } else { req };
-    let resp = req.send().await.map_err(|e| format!("HTTP 请求失败: {}", e))?;
+    let resp = match req.send().await {
+        Ok(r) => r,
+        Err(e) => {
+            // 网络失败一律留痕（含 GET）：连不上 server 是中断的关键线索。
+            api_debug_log(|| format!("HTTP ! {} {} 请求失败({}ms): {}", method.to_uppercase(), path, started.elapsed().as_millis(), e));
+            bail!("HTTP 请求失败: {}", e);
+        }
+    };
     let status = resp.status();
 
     // 无响应体的状态码直接返回空 JSON 对象
     // 202 Accepted: /agent 发送消息（fire-and-forget）
     // 204 No Content: 删除等操作
     if status.as_u16() == 202 || status.as_u16() == 204 {
+        api_debug_log(|| format!("HTTP < {} {} {} ({}ms)", status.as_u16(), method.to_uppercase(), path, started.elapsed().as_millis()));
         return Ok(serde_json::json!({}));
     }
 
     // 对于 200 OK，尝试解析 JSON；如果解析失败（空 body），返回空对象
     // 这适用于 /agent/update 等成功但无 body 的接口
     if status.as_u16() == 200 {
-        // 先尝试解析 JSON
-        match resp.json::<serde_json::Value>().await {
-            Ok(result) => return Ok(result),
-            Err(_) => return Ok(serde_json::json!({})), // 空 body 返回 {}
+        // 成功响应不 dump body（GET /messages 等会打一大坡）；只记非 GET 的一行状态+耗时。
+        let result = resp.json::<serde_json::Value>().await.unwrap_or(serde_json::json!({}));
+        if !is_get {
+            api_debug_log(|| format!("HTTP < 200 {} {} ({}ms)", method.to_uppercase(), path, started.elapsed().as_millis()));
         }
+        return Ok(result);
     }
 
     // 其它状态码（4xx/5xx）：读取响应体作为错误抛出。
@@ -1128,6 +1298,11 @@ pub async fn agent_http_request(
     // 空列表/空聊天（表现为“列表加载不出来”且控制台无任何报错）
     let text = resp.text().await.unwrap_or_default();
     let snippet: String = text.chars().take(300).collect();
+    api_debug_log(|| format!(
+        "HTTP ! {} {} {} ({}ms) err={}",
+        status.as_u16(), method.to_uppercase(), path, started.elapsed().as_millis(),
+        api_log_snippet(&snippet, 300)
+    ));
     bail!("HTTP {} {} {}: {}", status.as_u16(), method.to_uppercase(), path, snippet);
 }
 
@@ -1288,5 +1463,62 @@ pub async fn pick_workdir_folder(app: tauri::AppHandle) -> Result<String, AppErr
         .map_err(|e| format!("无法获取目录路径: {}", e))?;
 
     Ok(path.to_string_lossy().to_string())
+}
+
+/// 启动时根据持久化设置恢复调试日志开关（config.json 的 debug_logging）。
+/// 开启时截断重建日志文件 —— 实现“每次重启软件自动清空上次日志”。
+/// 在 setup 阶段调用，早于任何 admAgent 交互。
+pub fn init_debug_logging(app: &tauri::AppHandle) {
+    let data_dir = match config::get_data_dir(Some(app)) {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    let config_path = data_dir.join("config.json");
+    let enabled = std::fs::read_to_string(&config_path)
+        .ok()
+        .and_then(|json| serde_json::from_str::<Settings>(&json).ok())
+        .map(|s| s.debug_logging)
+        .unwrap_or(false);
+    if enabled {
+        enable_api_debug_log(app);
+    }
+}
+
+/// 设置调试日志开关（前端实时切换）。开启时首次截断重建日志文件（清空上次），
+/// 返回日志文件绝对路径；关闭时释放句柄并删除旧日志、返回空串。
+/// 运行时开关与编译 profile 无关，正式发布版同样生效。
+#[tauri::command]
+pub async fn set_debug_logging(app: tauri::AppHandle, enabled: bool) -> Result<String, AppError> {
+    if enabled {
+        match enable_api_debug_log(&app) {
+            Some(path) => Ok(path.to_string_lossy().to_string()),
+            None => bail!("无法创建调试日志文件"),
+        }
+    } else {
+        disable_api_debug_log(&app);
+        Ok(String::new())
+    }
+}
+
+/// 在系统文件管理器中打开调试日志所在位置（app 数据目录）。
+/// 日志文件已存在时定位并高亮该文件；尚未生成时（未开过调试）
+/// 打开其所在目录。
+#[tauri::command]
+pub async fn open_debug_log_dir(app: tauri::AppHandle) -> Result<(), AppError> {
+    use tauri_plugin_opener::OpenerExt;
+    let path = api_debug_log_path(&app).ok_or("无法确定调试日志路径")?;
+    if path.exists() {
+        // 文件存在：在文件管理器中定位并高亮
+        app.opener()
+            .reveal_item_in_dir(&path)
+            .map_err(|e| format!("打开日志目录失败: {}", e))?;
+    } else {
+        // 文件不存在（未开过调试）：打开所在目录
+        let dir = path.parent().ok_or("无法确定日志目录")?;
+        app.opener()
+            .open_path(dir.to_string_lossy().to_string(), None::<&str>)
+            .map_err(|e| format!("打开目录失败: {}", e))?;
+    }
+    Ok(())
 }
 
