@@ -15,10 +15,33 @@ import { updateScrollBottomBtn } from "./ui.js";
 // （保住 <details> 元素身份，流式期间可点开/收起）；结构变化才重建该消息节点。
 
 // 该 part 是否需要渲染（用户消息不显示 finish 标记）
-function isPartRenderable(part, role) {
+// hiddenCallIds: 因工具不可用（如 Plan 模式下 edit/write）而应隐藏的 tool_call id 集合，
+// 对应的 tool_call 与 tool_result 一并不渲染。
+function isPartRenderable(part, role, hiddenCallIds) {
   if (!part || !part.type) return false;
   if (part.type === "finish" && role === "user") return false;
+  if (hiddenCallIds && hiddenCallIds.size) {
+    var d = part.data || {};
+    if (part.type === "tool_call" && d.id && hiddenCallIds.has(d.id)) return false;
+    if (part.type === "tool_result" && d.tool_call_id && hiddenCallIds.has(d.tool_call_id)) return false;
+  }
   return true;
+}
+
+// 收集"工具不可用"的 tool_call id：Plan 模式下模型仍会尝试 edit/write 等被移除的工具，
+// 服务端必须回 "Tool not found: xxx" 让模型自我纠正，但这类失败对用户无意义，不展示。
+// 返回需隐藏的 tool_call id 集合（tool_call 与其 tool_result 成对隐藏）。
+function unavailableToolCallIds(parts) {
+  var ids = new Set();
+  if (!Array.isArray(parts)) return ids;
+  parts.forEach(function(p) {
+    if (!p || p.type !== "tool_result") return;
+    var d = p.data || {};
+    if (d.is_error && d.tool_call_id && /^Tool not found:/.test(String(d.content || ""))) {
+      ids.add(d.tool_call_id);
+    }
+  });
+  return ids;
 }
 
 // 单个 part 的内容签名（长度/状态足以覆盖流式追加场景）
@@ -42,8 +65,9 @@ function msgSignature(msg) {
 // 消息结构签名：part 类型序列 + 是否有元信息，结构一致才允许就地更新
 function msgStructSig(msg, role) {
   if (msg._streaming || !msg.parts || !Array.isArray(msg.parts) || msg.parts.length === 0) return "plain";
+  var hiddenCallIds = unavailableToolCallIds(msg.parts);
   var types = [];
-  msg.parts.forEach(function(p) { if (isPartRenderable(p, role)) types.push(p.type); });
+  msg.parts.forEach(function(p) { if (isPartRenderable(p, role, hiddenCallIds)) types.push(p.type); });
   return types.join(",") + ((msg.model || msg.provider) ? "|meta" : "");
 }
 
@@ -169,10 +193,11 @@ function updateMessageNode(el, msg) {
   var struct = msgStructSig(msg, role);
   if (struct === "plain" || el._admStruct !== struct) return false;
   var partEls = el.querySelectorAll(":scope > [data-pk]");
+  var hiddenCallIds = unavailableToolCallIds(msg.parts);
   var pi = 0;
   for (var i = 0; i < msg.parts.length; i++) {
     var part = msg.parts[i];
-    if (!isPartRenderable(part, role)) continue;
+    if (!isPartRenderable(part, role, hiddenCallIds)) continue;
     var pe = partEls[pi++];
     if (!pe || pe.getAttribute("data-ptype") !== part.type) return false;
     var d = part.data || {};
@@ -226,8 +251,9 @@ function updateMessageNode(el, msg) {
 
 // 渲染 ContentPart 数组（msgKey 用于给折叠块生成稳定 data-key，重渲染时恢复展开状态）
 function renderMessageParts(container, parts, role, msgKey) {
+  var hiddenCallIds = unavailableToolCallIds(parts);
   parts.forEach(function(part, partIdx) {
-    if (!isPartRenderable(part, role)) return;
+    if (!isPartRenderable(part, role, hiddenCallIds)) return;
     var el = buildPartElement(part, partIdx, role, msgKey);
     if (!el) return;
     el.setAttribute("data-pk", String(partIdx));
