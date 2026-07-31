@@ -77,7 +77,15 @@ export function renderMessages() {
   var prevScrollTop = area.scrollTop;
 
   if (S.messages.length === 0) {
-    area.innerHTML = '<div class="empty-state"><span class="empty-state-icon">🤖</span><span class="empty-state-text">开始一个新的对话</span></div>';
+    // 思考先于首条消息产生（如刚发送、重新挂载对账时）：空态下仍需保留「正在思考」指示器，
+    // 否则运行中的指示器被抹掉（切走首页再切回时表现为图标消失）。
+    // syncWorkingIndicator 会按 isSending 负责创建/移动/移除，这里只需避免重复重建空态外壳。
+    if (!area.querySelector(".empty-state")) {
+      var indicator = document.getElementById("agent-working-indicator");
+      area.innerHTML = '<div class="empty-state"><span class="empty-state-icon">🤖</span><span class="empty-state-text">开始一个新的对话</span></div>';
+      if (indicator) area.appendChild(indicator); // innerHTML 会清掉旧指示器，运行中需保留
+    }
+    syncWorkingIndicator(area);
     updateScrollBottomBtn();
     return;
   }
@@ -125,22 +133,7 @@ export function renderMessages() {
   });
 
   // 「正在思考」指示器：持久节点，仅按需创建/移动/移除，避免每次重建导致动画闪烁
-  var indicator = document.getElementById("agent-working-indicator");
-  if (S.isSending) {
-    if (!indicator) {
-      indicator = document.createElement("div");
-      indicator.className = "msg assistant working-indicator";
-      indicator.id = "agent-working-indicator";
-      indicator.innerHTML =
-        '<span class="working-indicator-dot"></span>' +
-        '<span class="working-indicator-text">正在思考' +
-          '<span class="working-indicator-dots"><span></span><span></span><span></span>' +
-        '</span></span>';
-    }
-    if (area.lastElementChild !== indicator) area.appendChild(indicator);
-  } else if (indicator) {
-    indicator.remove();
-  }
+  syncWorkingIndicator(area);
 
   // 手动模式：保留用户当前滚动位置；自动模式：滚到底部
   if (S.manualScrollMode) {
@@ -150,6 +143,30 @@ export function renderMessages() {
   }
   // 流式输出时内容增长不一定触发 scroll 事件，渲染后主动刷新悬浮圆球显隐
   updateScrollBottomBtn();
+}
+
+// 「正在思考」指示器同步：运行中确保持久节点存在并置于消息区末尾；结束则移除。
+// 独立成函数，供 renderMessages（含空消息分支）与重新挂载对账复用，
+// 避免依赖消息列表是否为空而漏建（切到首页再切回时图标消失的根因）。
+export function syncWorkingIndicator(area) {
+  area = area || document.getElementById("agent-msg-area");
+  if (!area) return;
+  var indicator = document.getElementById("agent-working-indicator");
+  if (S.isSending) {
+    if (!indicator) {
+      indicator = document.createElement("div");
+      indicator.className = "msg assistant working-indicator";
+      indicator.id = "agent-working-indicator";
+      indicator.innerHTML =
+        '<span class="working-indicator-dot"></span>' +
+        '<span class="working-indicator-text">正在工作' +
+          '<span class="working-indicator-dots"><span></span><span></span><span></span>' +
+        '</span></span>';
+    }
+    if (area.lastElementChild !== indicator) area.appendChild(indicator);
+  } else if (indicator) {
+    indicator.remove();
+  }
 }
 
 // 构建完整消息节点

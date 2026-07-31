@@ -116,6 +116,7 @@ function handleSSEEvent(payload) {
       S.activeRun = null;
       updateSendButton();
       clearSendSafetyTimer();
+      console.log("[agent] run_complete 收尾发送态: run_id=" + (actualData.run_id || "") + " session=" + (actualData.session_id || "") + " error=" + (actualData.error || "") + " cancelled=" + !!actualData.cancelled);
       // 本轮运行出错/被取消时明确提示（error 非空表示运行出错），
       // 否则服务端中断本轮时 UI 静默停止，表现为"会话突然中断"却无任何说明
       if (actualData && actualData.error) {

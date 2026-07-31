@@ -7,6 +7,7 @@ import { api } from "./agent/api.js";
 import { generateUUID, isMsgAreaAtBottom, autoResize, $input } from "./agent/utils.js";
 import { updateStatusBar, updateContextUsage, updateModeToggle, updateSendButton, exitManualScrollMode, startSendSafetyTimer, clearSendSafetyTimer, showError, showConfirm, showCopyPasteMenu, updateScrollBottomBtn } from "./agent/ui.js";
 import { loadConversations, renderConversationList, selectConversation, newConversation } from "./agent/session.js";
+import { syncWorkingIndicator } from "./agent/render.js";
 import { sendMessage } from "./agent/send.js";
 import { setupSSEListener } from "./agent/sse.js";
 import { syncModeToServer } from "./agent/permission.js";
@@ -208,28 +209,58 @@ async function init() {
   checkProjectInit();
 }
 
-// 重新挂载后校准残留的发送态：运行会话仍忙则恢复「取消」按钮与安全计时器，
-// 已结束（run_complete 在切走期间丢失）则重置，updateSendButton 会同步移除思考指示器
+// 重新挂载后校准残留的发送态。
+//
+// 难点：发送后到模型真正产出 token 之间有「启动窗口」（服务端 readyWg/UpdateModels、
+// 本地模型加载，可达数秒）。旧版 admAgent 在此窗口内 is_busy=false，单次快照会把
+// 「仍在启动的运行」误判为已结束、抹掉指示器（日志实测：is_busy=false 后 4s 才出首个 token）。
+//
+// 策略：SSE 已在此前重订，运行若仍活跃，其 run_complete 结束时必会到达并收尾发送态。
+// 因此这里乐观保留发送态与指示器，只有在「服务端不忙 且 最后一条已是完成的助手轮次」
+// （即运行确已在切走期间结束、run_complete 丢失）时才重置。这样无论后端新旧都正确。
 async function reconcileSendingState() {
   if (!S.isSending) return;
   var run = S.activeRun;
-  var busy = false;
-  if (run) {
-    try {
-      var sess = await api("GET", "/v1/workspaces/" + run.workspaceId + "/sessions/" + run.sessionId);
-      busy = !!(sess && sess.is_busy);
-    } catch (_) {}
-  }
-  if (busy) {
+  if (!run) {
+    S.isSending = false;
     updateSendButton();
-    startSendSafetyTimer();
-  } else {
-    console.warn("[agent] 挂载对账：残留 isSending 但运行会话已结束，重置发送态");
+    updateStatusBar("ready", null, S.contextUsage.used);
+    return;
+  }
+
+  // 先乐观恢复运行态 UI（指示器/按钮是纯 DOM，重新挂载后不会随 S 残留）
+  updateSendButton();
+  syncWorkingIndicator();
+  startSendSafetyTimer();
+
+  var busy = true; // 查询失败时保守当作仍在运行，交由 SSE / 安全计时器兜底
+  try {
+    var sess = await api("GET", "/v1/workspaces/" + run.workspaceId + "/sessions/" + run.sessionId);
+    busy = !!(sess && sess.is_busy);
+  } catch (_) {}
+  if (S.activeRun !== run || !S.isSending) return; // 期间已被 SSE/取消收尾
+  console.log("[agent] reconcile 对账: is_busy=" + busy + " lastFinished=" + lastAssistantTurnFinished());
+
+  // 仅当服务端确认不忙、且消息区已存在完成的助手轮次时，才认定运行已结束并重置。
+  // 启动窗口内（尚无助手输出）即便 is_busy=false 也保留指示器，等待 SSE 流继续。
+  if (!busy && lastAssistantTurnFinished()) {
+    console.warn("[agent] 挂载对账：运行会话已结束，重置发送态");
     S.isSending = false;
     S.activeRun = null;
+    clearSendSafetyTimer();
     updateSendButton();
     updateStatusBar("ready", null, S.contextUsage.used);
   }
+}
+
+// 当前消息列表的最后一条是否为「已完成的助手轮次」（带 finish part）。
+// 运行结束时助手消息以 finish 收尾；用于判断运行是否已在页面切走期间结束。
+function lastAssistantTurnFinished() {
+  var msgs = S.messages;
+  if (!Array.isArray(msgs) || msgs.length === 0) return false;
+  var last = msgs[msgs.length - 1];
+  if (!last || last.role !== "assistant") return false;
+  return Array.isArray(last.parts) && last.parts.some(function(p) { return p && p.type === "finish"; });
 }
 
 // 显示下载引导
@@ -615,7 +646,7 @@ export default {
     });
   },
   unmount() {
-    console.log("[agent] unmount()");
+    console.log("[agent] unmount() isSending=" + S.isSending + " activeRun=" + JSON.stringify(S.activeRun));
     // 使在途 init() 失效，防止切走后旧 init 继续执行、或与下次 mount 的新 init 并发互踩
     S.initSeq++;
     S.pendingFiles = [];
