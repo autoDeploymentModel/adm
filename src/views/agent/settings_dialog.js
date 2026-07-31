@@ -5,6 +5,7 @@ import { parseContextSize, escapeHtml, $input, normalizeReasoningEffort } from "
 import { showError, showConfirm, updateStatusBar } from "./ui.js";
 import { switchToWorkspace, updateWorkspaceSelector } from "./workspace.js";
 import { updateModelDropdown, switchModel, refreshServerProviders } from "./model.js";
+import { isAutoContinueEnabled } from "./autocontinue.js";
 
 // ===== 设置弹窗 =====
 export function showSettings() {
@@ -29,6 +30,9 @@ export function updateSettingsUI() {
 
   // Plan 模式
   planCheck.checked = !!S.settings.agent_plan_mode;
+
+  // 自动续跑（localStorage 持久化，默认开启）
+  $input("settings-auto-continue").checked = isAutoContinueEnabled();
 
   // 推理强度（旧版存过 ""/"auto"，归一化为 medium 回显）
   reasoningSelect.value = normalizeReasoningEffort(S.settings.agent_reasoning_effort);

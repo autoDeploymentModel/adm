@@ -1277,6 +1277,16 @@ export const template = `
             <div class="param-desc">开启后 Agent 只能读取/检索代码并产出实施计划，不会修改任何文件；关闭则为执行模式（直接执行修改）</div>
           </div>
         </div>
+        <div class="param-row">
+          <div class="param-label">自动续跑</div>
+          <div class="param-input">
+            <div class="checkbox-wrap">
+              <input type="checkbox" id="settings-auto-continue">
+              <span>任务未完成自动继续</span>
+            </div>
+            <div class="param-desc">本轮结束时若任务清单仍有未完成项，自动发送“继续”推进（最多 10 轮，连续 2 轮无进展自动停止）</div>
+          </div>
+        </div>
       </div>
 
       <!-- 模型配置 -->

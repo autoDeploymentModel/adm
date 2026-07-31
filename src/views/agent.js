@@ -16,6 +16,7 @@ import { switchModel, refreshServerProviders, resolveAgentModel, updateModelDrop
 import { enableAutoCompact, updateWorkspaceSelector } from "./agent/workspace.js";
 import { showSettings, hideSettings, updateSettingsUI, saveSettings, showAddModelDialog, hideAddModelDialog, addModel } from "./agent/settings_dialog.js";
 import { addPendingFiles } from "./agent/attach.js";
+import { setAutoContinueEnabled } from "./agent/autocontinue.js";
 
 // ===== 初始化 =====
 async function init() {
@@ -158,6 +159,11 @@ async function init() {
   }
   if (seq !== S.initSeq) return;
 
+  // 监听 SSE 事件（必须先于 loadConversations：selectConversation 会 POST /current-session
+  // 上报在场会话，服务端要求该 client_id 已挂活跃 SSE 流，否则返回 404 client not attached）
+  await setupSSEListener();
+  if (seq !== S.initSeq) return;
+
   // 加载会话列表（restoreCurrent=true：重新挂载时 DOM 已重置，即使 currentConvId 仍有值也必须重新 selectConversation 渲染聊天区）
   await loadConversations(true);
 
@@ -187,16 +193,10 @@ async function init() {
   updateSettingsUI();
 
   if (seq !== S.initSeq) return;
-  // 监听 SSE 事件
-  await setupSSEListener();
-
   // 发送态对账：S 是模块级状态，isSending/activeRun 跨挂载周期残留；
   // unmount 期间 SSE 监听器已解绑，run_complete 在页面切走时到达会永久丢失，
   // 重新挂载后必须以服务端 is_busy 为准校准，否则「正在思考」永远卡住
   await reconcileSendingState();
-
-  // SSE 连接建立后重新加载工具列表，确保 skills_event 等发现事件不遗漏
-  await loadTools();
 
   // 工作区选择器为纯展示，不支持点击切换（切换工作目录请去设置弹窗）
 
@@ -355,6 +355,7 @@ function bindEvents() {
     var tempVal = $input("settings-temperature").value;
     S.settings.agent_temperature = tempVal ? parseFloat(tempVal) : null;
     S.settings.agent_plan_mode = $input("settings-plan").checked;
+    setAutoContinueEnabled($input("settings-auto-continue").checked);
     await saveSettings();
     await syncModeToServer();
     hideSettings();

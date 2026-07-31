@@ -7,12 +7,15 @@ import { renderMessages } from "./render.js";
 import { newConversation } from "./session.js";
 import { refreshAgentInfo, reloadAgentConfig } from "./model.js";
 import { clearPendingFiles } from "./attach.js";
+import { armAutoContinue, resetAutoContinue } from "./autocontinue.js";
 
 // ===== 发送消息 =====
 export async function sendMessage() {
   console.log("[agent] sendMessage() isSending:", S.isSending, "convId:", S.currentConvId);
   if (S.isSending) {
     // 取消实际运行中的会话，而不是用户后来切换到的当前 UI 会话
+    // 用户主动取消 → 同时解除自动续跑，避免取消后又被自动拉起
+    resetAutoContinue();
     var activeRun = S.activeRun;
     if (activeRun) {
       try {
@@ -114,6 +117,8 @@ export async function sendMessage() {
       await api("POST", "/v1/workspaces/" + workspaceId + "/agent", body);
     }
     console.log("[agent] 消息已发送, runId:", runId);
+    // 手动发送成功 → 武装自动续跑（重置轮数/进度计数，绑定本会话）
+    armAutoContinue(sessionId);
     startSendSafetyTimer();
     updateContextUsage();
   } catch (e) {
