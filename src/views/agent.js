@@ -14,7 +14,7 @@ import { syncModeToServer } from "./agent/permission.js";
 import { loadTools, renderToolsList } from "./agent/tools.js";
 import { switchModel, refreshServerProviders, resolveAgentModel, updateModelDropdown, updateModelBtn } from "./agent/model.js";
 import { enableAutoCompact, updateWorkspaceSelector } from "./agent/workspace.js";
-import { showSettings, hideSettings, updateSettingsUI, saveSettings, checkAgentVersion, showAddModelDialog, hideAddModelDialog, addModel } from "./agent/settings_dialog.js";
+import { showSettings, hideSettings, updateSettingsUI, saveSettings, showAddModelDialog, hideAddModelDialog, addModel } from "./agent/settings_dialog.js";
 import { addPendingFiles } from "./agent/attach.js";
 
 // ===== 初始化 =====
@@ -180,9 +180,6 @@ async function init() {
       renderToolsList();
     });
   }
-
-  // 检查 admAgent 版本
-  checkAgentVersion();
 
   // 更新 UI
   updateModelDropdown();

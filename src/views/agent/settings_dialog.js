@@ -87,17 +87,6 @@ export async function saveSettings() {
   }
 }
 
-// ===== admAgent 版本检查 =====
-export async function checkAgentVersion() {
-  var el = document.getElementById("agent-current-version");
-  try {
-    var ver = await invoke("get_adm_agent_version");
-    if (el) el.textContent = ver || "未知";
-  } catch (_) {
-    if (el) el.textContent = "未知";
-  }
-}
-
 // ===== 模型添加弹窗 =====
 export function showAddModelDialog() {
   document.getElementById("agent-add-model-overlay").classList.add("show");
