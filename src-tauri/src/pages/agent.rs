@@ -366,7 +366,7 @@ fn slugify_model_id(name: &str) -> String {
 /// 前端提交的新增云端模型参数
 #[derive(Deserialize)]
 pub struct CloudProviderInput {
-    /// 模型名称（同时作为 provider 的展示名与 model 的 name）
+    /// 模型名称（同时作为 provider 的展示名与 model 的 name，原样写入、区分大小写）
     pub name: String,
     /// API base_url，例如 https://api.xiaomimimo.com/v1
     pub base_url: String,
@@ -374,12 +374,22 @@ pub struct CloudProviderInput {
     pub api_key: String,
     /// 上下文大小（tokens）。例如 256000（即 256K）
     pub context_window: u32,
-    /// 用户指定的模型ID（可选）。为空时自动从 name 派生
+    /// 用户填写的模型ID（必填，仅去首尾空白后原样写入、区分大小写）
     #[serde(default)]
     pub model_id: Option<String>,
     /// 是否支持图片输入（视觉模型），默认 false
     #[serde(default)]
     pub supports_images: bool,
+}
+
+/// 提取用户填写的模型ID：仅去首尾空白，不做任何大小写/字符转换（严格按用户填写写入）。
+/// 为空时报错，不再静默从名称派生小写 id（历史派生逻辑曾把 MiniMax 等厂商的
+/// 大小写敏感模型ID小写化，导致请求 400）。
+fn require_model_id(model_id: &Option<String>) -> Result<String, AppError> {
+    match model_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) => Ok(s.to_string()),
+        None => bail!("模型ID不能为空"),
+    }
 }
 
 /// 新增一个云端模型 Provider 到 admAgent.json 的 `providers` 分支下。
@@ -388,7 +398,8 @@ pub struct CloudProviderInput {
 ///   这样后续 admAgent 启动/改上下文时 `ensure_adm_agent_config` 走「原地更新」分支，
 ///   不会重写默认结构从而覆盖掉本次新增的云端 provider。
 /// - 文件已存在则解析并尽量保留其它字段；不存在则用完整默认结构。
-/// - 以模型名称派生 provider key 与 model id，插入（或覆盖同名）`providers[key]`。
+/// - 以模型名称派生 provider key；模型ID与名称严格按用户填写写入（区分大小写），
+///   插入（或覆盖同名）`providers[key]`。
 /// - 写入采用原子方式（临时文件 + rename）。
 ///
 /// 返回新增的 provider key，供前端提示。
@@ -416,11 +427,9 @@ pub async fn add_cloud_provider(
         config["providers"] = serde_json::json!({});
     }
 
-    // 3) 派生 key / model id 并构造 provider
+    // 3) 派生 provider key（仅作 JSON 内部键）；模型ID/名称原样写入，区分大小写
     let key = slugify_provider_key(&input.name);
-    let model_id = input.model_id
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| slugify_model_id(&input.name));
+    let model_id = require_model_id(&input.model_id)?;
 
     let provider = serde_json::json!({
         "name": input.name,
@@ -563,7 +572,7 @@ pub async fn delete_cloud_provider(
 }
 
 /// 更新指定 key 的云端模型 Provider（按 key 定位，替换其全部参数）。
-/// 模型名称变更时同步重派生 model id；保留同一 key 以免产生孤儿条目。
+/// 模型ID与名称严格按用户填写写入（区分大小写）；保留同一 key 以免产生孤儿条目。
 #[tauri::command]
 pub async fn update_cloud_provider(
     _app: tauri::AppHandle,
@@ -589,9 +598,7 @@ pub async fn update_cloud_provider(
         bail!("未找到 provider: {}", key);
     }
 
-    let model_id = input.model_id
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| slugify_model_id(&input.name));
+    let model_id = require_model_id(&input.model_id)?;
     let new_provider = serde_json::json!({
         "name": input.name,
         "base_url": input.base_url,
