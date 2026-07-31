@@ -171,6 +171,11 @@ struct BridgeShared {
     client_id: String,
     /// run_id → 回投路由（run_complete 可能不带 run_id，需支持按 session_id 回退匹配）
     runs: HashMap<String, RunRoute>,
+    /// 本次 Bridge 启动是否已向 owner 发过指令问候。每次 start_bridge_internal 重建
+    /// BridgeShared 时自动回 false，从而实现"每次启动首条消息发一遍指令"。
+    /// 之所以在首条 inbound 时发而非登录时发：微信主动发消息需 context_token，
+    /// Bridge 重启后 owner 未发消息前无 context_token，登录即发会 NoContext 失败。
+    greeted: bool,
 }
 
 /// Bridge 运行时：bot / SSE 两个 tokio 任务共享一个 Arc
@@ -792,6 +797,20 @@ async fn handle_incoming(rt: &Arc<IlinkRuntime>, msg: wechatbot::IncomingMessage
         send_wx_text(rt, &from, "微信消息接收已关闭。请在电脑端 Agent 页模型选择旁开启「💬 微信」开关。").await;
         return;
     }
+    // 每次 Bridge 启动后，owner 首条消息先回一遍可用指令（此时已有 context_token，可靠送达）。
+    // greeted 随 BridgeShared 每次启动重置，故"每次启动一次"。
+    let need_greet = {
+        let mut s = rt.shared.lock().await;
+        if s.greeted {
+            false
+        } else {
+            s.greeted = true;
+            true
+        }
+    };
+    if need_greet {
+        send_wx_text(rt, &from, command_help_text()).await;
+    }
     // 提取文本：文本消息直接取；语音消息取转写文字
     let mut text = msg.text.trim().to_string();
     if text.is_empty() && matches!(msg.content_type, ContentType::Voice) {
@@ -869,6 +888,11 @@ async fn handle_incoming(rt: &Arc<IlinkRuntime>, msg: wechatbot::IncomingMessage
     forward_to_agent(rt, &from, &text, attachments).await;
 }
 
+/// 微信端指令帮助文案。供 /help 指令与每次启动的首条问候复用，保证两处同步。
+fn command_help_text() -> &'static str {
+    "🤖 ADM Agent 指令：\n/plan  切换只读计划模式\n/yolo  切换执行模式\n/stop  取消当前任务\n/status  查看运行状态\n/help  显示本帮助\n\n消息会进入电脑端当前打开的会话。"
+}
+
 /// 微信端控制指令：/stop /status /help
 async fn handle_command(rt: &Arc<IlinkRuntime>, from: &str, text: &str) {
     let cmd = text.split_whitespace().next().unwrap_or("").to_lowercase();
@@ -926,12 +950,7 @@ async fn handle_command(rt: &Arc<IlinkRuntime>, from: &str, text: &str) {
         "/plan" => set_plan_mode(rt, from, true).await,
         "/yolo" | "/execute" => set_plan_mode(rt, from, false).await,
         "/help" | "/h" => {
-            send_wx_text(
-                rt,
-                from,
-                "🤖 ADM Agent 指令：\n/plan  切换只读计划模式\n/yolo  切换执行模式\n/stop  取消当前任务\n/status  查看运行状态\n/help  显示本帮助\n\n消息会进入电脑端当前打开的会话。",
-            )
-            .await;
+            send_wx_text(rt, from, command_help_text()).await;
         }
         _ => {
             send_wx_text(rt, from, "未知指令，发送 /help 查看可用指令。").await;
