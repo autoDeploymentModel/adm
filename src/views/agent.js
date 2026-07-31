@@ -4,7 +4,7 @@
 import { template } from "./agent/template.js";
 import { S, invoke, listen } from "./agent/state.js";
 import { api } from "./agent/api.js";
-import { generateUUID, isMsgAreaAtBottom, autoResize, $input } from "./agent/utils.js";
+import { generateUUID, isMsgAreaAtBottom, autoResize, $input, normalizeReasoningEffort } from "./agent/utils.js";
 import { updateStatusBar, updateContextUsage, updateModeToggle, updateSendButton, exitManualScrollMode, startSendSafetyTimer, clearSendSafetyTimer, showError, showConfirm, showCopyPasteMenu, updateScrollBottomBtn } from "./agent/ui.js";
 import { loadConversations, renderConversationList, selectConversation, newConversation } from "./agent/session.js";
 import { syncWorkingIndicator } from "./agent/render.js";
@@ -351,7 +351,7 @@ function bindEvents() {
 
   // 从所有设置弹窗字段读取并保存，然后关闭
   async function doSaveAndClose() {
-    S.settings.agent_reasoning_effort = $input("settings-reasoning-effort").value;
+    S.settings.agent_reasoning_effort = normalizeReasoningEffort($input("settings-reasoning-effort").value);
     var tempVal = $input("settings-temperature").value;
     S.settings.agent_temperature = tempVal ? parseFloat(tempVal) : null;
     S.settings.agent_plan_mode = $input("settings-plan").checked;
