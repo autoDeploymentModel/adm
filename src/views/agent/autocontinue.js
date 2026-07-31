@@ -41,7 +41,8 @@ export async function maybeAutoContinue(data) {
   // 用户已切走会话 → 不在其背后静默烧 token，直接解除
   if (sid !== S.currentConvId) { resetAutoContinue(); return; }
   // Plan 模式下不续跑：没有 edit/todos 工具，残留 todos 永远完不成，续跑只会空转
-  if (S.settings && S.settings.agent_plan_mode) return;
+  // 重置 armed 状态，避免残留会话 ID 被后续外部 run_complete（如微信 Bot）误触发续跑
+  if (S.settings && S.settings.agent_plan_mode) { resetAutoContinue(); return; }
   if (!isAutoContinueEnabled() || S.isSending || !S.serverInfo) return;
 
   // 取最新会话快照判定 todos（session SSE 可能晚于 run_complete，主动拉一次）
@@ -58,6 +59,8 @@ export async function maybeAutoContinue(data) {
 
   // 期间用户已手动发新消息 / 状态被重置
   if (S.autoContinue !== ac || ac.armedSession !== sid) return;
+  // await 期间用户可能已切走会话 → 二次校验，避免在旧会话背后静默烧 token
+  if (sid !== S.currentConvId) { resetAutoContinue(); return; }
 
   if (ac.rounds >= MAX_AUTO_ROUNDS) {
     showError("自动续跑已达 " + MAX_AUTO_ROUNDS + " 轮上限，仍有 " + incomplete + " 项任务未完成，已停止。建议更换更强的模型后手动继续");

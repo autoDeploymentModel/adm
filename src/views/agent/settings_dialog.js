@@ -277,7 +277,7 @@ export async function addModel() {
 
   try {
     var addResp = await invoke("add_cloud_provider", {
-      input: { name: name, base_url: baseUrl, api_key: apiKey, context_window: ctx, model_id: modelId || null, supports_images: supportsImages }
+      input: { name: name, base_url: baseUrl, api_key: apiKey, context_window: ctx, model_id: modelId, supports_images: supportsImages }
     });
     // 关键：把新 provider 同步进运行中的 server（/config/set 会写盘并自动重载内存）。
     // 否则 server 只在启动时读 admAgent.json，选中新模型会报
