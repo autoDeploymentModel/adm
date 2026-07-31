@@ -1287,6 +1287,17 @@ export const template = `
             <div class="param-desc">本轮结束时若任务清单仍有未完成项，自动发送“继续”推进（最多 10 轮，连续 2 轮无进展自动停止）</div>
           </div>
         </div>
+        <div class="param-row">
+          <div class="param-label">调试模式</div>
+          <div class="param-input">
+            <div class="checkbox-wrap">
+              <input type="checkbox" id="settings-debug-logging">
+              <span>记录调试日志</span>
+              <button type="button" class="browse-btn" id="settings-open-log-dir" style="margin-left:auto;">打开日志目录</button>
+            </div>
+            <div class="param-desc">开启后在 app 数据目录写入 adm_api_debug.log（记录与 admAgent 的关键 API/事件交互，含你发送的消息正文，供排查对话中断）；关闭或重启软件会自动清空日志</div>
+          </div>
+        </div>
       </div>
 
       <!-- 模型配置 -->

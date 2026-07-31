@@ -9,6 +9,8 @@
     "core:event:allow-listen",
     "core:event:allow-emit",
     "opener:default",
+    "opener:allow-reveal-item-in-dir",
+    "opener:allow-open-path",
     "dialog:default",
     "dialog:allow-open",
     "core:window:default",

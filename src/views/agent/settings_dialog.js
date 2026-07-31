@@ -34,6 +34,9 @@ export function updateSettingsUI() {
   // 自动续跑（localStorage 持久化，默认开启）
   $input("settings-auto-continue").checked = isAutoContinueEnabled();
 
+  // 调试模式（持久化到 config.json 的 debug_logging，由后端开关控制）
+  $input("settings-debug-logging").checked = !!S.settings.debug_logging;
+
   // 推理强度（旧版存过 ""/"auto"，归一化为 medium 回显）
   reasoningSelect.value = normalizeReasoningEffort(S.settings.agent_reasoning_effort);
 
@@ -58,6 +61,7 @@ export async function saveSettings() {
     s.agent_default_provider = S.settings.agent_default_provider || "local";
     s.agent_reasoning_effort = normalizeReasoningEffort(S.settings.agent_reasoning_effort);
     s.agent_temperature = S.settings.agent_temperature || null;
+    s.debug_logging = S.settings.debug_logging || false;
     await invoke("save_settings", { settings: s });
 
     // 如果工作目录发生了变化，切换 workspace

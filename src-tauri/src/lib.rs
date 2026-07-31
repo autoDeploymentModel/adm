@@ -79,6 +79,10 @@ pub fn run() {
         .manage(AppState::new())
         .manage(ilink::IlinkManaged::default())
         .setup(|app| {
+            // 调试日志：按持久化设置恢复开关（开启时截断重建 → 每次重启清空上次日志），
+            // 早于任何 admAgent 交互，确保本次会话从头开始记录。
+            agent::init_debug_logging(app.handle());
+
             // ===== 系统托盘 =====
             let show_item = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "退出 ADM", true, None::<&str>)?;
@@ -204,6 +208,8 @@ pub fn run() {
             agent::agent_unsubscribe_events,
             agent::get_adm_agent_logs,
             agent::export_agent_logs,
+            agent::set_debug_logging,
+            agent::open_debug_log_dir,
             // ilink.rs - 微信 Bot 桥接
             ilink::start_ilink_login,
             ilink::cancel_ilink_login,
