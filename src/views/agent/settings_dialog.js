@@ -1,7 +1,7 @@
 // 设置弹窗 / 云端模型添加 / admAgent 版本显示
 import { S, invoke } from "./state.js";
 import { api } from "./api.js";
-import { parseContextSize, escapeHtml, $input } from "./utils.js";
+import { parseContextSize, escapeHtml, $input, normalizeReasoningEffort } from "./utils.js";
 import { showError, showConfirm, updateStatusBar } from "./ui.js";
 import { switchToWorkspace, updateWorkspaceSelector } from "./workspace.js";
 import { updateModelDropdown, switchModel, refreshServerProviders } from "./model.js";
@@ -30,8 +30,8 @@ export function updateSettingsUI() {
   // Plan 模式
   planCheck.checked = !!S.settings.agent_plan_mode;
 
-  // 推理强度
-  reasoningSelect.value = S.settings.agent_reasoning_effort || "";
+  // 推理强度（旧版存过 ""/"auto"，归一化为 medium 回显）
+  reasoningSelect.value = normalizeReasoningEffort(S.settings.agent_reasoning_effort);
 
   // 温度
   tempInput.value = S.settings.agent_temperature || "";
@@ -52,7 +52,7 @@ export async function saveSettings() {
     var s = await invoke("load_settings");
     s.agent_plan_mode = S.settings.agent_plan_mode || false;
     s.agent_default_provider = S.settings.agent_default_provider || "local";
-    s.agent_reasoning_effort = S.settings.agent_reasoning_effort || "";
+    s.agent_reasoning_effort = normalizeReasoningEffort(S.settings.agent_reasoning_effort);
     s.agent_temperature = S.settings.agent_temperature || null;
     await invoke("save_settings", { settings: s });
 

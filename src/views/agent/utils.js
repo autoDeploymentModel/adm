@@ -6,6 +6,12 @@ export function $input(id) {
   return /** @type {HTMLInputElement} */ (document.getElementById(id));
 }
 
+// 推理强度归一化：仅接受 low/medium/high，历史版本存过 ""（默认）和 "auto"，统一迁移为 medium
+/** @param {string|undefined|null} v @returns {string} */
+export function normalizeReasoningEffort(v) {
+  return v === "low" || v === "medium" || v === "high" ? v : "medium";
+}
+
 // 生成 UUID (兼容性方案)
 export function generateUUID() {
   var d = Date.now();

@@ -1,7 +1,7 @@
 // 模型切换与 provider 列表
 import { S, invoke } from "./state.js";
 import { api } from "./api.js";
-import { escapeHtml, formatTokens, slugifyModelId } from "./utils.js";
+import { escapeHtml, formatTokens, slugifyModelId, normalizeReasoningEffort } from "./utils.js";
 import { showError, updateContextUsage } from "./ui.js";
 
 // 重载服务端 Agent 配置。/agent/update 报 "agent configuration is missing" 说明 coordinator
@@ -38,7 +38,7 @@ export async function switchModel(providerKey, displayName, ctxLen) {
     var s = await invoke("load_settings");
     s.agent_default_provider = S.settings.agent_default_provider || "local";
     s.agent_plan_mode = !!S.settings.agent_plan_mode;
-    s.agent_reasoning_effort = S.settings.agent_reasoning_effort || "";
+    s.agent_reasoning_effort = normalizeReasoningEffort(S.settings.agent_reasoning_effort);
     s.agent_temperature = S.settings.agent_temperature || null;
     await invoke("save_settings", { settings: s });
   } catch (e) {
@@ -53,7 +53,8 @@ export async function switchModel(providerKey, displayName, ctxLen) {
     try {
       var target = resolveAgentModel(providerKey);
       var modelCfg = { provider: target.provider, model: target.model };
-      if (S.settings.agent_reasoning_effort) modelCfg.reasoning_effort = S.settings.agent_reasoning_effort;
+      // 三档制后必发推理强度（旧值 ""/"auto" 归一化为 medium）
+      modelCfg.reasoning_effort = normalizeReasoningEffort(S.settings.agent_reasoning_effort);
       if (typeof S.settings.agent_temperature === "number") modelCfg.temperature = S.settings.agent_temperature;
       await api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/config/model", {
         scope: 0,

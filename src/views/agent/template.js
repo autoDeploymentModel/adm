@@ -1286,10 +1286,8 @@ export const template = `
           <div class="param-label">推理强度</div>
           <div class="param-input">
             <select class="settings-select" id="settings-reasoning-effort">
-              <option value="">默认</option>
-              <option value="auto">auto</option>
               <option value="low">low</option>
-              <option value="medium">medium</option>
+              <option value="medium" selected>medium</option>
               <option value="high">high</option>
             </select>
           </div>
