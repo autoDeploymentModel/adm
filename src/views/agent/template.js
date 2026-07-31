@@ -981,17 +981,6 @@ export const template = `
   }
   .btn-add-cloud:hover { background: rgba(var(--c-accent-rgb), 0.2); }
 
-  /* admAgent 版本 */
-  .version-table {
-    width: 100%;
-    font-size: 12px;
-  }
-  .version-table td {
-    padding: 4px 0;
-    color: var(--c-text-2);
-  }
-  .version-table td:first-child { width: 80px; color: var(--c-text-4); }
-
   /* 模型添加弹窗 */
   .add-model-overlay {
     display: none;
@@ -1318,14 +1307,6 @@ export const template = `
         <div class="param-group-title">云端模型管理</div>
         <div class="provider-list" id="provider-list"></div>
         <button class="btn-add-cloud" id="agent-add-cloud-btn">+ 添加云端模型</button>
-      </div>
-
-      <!-- admAgent 版本 -->
-      <div class="param-group">
-        <div class="param-group-title">admAgent 版本</div>
-        <table class="version-table">
-          <tr><td>当前版本</td><td id="agent-current-version">检测中...</td></tr>
-        </table>
       </div>
     </div>
     <div class="settings-footer">

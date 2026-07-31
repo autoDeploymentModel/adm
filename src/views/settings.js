@@ -451,6 +451,7 @@ const template = `
             <td>llama.cpp 版本</td>
             <td><span id="v-llamacpp" style="margin-right:8px;">检测中...</span><button class="btn-delete-llamacpp" id="delete-llamacpp-btn">删除</button></td>
           </tr>
+          <tr><td>admAgent 版本</td><td id="v-admagent">检测中...</td></tr>
           <tr><td>操作系统</td><td id="v-os">检测中...</td></tr>
         </table>
       </div>
@@ -729,6 +730,12 @@ async function loadVersionInfo() {
     document.getElementById("v-llamacpp").textContent = version || "未知";
   } catch (e) {
     document.getElementById("v-llamacpp").textContent = "未安装或无法检测";
+  }
+  try {
+    const agentVersion = await invoke()("get_adm_agent_version");
+    document.getElementById("v-admagent").textContent = agentVersion || "未知";
+  } catch (e) {
+    document.getElementById("v-admagent").textContent = "未知";
   }
   const platform = navigator.platform || navigator.userAgent;
   let osName = "未知";
