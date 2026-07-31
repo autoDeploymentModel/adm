@@ -37,6 +37,7 @@ export const listen = window.__adm_listen;
  * @property {"skill" | "lsp" | "mcp"} toolsTab
  * @property {{ skill: any[], lsp: any[], mcp: any[] }} toolsData
  * @property {boolean} todosCollapsed
+ * @property {{ armedSession: string | null, rounds: number, lastIncomplete: number, noProgress: number }} autoContinue 自动续跑状态：armedSession 为本客户端发起任务的会话，rounds 已续跑轮数，lastIncomplete 上轮剩余 todos 数，noProgress 连续无进展轮数
  * @property {number} initSeq
  */
 
@@ -73,5 +74,6 @@ export const S = {
   toolsTab: "skill",         // 工具面板当前 tab: "skill" | "lsp" | "mcp"
   toolsData: { skill: [], lsp: [], mcp: [] }, // 各 tab 工具缓存 [{name, status, statusColor, title}]
   todosCollapsed: false,     // Todo 固定面板折叠状态（仅影响展示，不影响数据更新）
+  autoContinue: { armedSession: null, rounds: 0, lastIncomplete: -1, noProgress: 0 }, // 自动续跑状态（见 autocontinue.js）
   initSeq: 0,                // init() 版本号：unmount/重新 mount 时递增，旧的在途 init 检测到过期后立即终止，防止并发 init 互相踩踏
 };

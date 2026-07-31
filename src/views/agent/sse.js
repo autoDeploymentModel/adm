@@ -8,6 +8,7 @@ import { loadConversations, refreshMessages, renderConversationList, selectConve
 import { handlePermissionRequest, resetPermissionState } from "./permission.js";
 import { loadTools } from "./tools.js";
 import { refreshAgentInfo, reloadAgentConfig } from "./model.js";
+import { maybeAutoContinue, resetAutoContinue } from "./autocontinue.js";
 
 // ===== SSE 事件 =====
 export async function setupSSEListener() {
@@ -125,9 +126,15 @@ function handleSSEEvent(payload) {
           ? "（上下文已接近上限 " + S.contextUsage.used + "/" + S.contextUsage.max + "，建议新建会话继续）" : "";
         showError("本轮对话中断: " + actualData.error + ctxHint);
         updateStatusBar("error", null, S.contextUsage.used);
+        // 运行出错时不自动续跑（避免在持续性错误上循环烧 token）
+        resetAutoContinue();
       } else {
         if (actualData && actualData.cancelled) {
           showError("本轮对话已取消");
+          resetAutoContinue();
+        } else {
+          // 正常收尾：todos 未完成时自动续跑（内部自带开关/进度守卫/轮数熔断）
+          maybeAutoContinue(actualData);
         }
         updateStatusBar("ready", null, S.contextUsage.used);
       }
