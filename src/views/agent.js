@@ -598,6 +598,15 @@ export default {
       listen("agent-server-died", handleServerDied)
         .then(function(u) { S.unlisteners.push(u); })
         .catch(function() {});
+      // 微信端 /plan、/yolo 切换模式后，Rust 发此事件让 Agent 页按钮跟随（两端一致）。
+      // 仅更新内存态 + 按钮：config.json 已由微信端写盘、服务端已同步，无需再 save/sync 避免回环。
+      listen("agent-mode-changed", function(e) {
+        if (!S.settings) return;
+        S.settings.agent_plan_mode = !!(e && e.payload && e.payload.plan);
+        updateModeToggle();
+      })
+        .then(function(u) { S.unlisteners.push(u); })
+        .catch(function() {});
     }
     // init 是 fire-and-forget，必须兜底 catch，否则任何未捕获异常都是静默死亡（表现为页面空白无报错）
     init().catch(function(e) {
