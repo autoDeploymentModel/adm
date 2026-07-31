@@ -26,6 +26,7 @@ dist-ssr
 src-tauri/llamacpp/*
 src-tauri/llamacpp_all_version/*
 src-tauri/tauri/*
+src-tauri/binaries/
 admAgent
 .catpaw
 .mimocode

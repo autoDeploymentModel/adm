@@ -34,14 +34,15 @@
 | `model_list.rs` | `fetch_model_list`, `scan_local_models`, `download_model`, `start_model`, `stop_model`, `get_model_status` |
 | `settings.rs` | `save_settings`（原子写入：`.tmp` + `rename`）, `load_settings`, `get_app_version`, `get_llamacpp_version` |
 | `model_image.rs` | `check_sd_exists`, `download_and_extract_sd`, `start_sd_generation`, `stop_sd` |
-| `agent.rs` | `start_agent_server`, `stop_agent_server`, `get_agent_server_status`, `agent_http_request`, `agent_subscribe_events`, `agent_unsubscribe_events`, `check_adm_agent`, `download_adm_agent`, `add/list/update/delete_cloud_provider`, `prepare_adm_agent_config` |
+| `agent.rs` | `start_agent_server`, `stop_agent_server`, `get_agent_server_status`, `agent_http_request`, `agent_subscribe_events`, `agent_unsubscribe_events`, `check_adm_agent`, `get_adm_agent_version`, `add/list/update/delete_cloud_provider`, `prepare_adm_agent_config` |
 
 ## 关键注意事项
 - **MTP 自动检测**：如果模型文件名包含 "mtp"（不区分大小写），`start_model` 会自动追加 `--spec-draft-n-max 2 --spec-type draft-mtp`。设置 `params.spec_type = "none"` 可禁用。
 - **HuggingFace 镜像**：`download_model` 会自动将所有 `huggingface.co` 链接替换为 `hf-mirror.com`。
 - **断点续传**：使用 `.part` 后缀 + HTTP `Range` 头；`scan_part_files` 列出未完成的下载。
 - **硬件优先级**：`hwinfo` 插件数据覆盖 `sysinfo`。
-- **更新流程**：启动后延迟 3 秒 → 应用更新 → VC++ 运行库（仅 Windows）→ llamacpp 下载。
+- **更新流程**：启动后延迟 3 秒 → 应用更新 → VC++ 运行库（仅 Windows）→ llamacpp 下载。admAgent 不再运行时下载/升级，随安装包内置（见下）。
+- **admAgent 内置分发**：编译好的 admAgent 压缩包放在 `buildAgent/`（`admAgent_{ver}_Windows_x86_64.zip` / `admAgent_{ver}_Darwin_arm64.tar.gz`）。`beforeDevCommand`/`beforeBuildCommand` 运行 `scripts/prepare-agent-binary.mjs`：按构建目标自动选包、解压到临时目录、把二进制放到 `src-tauri/binaries/admAgent-<target-triple>`（git 忽略），再由 `bundle.externalBin`（sidecar）打进安装包。运行时路径：Windows 为 ADM.exe 同目录的 `admAgent.exe`，macOS 为 `ADM.app/Contents/MacOS/admAgent`；macOS 启动时会清理旧版下载模式遗留在 app_data_dir 的 admAgent。
 - **窗口关闭**：`on_window_event` 通过 `taskkill /F`（Windows）或 `kill -9` 杀死 llama-server 和 admAgent server。
 - **Agent server 模式**：admAgent 以子进程 `serve --host tcp://127.0.0.1:0` 启动，后端从 stdout 解析端口，通过 `agent_http_request` 代理 HTTP API，SSE 事件通过 Tauri event `agent-sse-event` 转发给前端。
 - **Agent 设置**：`agent_yolo` / `agent_default_provider` / `agent_reasoning_effort` / `agent_temperature` 存储在 `config.json`（Settings 结构体），前端通过 `load_settings` / `save_settings` 读写。

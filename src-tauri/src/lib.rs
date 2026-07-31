@@ -130,6 +130,10 @@ pub fn run() {
 
             // iLink 微信 Bot：已绑定且启用时自动恢复桥接（内部等待 admAgent 就绪）
             ilink::auto_start(app.handle().clone());
+
+            // macOS：清理旧版「运行时下载」模式遗留在 app_data_dir 的 admAgent（新版用安装包内置 sidecar）
+            #[cfg(target_os = "macos")]
+            agent::cleanup_legacy_adm_agent(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -185,9 +189,6 @@ pub fn run() {
             agent::prepare_adm_agent_config,
             agent::check_adm_agent,
             agent::get_adm_agent_version,
-            agent::download_adm_agent,
-            agent::check_adm_agent_update,
-            agent::download_adm_agent_update,
             agent::get_agent_workdir,
             agent::set_agent_workdir,
             agent::pick_workdir_folder,

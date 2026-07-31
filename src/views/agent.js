@@ -34,14 +34,12 @@ async function init() {
   // 更新状态栏
   updateStatusBar("ready", null, 0);
 
-  // 检查 admAgent 是否已下载
+  // 检查 admAgent 是否存在（安装包内置 sidecar，缺失属于安装损坏，无运行时下载兜底）
   try {
     var agentCheck = await invoke("check_adm_agent");
     if (!agentCheck || !agentCheck.exists) {
-      showError("未找到 admAgent 工具，请先下载");
+      showError("未找到 admAgent 组件（应随安装包内置），请重新安装 ADM");
       updateStatusBar("error", null, 0);
-      // 显示下载引导
-      showDownloadGuide();
       return;
     }
   } catch (e) {
@@ -261,44 +259,6 @@ function lastAssistantTurnFinished() {
   var last = msgs[msgs.length - 1];
   if (!last || last.role !== "assistant") return false;
   return Array.isArray(last.parts) && last.parts.some(function(p) { return p && p.type === "finish"; });
-}
-
-// 显示下载引导
-function showDownloadGuide() {
-  var area = document.getElementById("agent-msg-area");
-  if (area) {
-    area.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:16px;color:var(--c-text-2);">' +
-      '<div style="font-size:48px;">📦</div>' +
-      '<div style="font-size:16px;font-weight:600;">需要下载 admAgent 工具</div>' +
-      '<div style="font-size:13px;color:var(--c-text-3);text-align:center;max-width:400px;">' +
-        'admAgent 是 Agent 功能的核心组件，需要下载后才能使用。<br>请点击下方按钮开始下载。' +
-      '</div>' +
-      '<button id="agent-download-btn" style="background:var(--c-accent);color:#fff;border:none;padding:10px 24px;border-radius:8px;font-size:14px;cursor:pointer;">' +
-        '下载 admAgent' +
-      '</button>' +
-      '</div>';
-
-    // 绑定下载按钮事件
-    setTimeout(function() {
-      var btn = /** @type {HTMLButtonElement} */ (document.getElementById("agent-download-btn"));
-      if (btn) {
-        btn.addEventListener("click", async function() {
-          btn.disabled = true;
-          btn.textContent = "下载中...";
-          try {
-            await invoke("download_adm_agent");
-            btn.textContent = "下载完成，正在启动...";
-            // 重新初始化
-            setTimeout(function() { init(); }, 1000);
-          } catch (e) {
-            btn.textContent = "下载失败，点击重试";
-            btn.disabled = false;
-            showError("下载失败: " + e);
-          }
-        });
-      }
-    }, 0);
-  }
 }
 
 // ===== admAgent server 意外退出自愈 =====

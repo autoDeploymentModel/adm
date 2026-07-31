@@ -4,7 +4,9 @@
   "version": "0.5.6",
   "identifier": "com.adm.admapp",
   "build": {
-    "frontendDist": "../src"
+    "frontendDist": "../src",
+    "beforeDevCommand": "node scripts/prepare-agent-binary.mjs",
+    "beforeBuildCommand": "node scripts/prepare-agent-binary.mjs"
   },
   "app": {
     "withGlobalTauri": true,
@@ -28,6 +30,7 @@
     "active": true,
     "targets": "all",
     "resources": [],
+    "externalBin": ["binaries/admAgent"],
     "icon": [
       "icons/32x32.png",
       "icons/64x64.png",

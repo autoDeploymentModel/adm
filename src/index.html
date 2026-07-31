@@ -238,25 +238,6 @@
     .view-loading-spinner { width: 36px; height: 36px; border: 3px solid var(--c-border); border-top-color: var(--c-accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
     .view-loading-text { font-size: 13px; color: var(--c-text-3); }
 
-    /* Agent 下载弹窗 */
-    #agent-download-overlay {
-      display: none;
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background: rgba(0, 0, 0, 0.6);
-      z-index: 9998;
-      justify-content: center;
-      align-items: center;
-    }
-    #agent-download-overlay.show { display: flex; }
-    .agent-download-dialog { background: var(--c-panel); border: 1px solid var(--c-border); border-radius: 12px; padding: 28px 32px; max-width: 460px; width: 90%; box-shadow: 0 8px 32px rgba(0,0,0,0.5); text-align: center; }
-    .agent-download-dialog .ad-icon { font-size: 40px; margin-bottom: 12px; }
-    .agent-download-dialog .ad-title { font-size: 20px; font-weight: 600; color: var(--c-text-hi); margin-bottom: 8px; }
-    .agent-download-dialog .ad-desc { font-size: 14px; color: var(--c-text-2); margin-bottom: 20px; line-height: 1.6; }
-
     .global-toast {
       position: fixed;
       left: 50%;
@@ -304,19 +285,6 @@
   <div id="update-overlay">
     <div id="update-dialog">
       <div id="update-content"></div>
-    </div>
-  </div>
-
-  <!-- Agent 下载弹窗 -->
-  <div id="agent-download-overlay">
-    <div class="agent-download-dialog">
-      <div class="ad-icon">🤖</div>
-      <div class="ad-title">正在下载 Agent 工具</div>
-      <div class="ad-desc">首次使用需要下载 admAgent 工具，下载完成后将自动进入 Agent 终端。</div>
-      <div class="llamacpp-progress-bar">
-        <div class="llamacpp-progress-fill" id="agent-progress-fill" style="width: 0%"></div>
-      </div>
-      <div class="llamacpp-status-text" id="agent-status-text">准备下载...</div>
     </div>
   </div>
 
@@ -630,96 +598,6 @@
       } catch (_) {}
     }
 
-    // ===== admAgent 版本更新 =====
-    let pendingAdmAgentUrl = null;
-    let pendingAdmAgentOnComplete = null;
-
-    async function startAdmAgentUpdate(result, onComplete) {
-      pendingAdmAgentOnComplete = typeof onComplete === "function" ? onComplete : null;
-      const isNotInstalled = !result.local_version || result.local_version === "未安装";
-      const localVer = escHtml(result.local_version || "未安装");
-      const remoteVer = escHtml(result.remote_version || "");
-      const downloadUrl = result.download_url;
-
-      if (!downloadUrl) {
-        showUpdateDialog(`
-          <div class="update-icon">⚠️</div>
-          <div class="update-title">无法获取下载地址</div>
-          <div class="update-desc">当前系统暂不支持 admAgent 自动更新，请前往官网手动下载。</div>
-          <div class="update-buttons" style="margin-top:16px;"><button class="update-btn-secondary" onclick="dismissAdmAgentUpdate()">关闭</button></div>`);
-        return;
-      }
-
-      let buttonsHtml;
-      if (isNotInstalled) {
-        buttonsHtml = `<div class="update-buttons" style="margin-top:16px;"><button class="update-btn-primary" id="admagent-start-btn" onclick="doAdmAgentDownload()">开始下载</button></div>`;
-      } else {
-        buttonsHtml = `<div class="update-buttons" style="margin-top:16px;"><button class="update-btn-primary" id="admagent-start-btn" onclick="doAdmAgentDownload()">开始下载</button><button class="update-btn-secondary" onclick="dismissAdmAgentUpdate()">稍后再说</button></div>`;
-      }
-
-      const html = `
-        <div class="update-icon">🤖</div>
-        <div class="update-title">${isNotInstalled ? "需要安装 admAgent" : "admAgent 需要更新"}</div>
-        <div class="update-desc">${isNotInstalled ? "首次使用需要安装 admAgent 工具" : "检测到 admAgent 工具需要更新"}</div>
-        <div class="update-info-row">
-          <div class="info-item"><div class="info-label">当前版本</div><div class="info-value">${localVer}</div></div>
-          <div class="info-item"><div class="info-label">最新版本</div><div class="info-value">${remoteVer}</div></div>
-        </div>
-        <div class="llamacpp-progress-bar"><div class="llamacpp-progress-fill" id="admagent-progress-fill" style="width: 0%"></div></div>
-        <div class="llamacpp-status-text" id="admagent-status-text">准备下载...</div>
-        ${buttonsHtml}`;
-      showUpdateDialog(html);
-      pendingAdmAgentUrl = downloadUrl;
-      if (isNotInstalled) setTimeout(function() { doAdmAgentDownload(); }, 500);
-    }
-
-    function dismissAdmAgentUpdate() {
-      hideUpdateDialog();
-      const cb = pendingAdmAgentOnComplete;
-      pendingAdmAgentOnComplete = null;
-      if (cb) cb();
-    }
-
-    async function doAdmAgentDownload() {
-      var startBtn = document.getElementById("admagent-start-btn");
-      if (startBtn) startBtn.style.display = "none";
-      var statusText = document.getElementById("admagent-status-text");
-      var progressFill = document.getElementById("admagent-progress-fill");
-      if (!pendingAdmAgentUrl) {
-        if (statusText) statusText.textContent = "下载失败: 缺少下载地址";
-        if (startBtn) { startBtn.style.display = ""; startBtn.textContent = "重试"; }
-        return;
-      }
-      try {
-        await invoke("download_adm_agent_update", { url: pendingAdmAgentUrl });
-      } catch (e) {
-        if (statusText) statusText.textContent = "下载失败: " + e;
-        if (progressFill) progressFill.style.width = "0%";
-        if (startBtn) { startBtn.style.display = ""; startBtn.textContent = "重试"; }
-      }
-    }
-
-    function setupAdmAgentUpdateProgressListener() {
-      if (typeof listen !== "function") return;
-      try {
-        listen("adm-agent-update-progress", function (event) {
-          var payload = event.payload;
-          var statusText = document.getElementById("admagent-status-text");
-          var progressFill = document.getElementById("admagent-progress-fill");
-          if (payload.status === "downloading") {
-            if (statusText) statusText.textContent = "正在下载... " + payload.progress + "%";
-            if (progressFill) progressFill.style.width = payload.progress + "%";
-          } else if (payload.status === "done") {
-            if (statusText) statusText.textContent = "安装完成！";
-            if (progressFill) progressFill.style.width = "100%";
-            const cb = pendingAdmAgentOnComplete;
-            pendingAdmAgentOnComplete = null;
-            setTimeout(function () { hideUpdateDialog(); if (cb) cb(); }, 1500);
-          }
-        });
-      } catch (_) {}
-    }
-
     // ===== Agent 入口 =====
     async function goAgent() {
       try {
@@ -739,21 +617,8 @@
           const ok = await showShellConfirm("当前未启动本地模型，进入 Agent 后可能无法使用本地模型对话。\n是否继续进入？");
           if (!ok) return;
         }
-        const info = await invoke("check_adm_agent");
-        if (!info.exists) {
-          showAgentDownloadDialog();
-          await invoke("download_adm_agent");
-          setTimeout(function () { hideAgentDownloadDialog(); location.hash = "#/agent"; }, 700);
-          return;
-        }
-        const upd = await invoke("check_adm_agent_update");
-        if (upd.needs_update && upd.download_url) {
-          startAdmAgentUpdate(upd, function () { location.hash = "#/agent"; });
-          return;
-        }
         location.hash = "#/agent";
       } catch (e) {
-        hideAgentDownloadDialog();
         showComingSoon("操作失败: " + e);
       }
     }
@@ -795,41 +660,6 @@
       showComingSoon._t = setTimeout(function () { tip.style.display = "none"; }, 2500);
     }
 
-    function showAgentDownloadDialog() {
-      const fill = document.getElementById("agent-progress-fill");
-      const text = document.getElementById("agent-status-text");
-      if (fill) fill.style.width = "0%";
-      if (text) { text.textContent = "准备下载..."; text.style.color = "var(--c-text-3)"; }
-      document.getElementById("agent-download-overlay").classList.add("show");
-    }
-
-    function hideAgentDownloadDialog() {
-      document.getElementById("agent-download-overlay").classList.remove("show");
-    }
-
-    function updateAgentDownloadStatus(msg, isError) {
-      const text = document.getElementById("agent-status-text");
-      if (text) { text.textContent = msg; if (isError) text.style.color = "#ff6b6b"; }
-    }
-
-    function setupAgentDownloadListener() {
-      if (typeof listen !== "function") return;
-      try {
-        listen("agent-download-progress", function (event) {
-          const payload = event.payload || {};
-          const fill = document.getElementById("agent-progress-fill");
-          const text = document.getElementById("agent-status-text");
-          if (payload.status === "downloading") {
-            if (text) text.textContent = "正在下载... " + payload.progress + "%";
-            if (fill) fill.style.width = payload.progress + "%";
-          } else if (payload.status === "done") {
-            if (text) text.textContent = "下载完成！";
-            if (fill) fill.style.width = "100%";
-          }
-        });
-      } catch (_) {}
-    }
-
     // 暴露给视图模块（如 settings 调用）
     window.ADM = {
       showUpdateDialog,
@@ -842,8 +672,6 @@
     window.downloadVcRedist = downloadVcRedist;
     window.onVcRedistInstalled = onVcRedistInstalled;
     window.doLlamacppDownload = doLlamacppDownload;
-    window.dismissAdmAgentUpdate = dismissAdmAgentUpdate;
-    window.doAdmAgentDownload = doAdmAgentDownload;
 
     // ===== 硬件栏 =====
     function updateHardwareBar() {
@@ -957,8 +785,6 @@
       console.log("[index] init() 开始初始化");
       try {
         setupLlamacppProgressListener();
-        setupAdmAgentUpdateProgressListener();
-        setupAgentDownloadListener();
         systemInfo = await invoke("get_system_info");
         window.__adm_state.systemInfo = systemInfo;
 
