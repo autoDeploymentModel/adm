@@ -483,14 +483,25 @@ function bindEvents() {
       return;
     }
     // 无图片：尝试读取文件路径（复制文件时剪贴板提供 text/uri-list 或 text/plain 路径）
+    // text/uri-list 格式：每行是一个 URI（file:// 或 http(s)），parseUriListPaths 负责解析
     var uriList = cd.getData("text/uri-list");
     var paths = parseUriListPaths(uriList);
     if (paths.length === 0) {
-      // 兜底1：text/plain 里可能是文件路径（Windows 资源管理器复制文件常见）
+      // 兜底1：text/plain 里可能是文件路径（Windows 资源管理器复制文件常见）。
+      // 注意：不能用 parseUriListPaths 解析普通文本 —— 该函数会把任意非空行都当路径，
+      // 导致正常文本粘贴被误拦截。必须用 looksLikeFilePath 逐行/整体校验。
       var plain = (cd.getData("text/plain") || "").trim();
-      paths = parseUriListPaths(plain);
-      if (paths.length === 0 && plain && looksLikeFilePath(plain)) {
-        paths = [plain];
+      if (plain && looksLikeFilePath(plain)) {
+        // 多行且每行都像路径 → 拆成多行各自作为路径
+        if (plain.indexOf("\n") >= 0 || plain.indexOf("\r") >= 0) {
+          var lines = plain.split(/\r?\n/).map(function(l) { return l.trim(); }).filter(Boolean);
+          // 二次校验：只保留真正像路径的行（looksLikeFilePath 对多行返回 true 仅表示每行都像，
+          // 但为安全起见再加一次过滤）
+          paths = lines.filter(function(l) { return looksLikeFilePath(l); });
+          if (paths.length === 0) paths = [];
+        } else {
+          paths = [plain];
+        }
       }
     }
     if (paths.length === 0 && cd.files && cd.files.length > 0) {

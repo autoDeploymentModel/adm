@@ -100,6 +100,7 @@ export async function sendMessage() {
     if (filesToSend.length > 0) {
       body.attachments = filesToSend.map(function(f) {
         return {
+          file_path: f.name,
           file_name: f.name,
           mime_type: f.type || "application/octet-stream",
           content: f.base64,
