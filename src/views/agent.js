@@ -428,7 +428,8 @@ function bindEvents() {
     var input = document.createElement("input");
     input.type = "file";
     input.multiple = true;
-    input.accept = "image/*";
+    // 仅支持图片 + 文本类附件（与 attach.js 白名单一致）；其余格式由 addPendingFiles 提示"暂不支持"
+    input.accept = "image/*,.txt,.log,.md,.markdown,.json,.csv,.xml,.yaml,.yml,.ini,.conf,.env,.sql,.js,.mjs,.ts,.py,.go,.rs,.java,.c,.h,.cpp,.hpp,.cs,.php,.rb,.sh,.bat,.ps1,.html,.css,.scss";
     input.onchange = function() {
       var files = input.files;
       if (files && files.length > 0) {
