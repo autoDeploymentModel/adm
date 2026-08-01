@@ -3,9 +3,9 @@ import { S, invoke } from "./state.js";
 import { api } from "./api.js";
 import { autoResize, generateRunId } from "./utils.js";
 import { getErrorMessage } from "./error.js";
-import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, reportError, updateContextUsage } from "./ui.js";
+import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, showInfo, reportError, updateContextUsage } from "./ui.js";
 import { renderMessages } from "./render.js";
-import { newConversation } from "./session.js";
+import { newConversation, renderConversationList } from "./session.js";
 import { refreshAgentInfo, reloadAgentConfig } from "./model.js";
 import { clearPendingFiles } from "./attach.js";
 import { armAutoContinue, resetAutoContinue } from "./autocontinue.js";
@@ -18,9 +18,32 @@ import { armAutoContinue, resetAutoContinue } from "./autocontinue.js";
 var LARGE_TEXT_ATTACH_BYTES = 60 * 1024;
 
 export async function sendMessage() {
-  console.log("[agent] sendMessage() isSending:", S.isSending, "convId:", S.currentConvId);
-  if (S.isSending) {
-    // 取消实际运行中的会话，而不是用户后来切换到的当前 UI 会话
+  console.log("[agent] sendMessage() isSending:", S.isSending, "convId:", S.currentConvId, "activeRun:", S.activeRun ? S.activeRun.sessionId : null, "queuedRun:", S.queuedRun ? S.queuedRun.sessionId : null);
+  // 仅当「当前 UI 会话就是正在运行的会话」时，点击发送 = 取消该运行；
+  // 若运行发生在其它会话（用户已切走），点击发送 = 给当前会话发新消息（服务端排队）
+  var isCurrentRun = S.isSending && S.activeRun && S.activeRun.sessionId === S.currentConvId;
+  var isCurrentQueued = !!(S.queuedRun && S.queuedRun.sessionId === S.currentConvId);
+  if (isCurrentRun || isCurrentQueued) {
+    if (isCurrentQueued) {
+      // 取消排队：清除当前会话已入队、尚未执行的消息；正在执行的其它会话不受影响
+      try {
+        await api("POST", "/v1/workspaces/" + S.queuedRun.workspaceId + "/agent/sessions/" + S.queuedRun.sessionId + "/prompts/clear");
+      } catch (e) {
+        reportError(e, { prefix: "取消排队失败: " });
+        return;
+      }
+      S.queuedRun = null;
+      // 若无其它运行则整体回到就绪态；若其它会话仍在执行则保持运行态
+      if (!S.activeRun) {
+        S.isSending = false;
+        clearSendSafetyTimer();
+        updateStatusBar("ready", null, S.contextUsage.used);
+      }
+      updateSendButton();
+      renderConversationList();
+      return;
+    }
+    // 取消实际运行中的会话（即当前会话）
     // 用户主动取消 → 同时解除自动续跑，避免取消后又被自动拉起
     resetAutoContinue();
     var activeRun = S.activeRun;
@@ -32,8 +55,19 @@ export async function sendMessage() {
         return;
       }
     }
+    if (S.queuedRun) {
+      // 取消当前运行后仍有排队运行：由排队运行接管（服务端队列 FIFO，取消后即轮到它）
+      console.log("[agent] 取消当前运行，排队运行接管:", S.queuedRun.sessionId);
+      S.activeRun = S.queuedRun;
+      S.queuedRun = null;
+      startSendSafetyTimer();
+      updateSendButton();
+      renderConversationList();
+      return;
+    }
     S.isSending = false;
     S.activeRun = null;
+    S.queuedRun = null;
     updateSendButton();
     updateStatusBar("ready", null, S.contextUsage.used);
     clearSendSafetyTimer();
@@ -78,8 +112,18 @@ export async function sendMessage() {
   var workspaceId = S.serverInfo.workspace_id;
   var sessionId = S.currentConvId;
   var runId = generateRunId();
-  S.isSending = true;
-  S.activeRun = { workspaceId: workspaceId, sessionId: sessionId, runId: runId };
+  // 此刻工作区是否已被其它会话占用（本消息将排队等待）——用于发送成功后提示
+  var wasBusyOther = S.isSending && S.activeRun && S.activeRun.sessionId !== sessionId;
+  if (wasBusyOther) {
+    // 工作区被其它会话占用：保留 activeRun（真正执行的运行）不变，
+    // 本消息进入服务端队列，排队身份记入 queuedRun；isSending 已为 true 无需改动。
+    // 提前设置 queuedRun：让临时消息渲染的「排队中」指示器与按钮文案立即生效
+    S.queuedRun = { workspaceId: workspaceId, sessionId: sessionId, runId: runId };
+  } else {
+    S.isSending = true;
+    S.activeRun = { workspaceId: workspaceId, sessionId: sessionId, runId: runId };
+    S.queuedRun = null;
+  }
   updateSendButton();
 
   // 立即显示用户消息（使用临时 ID，以便 SSE 到来时去重替换）
@@ -158,6 +202,7 @@ export async function sendMessage() {
     console.log("[agent] 消息已发送, runId:", runId);
     // 初始化本轮运行统计：供假完成检测（A）与自动续跑进度判定（C）使用
     S.runStats = {
+      sessionId: sessionId,
       prompt: text || "（用户发来附件，请查看并处理）",
       toolCalls: 0,
       sideEffectCalls: 0,
@@ -167,14 +212,27 @@ export async function sendMessage() {
     };
     // 手动发送成功 → 武装自动续跑（重置轮数/进度计数，绑定本会话）
     armAutoContinue(sessionId);
+    // 排队场景提示：queuedRun 已在发送前设置（供指示器/按钮/列表标识用），此处仅提示与刷新
+    if (wasBusyOther) {
+      showInfo("当前有会话正在运行，消息已排队，将在其完成后自动执行");
+      renderConversationList();
+    }
     startSendSafetyTimer();
     updateContextUsage();
   } catch (e) {
-    S.isSending = false;
-    S.activeRun = null;
-    updateSendButton();
-    clearSendSafetyTimer();
-    updateStatusBar("ready", null, S.contextUsage.used);
+    if (wasBusyOther) {
+      // 排队发送失败：只清排队身份，不得触碰仍在执行的其它会话运行态
+      S.queuedRun = null;
+      updateSendButton();
+      renderConversationList();
+    } else {
+      S.isSending = false;
+      S.activeRun = null;
+      S.queuedRun = null;
+      updateSendButton();
+      clearSendSafetyTimer();
+      updateStatusBar("ready", null, S.contextUsage.used);
+    }
     S.messages.push({ role: "error", content: "发送失败: " + getErrorMessage(e), type: "error" });
     renderMessages();
   }

@@ -218,6 +218,7 @@ async function reconcileSendingState() {
   var run = S.activeRun;
   if (!run) {
     S.isSending = false;
+    S.queuedRun = null;
     updateSendButton();
     updateStatusBar("ready", null, S.contextUsage.used);
     return;
@@ -242,6 +243,7 @@ async function reconcileSendingState() {
     console.warn("[agent] 挂载对账：运行会话已结束，重置发送态");
     S.isSending = false;
     S.activeRun = null;
+    S.queuedRun = null;
     clearSendSafetyTimer();
     updateSendButton();
     updateStatusBar("ready", null, S.contextUsage.used);
@@ -269,6 +271,7 @@ async function handleServerDied() {
   showError("admAgent 服务异常退出，正在自动重启...");
   S.isSending = false;
   S.activeRun = null;
+  S.queuedRun = null;
   updateSendButton();
   clearSendSafetyTimer();
   updateStatusBar("error", null, S.contextUsage.used);

@@ -24,6 +24,7 @@ export const listen = window.__adm_listen;
  * @property {any} sseReconnectTimer
  * @property {boolean} isSending
  * @property {{ workspaceId: string, sessionId: string, runId: string } | null} activeRun 实际运行身份，不随 UI 会话切换
+ * @property {{ workspaceId: string, sessionId: string, runId: string } | null} queuedRun 排队中运行身份：发送时工作区被其它会话占用、prompt 已入队等待；用于会话列表「排队中」标识与安全计时器
  * @property {{ used: number, max: number, estimated: boolean }} contextUsage
  * @property {"current" | "all"} sessionViewMode
  * @property {{ id?: string, path: string, name: string } | null} workspaceInfo
@@ -38,7 +39,7 @@ export const listen = window.__adm_listen;
  * @property {{ skill: any[], lsp: any[], mcp: any[] }} toolsData
  * @property {boolean} todosCollapsed
  * @property {{ armedSession: string | null, rounds: number, lastIncomplete: number, noProgress: number }} autoContinue 自动续跑状态：armedSession 为本客户端发起任务的会话，rounds 已续跑轮数，lastIncomplete 上轮剩余 todos 数，noProgress 连续无进展轮数
- * @property {{ prompt: string, toolCalls: number, sideEffectCalls: number, sideEffectSuccess: number, seenMsgIds: Object<string, number>, startedAt: number } | null} runStats 本轮运行统计（假完成检测 / 续跑进度判定用）：toolCalls 工具调用总数，sideEffectCalls 副作用工具调用数，sideEffectSuccess 副作用工具成功数，seenMsgIds 已统计消息 id → 已统计 parts 数；run_complete 后清空
+ * @property {{ sessionId: string, prompt: string, toolCalls: number, sideEffectCalls: number, sideEffectSuccess: number, seenMsgIds: Object<string, number>, startedAt: number } | null} runStats 本轮运行统计（假完成检测 / 续跑进度判定用）：sessionId 统计归属会话（排队期间 activeRun 是其它会话时用于过滤），toolCalls 工具调用总数，sideEffectCalls 副作用工具调用数，sideEffectSuccess 副作用工具成功数，seenMsgIds 已统计消息 id → 已统计 parts 数；run_complete 后清空
  * @property {number} initSeq
  */
 
@@ -62,6 +63,7 @@ export const S = {
   sseReconnectTimer: null, // SSE 重连定时器
   isSending: false,
   activeRun: null, // { workspaceId, sessionId, runId }，计时器/取消/完成都绑定该运行
+  queuedRun: null, // { workspaceId, sessionId, runId }，排队中运行（工作区忙时新消息入队等待）
   contextUsage: { used: 0, max: 0, estimated: false },
   sessionViewMode: "current", // "current" | "all"
   workspaceInfo: null, // { id, path, name }

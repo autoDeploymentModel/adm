@@ -129,6 +129,11 @@ export const template = `
     animation: agent-spin 0.8s linear infinite;
     flex-shrink: 0;
   }
+  .conv-item-busy.queued {
+    animation: none;
+    border-color: var(--c-border);
+    background: var(--c-text-3);
+  }
   .conv-item-meta {
     font-size: 11px;
     color: var(--c-text-3);
