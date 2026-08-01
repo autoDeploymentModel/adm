@@ -28,7 +28,7 @@ export const listen = window.__adm_listen;
  * @property {"current" | "all"} sessionViewMode
  * @property {{ id?: string, path: string, name: string } | null} workspaceInfo
  * @property {any} agentInfo Agent 状态信息 (当前模型等)
- * @property {any[]} pendingFiles 待发送附件 [{name, type, size, base64, dataUrl}]
+ * @property {any[]} pendingFiles 待发送附件 [{name, type, size, base64, dataUrl, path?}]（path 为真实磁盘路径，粘贴路径场景才有；超长文本附件据此走"路径模式"）
  * @property {any} sendSafetyTimer
  * @property {boolean} manualScrollMode
  * @property {any} manualModeExitTimer
