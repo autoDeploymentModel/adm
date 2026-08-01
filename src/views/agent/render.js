@@ -252,7 +252,7 @@ function updateMessageNode(el, msg) {
         if (pe.getAttribute("src") !== (d.url || "")) pe.setAttribute("src", d.url || "");
         break;
       case "binary":
-        pe.textContent = "📎 附件: " + (d.path || "file") + " (" + (d.mime_type || "unknown") + ")";
+        pe.textContent = "📎 附件: " + (d.path || d.Path || "file") + " (" + (d.mime_type || d.MIMEType || "unknown") + ")";
         break;
       default:
         // shell_command / 未知类型：内部结构随数据变化，仅重建该 part 元素（无 details，不影响点击）
@@ -381,7 +381,7 @@ function buildPartElement(part, partIdx, role, msgKey) {
     case "binary":
       var binDiv = document.createElement("div");
       binDiv.style.cssText = "font-size:12px;color:var(--c-text-3);padding:4px 0;";
-      binDiv.textContent = "📎 附件: " + (partData.path || "file") + " (" + (partData.mime_type || "unknown") + ")";
+      binDiv.textContent = "📎 附件: " + (partData.path || partData.Path || "file") + " (" + (partData.mime_type || partData.MIMEType || "unknown") + ")";
       return binDiv;
 
     default:
