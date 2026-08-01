@@ -30,4 +30,6 @@ src-tauri/binaries/
 admAgent
 .catpaw
 .mimocode
+.workbuddy
 tmp
+.vscode
