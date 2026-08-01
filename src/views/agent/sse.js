@@ -92,6 +92,14 @@ function handleSSEEvent(payload) {
       if (S.isSending && S.activeRun && (!actualData.session_id || actualData.session_id === S.activeRun.sessionId)) {
         startSendSafetyTimer();
       }
+      // 排队结束信号：排队中的会话开始产出消息 → 已从「排队中」转入「运行中」，
+      // 清除排队标识并接管 activeRun（前序运行的 run_complete 可能晚到，不能因此误清状态）
+      if (S.queuedRun && actualData.session_id && actualData.session_id === S.queuedRun.sessionId) {
+        console.log("[agent] 排队会话开始产出，接管运行:", actualData.session_id);
+        S.activeRun = S.queuedRun;
+        S.queuedRun = null;
+        renderConversationList();
+      }
       // 未打开任何会话时，后台会话（如微信 Bot）来消息 → 自动打开该会话实时跟踪
       if (!S.currentConvId && actualData.session_id) {
         selectConversation(actualData.session_id);
@@ -117,10 +125,21 @@ function handleSSEEvent(payload) {
         console.log("[agent] 忽略非当前运行的 run_complete:", actualData.run_id || actualData.session_id);
         break;
       }
-      S.isSending = false;
-      S.activeRun = null;
+      var tookOverQueued = false;
+      if (S.queuedRun) {
+        // 前序运行完成，排队运行接管：activeRun 切到排队运行，保持运行态连续
+        console.log("[agent] 前序运行完成，排队运行接管:", S.queuedRun.sessionId);
+        S.activeRun = S.queuedRun;
+        S.queuedRun = null;
+        tookOverQueued = true;
+        // 接管后运行即将开始（服务端队列 FIFO），重启安全计时器保护新运行
+        startSendSafetyTimer();
+      } else {
+        S.isSending = false;
+        S.activeRun = null;
+        clearSendSafetyTimer();
+      }
       updateSendButton();
-      clearSendSafetyTimer();
       console.log("[agent] run_complete 收尾发送态: run_id=" + (actualData.run_id || "") + " session=" + (actualData.session_id || "") + " error=" + getErrorMessage(actualData.error) + " cancelled=" + !!actualData.cancelled);
       // 本轮运行出错/被取消时明确提示（error 非空表示运行出错），
       // 否则服务端中断本轮时 UI 静默停止，表现为"会话突然中断"却无任何说明
@@ -141,12 +160,15 @@ function handleSSEEvent(payload) {
           // 正常收尾：先做假完成检测（无 error 静默结束时的兜底提示），
           // 再检查 todos 未完成时自动续跑（内部自带开关/进度守卫/轮数熔断）
           detectFakeCompletion();
-          maybeAutoContinue(actualData, S.runStats);
+          // 排队接管时不续跑已结束的前序会话（用户已转向其它会话，且其 prompt 正排队）
+          if (!tookOverQueued) maybeAutoContinue(actualData, S.runStats);
         }
-        updateStatusBar("ready", null, S.contextUsage.used);
+        // 排队接管时仍有运行在队列中，状态栏保持运行中，不切回就绪
+        if (!tookOverQueued) updateStatusBar("ready", null, S.contextUsage.used);
       }
-      // 本轮运行统计生命周期结束，清理避免跨轮残留
-      S.runStats = null;
+      // 本轮运行统计生命周期结束，清理避免跨轮残留；
+      // 排队接管时该统计属于排队中的会话（发送时已初始化），保留给其实际执行轮使用
+      if (!tookOverQueued) S.runStats = null;
       // 若切换模型时会话繁忙导致 /agent/update 未生效，本轮结束后立即重试重载
       if (S.pendingModelReload) {
         S.pendingModelReload = false;
@@ -243,6 +265,9 @@ var ACTION_VERB_RE = /部署|发布|修复|重构|改造|优化|统一|整理|�
 function collectRunStats(msgData) {
   var rs = S.runStats;
   if (!rs || !msgData || !Array.isArray(msgData.parts)) return;
+  // 只统计与本次运行同一会话的消息：排队期间 activeRun 可能是其它会话，
+  // 其消息（session SSE 广播）不得计入本会话运行的统计，避免污染进度判定
+  if (msgData.session_id && rs.sessionId && msgData.session_id !== rs.sessionId) return;
   var msgId = msgData.id || "";
   if (!msgId) return;
   var seenParts = rs.seenMsgIds[msgId] || 0;

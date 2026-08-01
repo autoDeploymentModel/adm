@@ -40,11 +40,20 @@ export function startSendSafetyTimer() {
         startSendSafetyTimer();
         return;
       }
+      // 排队场景：activeRun 会话自身不忙（is_busy=false）但工作区其它会话仍在执行，
+      // 本会话的 prompt 正排队等待，不能误判为超时；以工作区级 is_busy 为准续期
+      var agentInfo = await api("GET", "/v1/workspaces/" + activeRun.workspaceId + "/agent");
+      if (S.isSending && S.activeRun === activeRun && agentInfo && agentInfo.is_busy) {
+        console.log("[agent] 安全超时检查：工作区忙碌（本会话 prompt 排队中），续期计时器");
+        startSendSafetyTimer();
+        return;
+      }
     } catch (_) {}
     if (!S.isSending || S.activeRun !== activeRun) return; // 查询期间可能已正常收尾或开始下一轮
     console.warn("[agent] isSending 安全超时 (3min) 且运行会话已不在执行，自动重置");
     S.isSending = false;
     S.activeRun = null;
+    S.queuedRun = null;
     updateSendButton();
     updateStatusBar("ready", null, S.contextUsage.used);
     showError("运行超时，已自动重置状态");
@@ -128,12 +137,25 @@ export function showCopyPasteMenu(e, targetInput) {
 export function updateSendButton() {
   var btn = document.getElementById("agent-send-btn");
   if (!btn) return;
-  if (S.isSending) {
+  // 按钮语义按会话归属：仅当「当前 UI 会话就是正在运行的会话」时显示取消，
+  // 运行在别的会话（用户切走）时按钮恢复为发送，避免误把发送当取消；
+  // 当前会话处于「排队中」（消息已入队等待执行）时显示取消排队
+  var isCurrentRun = S.isSending && S.activeRun && S.activeRun.sessionId === S.currentConvId;
+  var isCurrentQueued = !!(S.queuedRun && S.queuedRun.sessionId === S.currentConvId);
+  if (isCurrentRun) {
     btn.textContent = "⏹ 取消";
     btn.classList.add("cancel");
+    btn.title = "停止当前会话的运行";
+  } else if (isCurrentQueued) {
+    btn.textContent = "⏹ 取消排队";
+    btn.classList.add("cancel");
+    btn.title = "取消当前会话已排队、尚未开始的消息";
   } else {
     btn.textContent = "📤 发送";
     btn.classList.remove("cancel");
+    btn.title = S.isSending
+      ? "当前会话未在运行，消息将发送到当前会话（若工作区忙碌会排队等待）"
+      : "";
     // 「正在思考」指示器只在 renderMessages 内按 isSending 创建/移除；
     // 超时/取消/断线等路径重置 isSending 后不会触发重渲染，需在此同步移除，
     // 否则出现「指示器还在转但按钮已变回发送」的错位状态

@@ -163,6 +163,18 @@ export function syncWorkingIndicator(area) {
           '<span class="working-indicator-dots"><span></span><span></span><span></span>' +
         '</span></span>';
     }
+    // 排队中（本会话消息已入队、尚未开始执行）时文案改为「排队中」，避免误读为正在产出
+    if (S.queuedRun && S.queuedRun.sessionId === S.currentConvId) {
+      var textEl = indicator.querySelector(".working-indicator-text");
+      if (textEl && textEl.firstChild && textEl.firstChild.nodeValue !== "排队中") {
+        textEl.firstChild.nodeValue = "排队中";
+      }
+    } else {
+      var textEl2 = indicator.querySelector(".working-indicator-text");
+      if (textEl2 && textEl2.firstChild && textEl2.firstChild.nodeValue !== "正在工作") {
+        textEl2.firstChild.nodeValue = "正在工作";
+      }
+    }
     if (area.lastElementChild !== indicator) area.appendChild(indicator);
   } else if (indicator) {
     indicator.remove();

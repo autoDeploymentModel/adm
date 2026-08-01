@@ -2,7 +2,7 @@
 import { S, invoke } from "./state.js";
 import { api } from "./api.js";
 import { escapeHtml, formatTime } from "./utils.js";
-import { showError, showConfirm, reportError, exitManualScrollMode, clearErrorNotices, updateContextUsage } from "./ui.js";
+import { showError, showConfirm, showInfo, reportError, exitManualScrollMode, clearErrorNotices, updateContextUsage, updateStatusBar, updateSendButton } from "./ui.js";
 import { renderMessages, renderTodos } from "./render.js";
 import { resetPermissionState } from "./permission.js";
 
@@ -97,10 +97,16 @@ export function renderConversationList() {
     item.className = "conv-item" + (isActive ? " active" : "");
     var msgCount = conv.message_count || conv.messages || 0;
     var lastTime = conv.updated_at || conv.last_time || "";
-    var isBusy = conv.is_busy || conv.busy || false;
+    // 运行/排队标识：以本客户端跟踪的 activeRun / queuedRun 为准（更实时），
+    // 服务端 is_busy 快照兜底（如微信 Bot 等后台会话的运行）
+    var isActiveRun = !!(S.activeRun && S.activeRun.sessionId === conv.id);
+    var isQueuedRun = !!(S.queuedRun && S.queuedRun.sessionId === conv.id);
+    var isBusy = isActiveRun || isQueuedRun || conv.is_busy || conv.busy || false;
 
     var starHtml = isActive ? '<span class="conv-item-star">★</span>' : '';
-    var busyHtml = isBusy ? '<span class="conv-item-busy"></span>' : '';
+    var busyHtml = isBusy
+      ? '<span class="conv-item-busy' + (isQueuedRun ? " queued" : "") + '" title="' + (isQueuedRun ? "排队中" : "运行中") + '"></span>'
+      : '';
 
     item.innerHTML =
       '<div class="conv-item-title">' + starHtml + busyHtml +
@@ -190,6 +196,27 @@ export async function selectConversation(convId) {
   S.currentConvId = convId;
   syncWxFollowSession();
   renderConversationList();
+  // 切换后同步按钮语义（运行中→取消 / 排队中→取消排队 / 其它→发送），
+  // 并提示用户当前工作区的运行状态，避免误把发送当取消
+  updateSendButton();
+  var isRunningElsewhere = S.isSending && S.activeRun && S.activeRun.sessionId !== convId;
+  var isCurrentQueued = !!(S.queuedRun && S.queuedRun.sessionId === convId);
+  if (isCurrentQueued) {
+    var stateElQ = document.getElementById("agent-status-state");
+    if (stateElQ) {
+      stateElQ.innerHTML = '<span class="status-state-dot busy"></span>排队中';
+    }
+    showInfo("当前会话有消息排队中，将在其它会话运行完成后自动执行");
+  } else if (isRunningElsewhere) {
+    var runningConv = S.conversations.find(function(c) { return c.id === S.activeRun.sessionId; });
+    var runningName = runningConv ? (runningConv.title || runningConv.name || "其它会话") : "其它会话";
+    updateStatusBar("busy", null, S.contextUsage.used);
+    var stateEl = document.getElementById("agent-status-state");
+    if (stateEl) {
+      stateEl.innerHTML = '<span class="status-state-dot busy"></span>' + escapeHtml(runningName) + " 运行中";
+    }
+    showInfo("会话「" + runningName + "」正在运行，当前会话可正常发送，消息会排队等待");
+  }
 
   try {
     // 设置当前会话

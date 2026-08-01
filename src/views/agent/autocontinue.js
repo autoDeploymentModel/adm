@@ -95,6 +95,7 @@ async function sendContinuePrompt(sessionId) {
   S.activeRun = { workspaceId: workspaceId, sessionId: sessionId, runId: runId };
   // 续跑轮也是新 run：重置运行统计，供本轮假完成检测与下一轮进度判定使用
   S.runStats = {
+    sessionId: sessionId,
     prompt: "任务清单还有未完成项，请继续完成剩余的 todos；每完成一项立即用 todos 工具标记，全部完成后再结束。",
     toolCalls: 0,
     sideEffectCalls: 0,
@@ -114,6 +115,7 @@ async function sendContinuePrompt(sessionId) {
   } catch (e) {
     S.isSending = false;
     S.activeRun = null;
+    S.queuedRun = null;
     updateSendButton();
     clearSendSafetyTimer();
     updateStatusBar("ready", null, S.contextUsage.used);
