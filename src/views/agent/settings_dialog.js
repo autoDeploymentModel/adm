@@ -2,19 +2,32 @@
 import { S, invoke } from "./state.js";
 import { api } from "./api.js";
 import { parseContextSize, escapeHtml, $input, normalizeReasoningEffort } from "./utils.js";
-import { showError, showConfirm, updateStatusBar } from "./ui.js";
+import { showConfirm, reportError, updateStatusBar } from "./ui.js";
 import { switchToWorkspace, updateWorkspaceSelector } from "./workspace.js";
 import { updateModelDropdown, switchModel, refreshServerProviders } from "./model.js";
 import { isAutoContinueEnabled } from "./autocontinue.js";
+import { refreshProjectMemory } from "./memory.js";
 
 // ===== 设置弹窗 =====
 export function showSettings() {
   updateSettingsUI();
   document.getElementById("agent-settings-overlay").classList.add("show");
+  // 打开弹窗时刷新项目记忆（读取 workspace/project_memory.json，只读展示）
+  refreshProjectMemory();
 }
 
 export function hideSettings() {
   document.getElementById("agent-settings-overlay").classList.remove("show");
+}
+
+// 项目记忆折叠块交互：点击头部展开/收起（默认折叠）
+export function initProjectMemoryUI() {
+  var toggle = document.getElementById("agent-memory-toggle");
+  var collapse = document.getElementById("agent-memory-collapse");
+  if (!toggle || !collapse) return;
+  toggle.addEventListener("click", function() {
+    collapse.classList.toggle("open");
+  });
 }
 
 export function updateSettingsUI() {
@@ -82,7 +95,7 @@ export async function saveSettings() {
         }
       } catch (e) {
         console.warn("[agent] 切换工作区失败:", e);
-        showError("切换工作目录失败: " + e);
+        reportError(e, { prefix: "切换工作目录失败: " });
       }
     } else {
       // 工作目录未变化，只更新 UI
@@ -91,7 +104,7 @@ export async function saveSettings() {
     updateWorkspaceSelector();
     updateStatusBar("ready", workdir, S.contextUsage.used);
   } catch (e) {
-    showError("保存设置失败: " + e);
+    reportError(e, { prefix: "保存设置失败: " });
   }
 }
 
@@ -203,7 +216,7 @@ function renderProviderList() {
           renderProviderList();
           updateModelDropdown();
         } catch (e) {
-          showError("删除失败: " + e);
+          reportError(e, { prefix: "删除失败: " });
         }
       });
     });

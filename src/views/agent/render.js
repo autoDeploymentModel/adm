@@ -97,8 +97,8 @@ export function renderMessages() {
   var existing = {};
   Array.prototype.slice.call(area.children).forEach(function(c) {
     if (c.id === "agent-working-indicator") return;
-    // 错误提示节点保留（否则 run_complete 后的 refreshMessages 会把刚显示的中断原因立即清掉）
-    if (c.classList && c.classList.contains("error")) return;
+    // 错误/警告/信息提示节点保留（否则 run_complete 后的 refreshMessages 会把刚显示的提示立即清掉）
+    if (c.classList && (c.classList.contains("error") || c.classList.contains("warn") || c.classList.contains("info"))) return;
     var mid = c.getAttribute ? c.getAttribute("data-msgid") : null;
     if (mid && keySet[mid] && !existing[mid]) existing[mid] = c;
     else c.remove();

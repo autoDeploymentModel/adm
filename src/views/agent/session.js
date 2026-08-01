@@ -2,7 +2,7 @@
 import { S, invoke } from "./state.js";
 import { api } from "./api.js";
 import { escapeHtml, formatTime } from "./utils.js";
-import { showError, showConfirm, exitManualScrollMode, clearErrorNotices, updateContextUsage } from "./ui.js";
+import { showError, showConfirm, reportError, exitManualScrollMode, clearErrorNotices, updateContextUsage } from "./ui.js";
 import { renderMessages, renderTodos } from "./render.js";
 import { resetPermissionState } from "./permission.js";
 
@@ -36,7 +36,7 @@ export async function loadConversations(restoreCurrent) {
     }
   }
   if (lastErr !== null) {
-    showError("加载会话列表失败: " + lastErr);
+    reportError(lastErr, { prefix: "加载会话列表失败: " });
     renderConversationList();
     return;
   }
@@ -160,7 +160,7 @@ function handleConvAction(action, convId) {
               document.getElementById("agent-conv-title").textContent = newName;
             }
           })
-          .catch(function(e) { showError("重命名失败: " + e); });
+          .catch(function(e) { reportError(e, { prefix: "重命名失败: " }); });
       }
       break;
     case "delete":
@@ -179,7 +179,7 @@ function handleConvAction(action, convId) {
             }
             loadConversations();
           })
-          .catch(function(e) { showError("删除失败: " + e); });
+          .catch(function(e) { reportError(e, { prefix: "删除失败: " }); });
       });
       break;
   }
@@ -223,7 +223,7 @@ export async function selectConversation(convId) {
     /** @type {HTMLButtonElement} */ (document.getElementById("agent-undo-btn")).disabled = false;
   } catch (e) {
     console.error("[agent] 加载会话失败:", convId, e);
-    showError("加载会话失败: " + e);
+    reportError(e, { prefix: "加载会话失败: " });
   }
 }
 
@@ -258,7 +258,7 @@ export async function newConversation() {
     // 启用操作按钮
     /** @type {HTMLButtonElement} */ (document.getElementById("agent-undo-btn")).disabled = false;
   } catch (e) {
-    showError("创建会话失败: " + e);
+    reportError(e, { prefix: "创建会话失败: " });
   }
 }
 

@@ -1313,6 +1313,53 @@ pub async fn agent_http_request(
     bail!("HTTP {} {} {}: {}", status.as_u16(), method.to_uppercase(), path, snippet);
 }
 
+/// 读取 workspace 的跨会话项目记忆（project_memory.json）。
+/// admAgent 每次上下文压缩时会把 durable 的 constraint/decision anchors 同步进
+/// `{workspace data_dir}/project_memory.json`（与 rail3.db 同级）。本命令先从
+/// admAgent 取 workspace 的 data_dir，再读取该文件，仅用于前端只读展示。
+/// 文件不存在或为空返回空数组。
+#[tauri::command]
+pub async fn read_project_memory(
+    state: tauri::State<'_, AppState>,
+    workspace_id: String,
+) -> Result<serde_json::Value, AppError> {
+    let port = {
+        let mut s = state.agent_session.lock().map_err(|e| e.to_string())?;
+        match s.as_mut() {
+            Some(sess) => {
+                let running = sess.child.try_wait().ok().flatten().is_none();
+                if running { sess.port } else { bail!("admAgent server 未运行"); }
+            }
+            None => bail!("admAgent server 未运行"),
+        }
+    };
+
+    // GET /v1/workspaces/{id} → { id, path, data_dir, ... }
+    let url = format!("http://127.0.0.1:{}/v1/workspaces/{}", port, workspace_id);
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+    let resp = client.get(&url).send().await
+        .map_err(|e| format!("HTTP 请求失败: {}", e))?;
+    if !resp.status().is_success() {
+        bail!("HTTP {} 获取 workspace 信息失败", resp.status().as_u16());
+    }
+    let ws: serde_json::Value = resp.json().await
+        .map_err(|e| format!("解析 workspace 响应失败: {}", e))?;
+    let data_dir = ws.get("data_dir").and_then(|v| v.as_str()).unwrap_or("");
+    if data_dir.is_empty() {
+        return Ok(serde_json::json!([]));
+    }
+
+    let path = std::path::Path::new(data_dir).join("project_memory.json");
+    match std::fs::read_to_string(&path) {
+        Ok(content) => {
+            // 文件存在但内容非法/为空时按空处理，绝不让展示层报错
+            Ok(serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!([])))
+        }
+        Err(_) => Ok(serde_json::json!([])),
+    }
+}
+
 #[tauri::command]
 pub async fn agent_subscribe_events(
     app: tauri::AppHandle,
