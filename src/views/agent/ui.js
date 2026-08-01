@@ -2,6 +2,7 @@
 import { S } from "./state.js";
 import { api } from "./api.js";
 import { formatTokens, isMsgAreaAtBottom } from "./utils.js";
+import { getErrorMessage, classifyError, ERROR_QUOTA } from "./error.js";
 
 // 退出手动滚动模式（切换会话/工作区时调用，避免把旧会话的滚动位置带到新会话）
 export function exitManualScrollMode() {
@@ -226,25 +227,64 @@ export function updateStatusBar(state, workdir, tokens) {
   }
 }
 
-export function showError(msg) {
+// ===== 统一错误/提示展示 =====
+// 所有提示（错误/警告/信息）统一走 showNotice 渲染为消息区节点：
+//   error 红 / warn 黄 / info 灰，60 秒后自动消失；render.js 增量渲染时保留 error/warn/info 节点。
+/**
+ * 统一提示入口。
+ * @param {string} msg 提示文本
+ * @param {"error"|"warn"|"info"} [level] 级别，默认 error
+ */
+export function showNotice(msg, level) {
   var area = document.getElementById("agent-msg-area");
-  if (area) {
-    var div = document.createElement("div");
-    div.className = "msg error";
-    div.textContent = msg;
-    area.appendChild(div);
-    if (!S.manualScrollMode) area.scrollTop = area.scrollHeight;
-    updateScrollBottomBtn();
-    // 60 秒后自动消失（增量渲染会保留错误节点，需自行清理避免堆积）
-    setTimeout(function() { if (div.parentNode) div.remove(); }, 60000);
-  }
+  if (!area || !msg) return;
+  var cls = level === "warn" ? "warn" : level === "info" ? "info" : "error";
+  var div = document.createElement("div");
+  div.className = "msg " + cls;
+  div.textContent = msg;
+  area.appendChild(div);
+  if (!S.manualScrollMode) area.scrollTop = area.scrollHeight;
+  updateScrollBottomBtn();
+  // 60 秒后自动消失（增量渲染会保留提示节点，需自行清理避免堆积）
+  setTimeout(function() { if (div.parentNode) div.remove(); }, 60000);
 }
 
-// 清除消息区内的错误提示（切换/新建会话、切换工作区时调用，避免旧会话错误残留）
+// 统一错误展示入口：传入原始错误（字符串 / Error / 结构化对象均可），
+// 内部统一提取文本并分类；quota（余额不足/401）类错误直接显示"余额不足，任务中断"。
+/**
+ * @param {*} err 原始错误
+ * @param {{ prefix?: string, hint?: string, level?: "error"|"warn"|"info" }} [opts] prefix 前缀（如"保存设置失败："），hint 补充提示
+ */
+export function reportError(err, opts) {
+  opts = opts || {};
+  var msg = getErrorMessage(err);
+  if (!msg) return;
+  if (classifyError(err) === ERROR_QUOTA) {
+    showNotice("余额不足，任务中断", "error");
+    return;
+  }
+  showNotice((opts.prefix || "") + msg + (opts.hint || ""), opts.level || "error");
+}
+
+export function showError(msg) {
+  showNotice(msg, "error");
+}
+
+// 非致命提醒（如"本轮已结束但任务可能未完成"）：样式区别于错误，避免用户误判为故障
+export function showWarning(msg) {
+  showNotice(msg, "warn");
+}
+
+// 普通信息提示（如运行完成）
+export function showInfo(msg) {
+  showNotice(msg, "info");
+}
+
+// 清除消息区内的提示（切换/新建会话、切换工作区时调用，避免旧会话提示残留）
 export function clearErrorNotices() {
   var area = document.getElementById("agent-msg-area");
   if (!area) return;
-  area.querySelectorAll(".msg.error").forEach(function(e) { e.remove(); });
+  area.querySelectorAll(".msg.error, .msg.warn, .msg.info").forEach(function(e) { e.remove(); });
 }
 
 // 应用内确认弹窗（Tauri WebView 中原生 confirm() 非阻塞，不可用）

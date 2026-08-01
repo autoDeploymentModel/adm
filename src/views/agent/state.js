@@ -38,6 +38,7 @@ export const listen = window.__adm_listen;
  * @property {{ skill: any[], lsp: any[], mcp: any[] }} toolsData
  * @property {boolean} todosCollapsed
  * @property {{ armedSession: string | null, rounds: number, lastIncomplete: number, noProgress: number }} autoContinue 自动续跑状态：armedSession 为本客户端发起任务的会话，rounds 已续跑轮数，lastIncomplete 上轮剩余 todos 数，noProgress 连续无进展轮数
+ * @property {{ prompt: string, toolCalls: number, sideEffectCalls: number, sideEffectSuccess: number, seenMsgIds: Object<string, number>, startedAt: number } | null} runStats 本轮运行统计（假完成检测 / 续跑进度判定用）：toolCalls 工具调用总数，sideEffectCalls 副作用工具调用数，sideEffectSuccess 副作用工具成功数，seenMsgIds 已统计消息 id → 已统计 parts 数；run_complete 后清空
  * @property {number} initSeq
  */
 
@@ -75,5 +76,6 @@ export const S = {
   toolsData: { skill: [], lsp: [], mcp: [] }, // 各 tab 工具缓存 [{name, status, statusColor, title}]
   todosCollapsed: false,     // Todo 固定面板折叠状态（仅影响展示，不影响数据更新）
   autoContinue: { armedSession: null, rounds: 0, lastIncomplete: -1, noProgress: 0 }, // 自动续跑状态（见 autocontinue.js）
+  runStats: null,            // 本轮运行统计（假完成检测 / 续跑进度判定用，见 sse.js / autocontinue.js）
   initSeq: 0,                // init() 版本号：unmount/重新 mount 时递增，旧的在途 init 检测到过期后立即终止，防止并发 init 互相踩踏
 };

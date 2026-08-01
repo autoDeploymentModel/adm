@@ -4,7 +4,7 @@
 import { S } from "./state.js";
 import { api } from "./api.js";
 import { generateRunId } from "./utils.js";
-import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError } from "./ui.js";
+import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, reportError } from "./ui.js";
 
 // 单个任务（一次手动发送）最多自动续跑轮数（硬熔断）
 var MAX_AUTO_ROUNDS = 10;
@@ -32,8 +32,9 @@ export function resetAutoContinue() {
   S.autoContinue = { armedSession: null, rounds: 0, lastIncomplete: -1, noProgress: 0 };
 }
 
-// run_complete 正常收尾（无 error、未取消）时调用；data 为 run_complete 事件负载
-export async function maybeAutoContinue(data) {
+// run_complete 正常收尾（无 error、未取消）时调用；data 为 run_complete 事件负载，
+// runStats 为本轮运行统计（工具调用/副作用成功数），用于"有实质进展不算无进展"判定
+export async function maybeAutoContinue(data, runStats) {
   var ac = S.autoContinue;
   var sid = data && data.session_id;
   // 只续跑本客户端自己发起的任务；后台会话（如微信 Bot）不受影响
@@ -67,8 +68,10 @@ export async function maybeAutoContinue(data) {
     resetAutoContinue();
     return;
   }
-  // 进度守卫：未完成数没有减少视为无进展
-  if (ac.lastIncomplete >= 0 && incomplete >= ac.lastIncomplete) {
+  // 进度守卫：未完成数没有减少视为无进展；
+  // 但本轮有实质副作用工具成功（edit/write/bash 等改动落地）说明模型在干活，不算无进展
+  var hasRealProgress = !!(runStats && runStats.sideEffectSuccess > 0);
+  if (ac.lastIncomplete >= 0 && incomplete >= ac.lastIncomplete && !hasRealProgress) {
     ac.noProgress++;
     if (ac.noProgress >= MAX_NO_PROGRESS_ROUNDS) {
       showError("自动续跑已停止：连续 " + MAX_NO_PROGRESS_ROUNDS + " 轮无进展（剩余 " + incomplete + " 项未完成）。建议更换模型或调整任务后手动继续");
@@ -90,6 +93,15 @@ async function sendContinuePrompt(sessionId) {
   var runId = generateRunId();
   S.isSending = true;
   S.activeRun = { workspaceId: workspaceId, sessionId: sessionId, runId: runId };
+  // 续跑轮也是新 run：重置运行统计，供本轮假完成检测与下一轮进度判定使用
+  S.runStats = {
+    prompt: "任务清单还有未完成项，请继续完成剩余的 todos；每完成一项立即用 todos 工具标记，全部完成后再结束。",
+    toolCalls: 0,
+    sideEffectCalls: 0,
+    sideEffectSuccess: 0,
+    seenMsgIds: {},
+    startedAt: Date.now(),
+  };
   updateSendButton();
   updateStatusBar("busy", null, S.contextUsage.used);
   try {
@@ -105,7 +117,7 @@ async function sendContinuePrompt(sessionId) {
     updateSendButton();
     clearSendSafetyTimer();
     updateStatusBar("ready", null, S.contextUsage.used);
-    showError("自动续跑发送失败: " + e);
+    reportError(e, { prefix: "自动续跑发送失败: " });
     resetAutoContinue();
   }
 }

@@ -482,6 +482,20 @@ export const template = `
     font-size: 13px;
   }
 
+  .msg.warn {
+    background: #3d2e1a;
+    color: #f0ad4e;
+    align-self: center;
+    font-size: 13px;
+  }
+
+  .msg.info {
+    background: #1a2d3d;
+    color: #6bb6ff;
+    align-self: center;
+    font-size: 13px;
+  }
+
   .msg-meta {
     font-size: 11px;
     color: var(--c-text-4);
@@ -909,6 +923,62 @@ export const template = `
   .settings-btn-secondary { background: var(--c-overlay); color: var(--c-text); }
   .settings-btn-secondary:hover { background: var(--c-overlay-strong); }
 
+  /* 项目记忆（跨会话持久记忆，只读展示） */
+  .memory-collapse {
+    border: 1px solid var(--c-border);
+    border-radius: 8px;
+    background: var(--c-bg-deep);
+    margin-top: 8px;
+  }
+  .memory-collapse-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+    user-select: none;
+    color: var(--c-text-2);
+    font-size: 13px;
+  }
+  .memory-collapse-header:hover { background: var(--c-raise); }
+  .memory-collapse-arrow {
+    transition: transform 0.15s ease;
+    font-size: 10px;
+    color: var(--c-text-4);
+  }
+  .memory-collapse.open .memory-collapse-arrow { transform: rotate(90deg); }
+  .memory-count { color: var(--c-text-4); font-size: 12px; }
+  .memory-collapse-body {
+    display: none;
+    padding: 4px 12px 10px;
+    max-height: 260px;
+    overflow-y: auto;
+  }
+  .memory-collapse.open .memory-collapse-body { display: block; }
+  .memory-empty { color: var(--c-text-4); font-size: 12px; padding: 6px 0; }
+  .memory-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 5px 0;
+    font-size: 12px;
+    line-height: 1.5;
+    border-bottom: 1px dashed var(--c-border);
+    color: var(--c-text-2);
+  }
+  .memory-item:last-child { border-bottom: none; }
+  .memory-tag {
+    flex-shrink: 0;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    margin-top: 1px;
+    color: #fff;
+  }
+  .memory-tag.constraint { background: #e67e22; }
+  .memory-tag.decision { background: #3498db; }
+  .memory-why { color: var(--c-text-4); }
+
   /* 云端模型管理 */
   .provider-list {
     margin-top: 8px;
@@ -1310,6 +1380,20 @@ export const template = `
           <div class="param-input">
             <input type="number" class="settings-input" id="settings-temperature" placeholder="留空使用默认" step="0.1" min="0" max="2">
           </div>
+        </div>
+      </div>
+
+      <!-- 项目记忆（跨会话持久记忆，只读展示） -->
+      <div class="param-group">
+        <div class="param-group-title">项目记忆</div>
+        <div class="param-desc" style="margin-bottom:6px;">Agent 跨会话自动沉淀的持久约束与决策（保存在 workspace 的 project_memory.json，随上下文压缩自动更新，仅展示不可修改）</div>
+        <div class="memory-collapse" id="agent-memory-collapse">
+          <div class="memory-collapse-header" id="agent-memory-toggle">
+            <span class="memory-collapse-arrow">▶</span>
+            <span>查看项目记忆</span>
+            <span class="memory-count" id="agent-memory-count"></span>
+          </div>
+          <div class="memory-collapse-body" id="agent-memory-body"></div>
         </div>
       </div>
 

@@ -2,7 +2,8 @@
 import { S, invoke } from "./state.js";
 import { api } from "./api.js";
 import { autoResize, generateRunId } from "./utils.js";
-import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, updateContextUsage } from "./ui.js";
+import { getErrorMessage } from "./error.js";
+import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, reportError, updateContextUsage } from "./ui.js";
 import { renderMessages } from "./render.js";
 import { newConversation } from "./session.js";
 import { refreshAgentInfo, reloadAgentConfig } from "./model.js";
@@ -27,7 +28,7 @@ export async function sendMessage() {
       try {
         await api("POST", "/v1/workspaces/" + activeRun.workspaceId + "/agent/sessions/" + activeRun.sessionId + "/cancel");
       } catch (e) {
-        showError("取消失败: " + e);
+        reportError(e, { prefix: "取消失败: " });
         return;
       }
     }
@@ -155,6 +156,15 @@ export async function sendMessage() {
       await api("POST", "/v1/workspaces/" + workspaceId + "/agent", body);
     }
     console.log("[agent] 消息已发送, runId:", runId);
+    // 初始化本轮运行统计：供假完成检测（A）与自动续跑进度判定（C）使用
+    S.runStats = {
+      prompt: text || "（用户发来附件，请查看并处理）",
+      toolCalls: 0,
+      sideEffectCalls: 0,
+      sideEffectSuccess: 0,
+      seenMsgIds: {},
+      startedAt: Date.now(),
+    };
     // 手动发送成功 → 武装自动续跑（重置轮数/进度计数，绑定本会话）
     armAutoContinue(sessionId);
     startSendSafetyTimer();
@@ -165,7 +175,7 @@ export async function sendMessage() {
     updateSendButton();
     clearSendSafetyTimer();
     updateStatusBar("ready", null, S.contextUsage.used);
-    S.messages.push({ role: "error", content: "发送失败: " + e, type: "error" });
+    S.messages.push({ role: "error", content: "发送失败: " + getErrorMessage(e), type: "error" });
     renderMessages();
   }
 }

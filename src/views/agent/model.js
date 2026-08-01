@@ -2,7 +2,7 @@
 import { S, invoke } from "./state.js";
 import { api } from "./api.js";
 import { escapeHtml, formatTokens, slugifyModelId, normalizeReasoningEffort } from "./utils.js";
-import { showError, updateContextUsage } from "./ui.js";
+import { reportError, updateContextUsage } from "./ui.js";
 
 // 重载服务端 Agent 配置。/agent/update 报 "agent configuration is missing" 说明 coordinator
 // 已被一次失败的 /agent/init 置空（如曾切到服务端未加载的 provider），此时改调
@@ -42,7 +42,7 @@ export async function switchModel(providerKey, displayName, ctxLen) {
     s.agent_temperature = S.settings.agent_temperature || null;
     await invoke("save_settings", { settings: s });
   } catch (e) {
-    showError("保存设置失败: " + e);
+    reportError(e, { prefix: "保存设置失败: " });
   }
 
   // 通知服务端 Agent 切换模型并重新加载配置（关键！）
@@ -72,7 +72,7 @@ export async function switchModel(providerKey, displayName, ctxLen) {
         console.warn("[agent] /agent/update 失败，挂起待重试:", updErr);
       }
     } catch (e) {
-      showError("通知 Agent 切换模型失败: " + e);
+      reportError(e, { prefix: "通知 Agent 切换模型失败: " });
     }
   }
 }

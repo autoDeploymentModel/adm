@@ -3,7 +3,7 @@
 // Plan 模式 = 服务端只挂载只读工具（/agent/mode plan=true），模型无法修改和写入。
 import { S } from "./state.js";
 import { api } from "./api.js";
-import { showError } from "./ui.js";
+import { reportError } from "./ui.js";
 
 // 切换/新建会话、切换工作区时的清理钩子。
 // 弹窗与排队逻辑已删除，保留空实现以兼容各调用点（session/sse/workspace）。
@@ -28,7 +28,7 @@ export async function syncModeToServer() {
     });
   } catch (e) {
     console.warn("[agent] 同步 Plan 模式到服务端失败:", e);
-    showError("同步 Plan 模式失败（旧版 admAgent 不支持，请更新）: " + e);
+    reportError(e, { prefix: "同步 Plan 模式失败（旧版 admAgent 不支持，请更新）: " });
   }
 }
 

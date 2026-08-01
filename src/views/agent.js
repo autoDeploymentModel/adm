@@ -5,7 +5,7 @@ import { template } from "./agent/template.js";
 import { S, invoke, listen } from "./agent/state.js";
 import { api } from "./agent/api.js";
 import { generateUUID, isMsgAreaAtBottom, autoResize, $input, normalizeReasoningEffort } from "./agent/utils.js";
-import { updateStatusBar, updateContextUsage, updateModeToggle, updateSendButton, exitManualScrollMode, startSendSafetyTimer, clearSendSafetyTimer, showError, showConfirm, showCopyPasteMenu, updateScrollBottomBtn } from "./agent/ui.js";
+import { updateStatusBar, updateContextUsage, updateModeToggle, updateSendButton, exitManualScrollMode, startSendSafetyTimer, clearSendSafetyTimer, showError, showConfirm, showCopyPasteMenu, updateScrollBottomBtn, reportError } from "./agent/ui.js";
 import { loadConversations, renderConversationList, selectConversation, newConversation } from "./agent/session.js";
 import { syncWorkingIndicator } from "./agent/render.js";
 import { sendMessage } from "./agent/send.js";
@@ -14,7 +14,7 @@ import { syncModeToServer } from "./agent/permission.js";
 import { loadTools, renderToolsList } from "./agent/tools.js";
 import { switchModel, refreshServerProviders, resolveAgentModel, updateModelDropdown, updateModelBtn } from "./agent/model.js";
 import { enableAutoCompact, updateWorkspaceSelector } from "./agent/workspace.js";
-import { showSettings, hideSettings, updateSettingsUI, saveSettings, showAddModelDialog, hideAddModelDialog, addModel } from "./agent/settings_dialog.js";
+import { showSettings, hideSettings, updateSettingsUI, saveSettings, showAddModelDialog, hideAddModelDialog, addModel, initProjectMemoryUI } from "./agent/settings_dialog.js";
 import { addPendingFiles, parseUriListPaths, addPastedPaths, looksLikeFilePath } from "./agent/attach.js";
 import { setAutoContinueEnabled } from "./agent/autocontinue.js";
 
@@ -44,7 +44,7 @@ async function init() {
       return;
     }
   } catch (e) {
-    showError("检查 admAgent 失败: " + e);
+    reportError(e, { prefix: "检查 admAgent 失败: " });
     updateStatusBar("error", null, 0);
     return;
   }
@@ -61,13 +61,13 @@ async function init() {
       console.log("[agent] Agent 服务已启动, port:", S.serverInfo?.port);
       } catch (e) {
         console.error("[agent] 启动 Agent 服务失败:", e);
-        showError("启动 Agent 服务失败: " + e);
+        reportError(e, { prefix: "启动 Agent 服务失败: " });
         updateStatusBar("error", null, 0);
         return;
       }
     }
   } catch (e) {
-    showError("检查 Agent 服务状态失败: " + e);
+    reportError(e, { prefix: "检查 Agent 服务状态失败: " });
     updateStatusBar("error", null, 0);
     return;
   }
@@ -276,7 +276,7 @@ async function handleServerDied() {
     await init();
   } catch (e) {
     console.error("[agent] admAgent 自动重启失败:", e);
-    showError("admAgent 自动重启失败: " + e);
+    reportError(e, { prefix: "admAgent 自动重启失败: " });
   } finally {
     serverRestarting = false;
   }
@@ -312,7 +312,7 @@ function bindEvents() {
         await invoke("set_ilink_follow", { enabled: turningOn });
       } catch (e) {
         wxBtn.classList.toggle("on", !turningOn); // 失败回滚显示
-        showError("切换微信消息开关失败: " + e);
+        reportError(e, { prefix: "切换微信消息开关失败: " });
       }
     });
   })();
@@ -330,6 +330,8 @@ function bindEvents() {
   // 设置按钮 (在侧栏底部)
   document.getElementById("agent-settings-btn").addEventListener("click", showSettings);
   document.getElementById("agent-settings-close").addEventListener("click", hideSettings);
+  // 项目记忆折叠块交互（默认折叠）
+  initProjectMemoryUI();
 
   // 设置项即时生效：任一字段变更立即应用并持久化（无保存/取消按钮）
   ["settings-plan", "settings-auto-continue", "settings-debug-logging", "settings-reasoning-effort", "settings-temperature"].forEach(function(id) {
@@ -353,7 +355,7 @@ function bindEvents() {
     try {
       await invoke("open_debug_log_dir");
     } catch (e) {
-      showError("打开日志目录失败: " + e);
+      reportError(e, { prefix: "打开日志目录失败: " });
     }
   });
 
@@ -380,7 +382,7 @@ function bindEvents() {
       console.warn("[agent] 切换调试日志失败:", e);
       S.settings.debug_logging = false;
       $input("settings-debug-logging").checked = false;
-      showError("开启调试日志失败: " + e);
+      reportError(e, { prefix: "开启调试日志失败: " });
     }
     await saveSettings();
     await syncModeToServer();
@@ -543,7 +545,7 @@ function bindEvents() {
     showConfirm("确定撤销上一轮对话？此操作会回退上一轮产生的消息与文件修改。", function() {
       api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent/sessions/" + S.currentConvId + "/undo")
         .then(function() { selectConversation(S.currentConvId); })
-        .catch(function(e) { showError("撤销失败: " + e); });
+        .catch(function(e) { reportError(e, { prefix: "撤销失败: " }); });
     });
   });
 
@@ -681,7 +683,7 @@ export default {
     // init 是 fire-and-forget，必须兜底 catch，否则任何未捕获异常都是静默死亡（表现为页面空白无报错）
     init().catch(function(e) {
       console.error("[agent] init() 未捕获异常:", e);
-      showError("Agent 页面初始化失败: " + e);
+      reportError(e, { prefix: "Agent 页面初始化失败: " });
     });
   },
   unmount() {

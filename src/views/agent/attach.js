@@ -1,6 +1,7 @@
 // 附件处理：选择 / 压缩 / 预览
 import { S, invoke } from "./state.js";
 import { showError } from "./ui.js";
+import { getErrorMessage } from "./error.js";
 
 // ===== 附件处理 =====
 var ATTACH_MAX_SIZE = 1 * 1024 * 1024;  // 超过此大小的图片进行压缩 (1MB)
@@ -240,7 +241,7 @@ export async function addPastedPaths(paths) {
     try {
       res = await invoke("read_attachment_file", { path: path });
     } catch (e) {
-      showError("读取文件失败: " + path + " (" + e + ")");
+      showError("读取文件失败: " + path + " (" + getErrorMessage(e) + ")");
       continue;
     }
     if (!res || !res.base64) {
