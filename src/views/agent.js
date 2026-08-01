@@ -15,7 +15,7 @@ import { loadTools, renderToolsList } from "./agent/tools.js";
 import { switchModel, refreshServerProviders, resolveAgentModel, updateModelDropdown, updateModelBtn } from "./agent/model.js";
 import { enableAutoCompact, updateWorkspaceSelector } from "./agent/workspace.js";
 import { showSettings, hideSettings, updateSettingsUI, saveSettings, showAddModelDialog, hideAddModelDialog, addModel } from "./agent/settings_dialog.js";
-import { addPendingFiles } from "./agent/attach.js";
+import { addPendingFiles, parseUriListPaths, addPastedPaths, looksLikeFilePath } from "./agent/attach.js";
 import { setAutoContinueEnabled } from "./agent/autocontinue.js";
 
 // ===== 初始化 =====
@@ -464,11 +464,12 @@ function bindEvents() {
     });
   }
 
-  // Ctrl+V 粘贴图片
+  // Ctrl+V 粘贴：图片直读剪贴板 blob；文本等文件（剪贴板只带 file:// 路径）走 Tauri 读取
   var inputEl = document.getElementById("agent-input");
   inputEl.addEventListener("paste", function(e) {
-    var clipItems = e.clipboardData && e.clipboardData.items;
-    if (!clipItems) return;
+    var cd = e.clipboardData;
+    if (!cd) return;
+    var clipItems = cd.items;
     var imageFiles = [];
     for (var i = 0; i < clipItems.length; i++) {
       if (clipItems[i].type.indexOf("image/") === 0) {
@@ -479,7 +480,50 @@ function bindEvents() {
     if (imageFiles.length > 0) {
       e.preventDefault();
       addPendingFiles(imageFiles);
+      return;
     }
+    // 无图片：尝试读取文件路径（复制文件时剪贴板提供 text/uri-list 或 text/plain 路径）
+    var uriList = cd.getData("text/uri-list");
+    var paths = parseUriListPaths(uriList);
+    if (paths.length === 0) {
+      // 兜底1：text/plain 里可能是文件路径（Windows 资源管理器复制文件常见）
+      var plain = (cd.getData("text/plain") || "").trim();
+      paths = parseUriListPaths(plain);
+      if (paths.length === 0 && plain && looksLikeFilePath(plain)) {
+        paths = [plain];
+      }
+    }
+    if (paths.length === 0 && cd.files && cd.files.length > 0) {
+      // 兜底2：File 对象（WebView2 可能暴露 .path）
+      for (var fi = 0; fi < cd.files.length; fi++) {
+        var pf = cd.files[fi];
+        if (pf && typeof pf["path"] === "string" && pf["path"]) paths.push(pf["path"]);
+      }
+    }
+    if (paths.length > 0) {
+      e.preventDefault();
+      addPastedPaths(paths);
+      return;
+    }
+    // 兜底3：WebView2 不暴露文件路径给 DataTransfer，Rust 侧直读剪贴板 CF_HDROP。
+    // DataTransfer 出现非图片 file 项即说明剪贴板是"复制文件"：同步拦截默认粘贴，
+    // 避免路径文本被插入输入框；随后异步读取 CF_HDROP 路径列表。
+    // CF_HDROP 只在"复制文件"时存在，正常复制文本时不会走到这里，无副作用。
+    try {
+      var hasFileItem = false;
+      for (var fi2 = 0; fi2 < clipItems.length; fi2++) {
+        if (clipItems[fi2].kind === "file" && clipItems[fi2].type.indexOf("image/") !== 0) {
+          hasFileItem = true;
+          break;
+        }
+      }
+      if (hasFileItem) {
+        e.preventDefault();
+        invoke("read_clipboard_files").then(function(files) {
+          if (files && files.length > 0) addPastedPaths(files);
+        }).catch(function() {});
+      }
+    } catch (_) {}
   });
 
   // 标题栏操作按钮

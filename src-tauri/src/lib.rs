@@ -68,7 +68,7 @@ fn cleanup_processes(app: &tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // 单实例：第二个实例启动时，让第一个实例显示窗口
             show_main_window(app);
@@ -210,6 +210,8 @@ pub fn run() {
             agent::export_agent_logs,
             agent::set_debug_logging,
             agent::open_debug_log_dir,
+            agent::read_attachment_file,
+            agent::read_clipboard_files,
             // ilink.rs - 微信 Bot 桥接
             ilink::start_ilink_login,
             ilink::cancel_ilink_login,
@@ -223,6 +225,15 @@ pub fn run() {
             // lib.rs (index.rs)
             index::minimize_to_tray,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    // macOS：Cmd+Q / Dock 菜单退出走 RunEvent::ExitRequested（不是 CloseRequested），
+    // 只有在这里才能统一拦截清理子进程，否则 llama-server / admAgent 残留为孤儿
+    // （端口被占用、下次启动模型报"端口占用"）。cleanup_processes 幂等，重复调用安全。
+    app.run(|app_handle, event| {
+        if let tauri::RunEvent::ExitRequested { .. } = event {
+            cleanup_processes(app_handle);
+        }
+    });
 }
