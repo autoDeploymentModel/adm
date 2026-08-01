@@ -1381,18 +1381,33 @@ pub fn kill_agent_session(state: &AppState) {
 
 // ===== 日志管理 =====
 
-/// 获取 admAgent 日志文件路径（agent_dir/.admAgent/logs/admAgent.log）
-/// agent_dir 是 admAgent.exe 所在的目录，admAgent 使用该目录作为数据目录
-fn get_adm_agent_log_path(agent_dir: &std::path::Path) -> PathBuf {
-    agent_dir.join(".admAgent").join("logs").join("admAgent.log")
+/// 获取 admAgent 日志文件路径（<数据目录>/.admAgent/logs/admAgent.log）。
+/// admAgent 的 DataDirectory 默认 ".admAgent" 按进程 cwd 解析，故日志落在进程 cwd 下：
+/// - macOS：start_agent_server 把进程 cwd 设为 app_data_dir（避免写入只读的 App bundle）
+/// - 其它平台：进程 cwd = admAgent 二进制所在目录
+fn get_adm_agent_log_path(app: &tauri::AppHandle) -> Result<PathBuf, AppError> {
+    #[cfg(target_os = "macos")]
+    {
+        return Ok(config::get_data_dir(Some(app))?
+            .join(".admAgent")
+            .join("logs")
+            .join("admAgent.log"));
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let agent_path = adm_agent_path(app)?;
+        let agent_dir = agent_path.parent().unwrap_or(std::path::Path::new("."));
+        Ok(agent_dir
+            .join(".admAgent")
+            .join("logs")
+            .join("admAgent.log"))
+    }
 }
 
 /// 读取 admAgent 日志文件内容（返回最后 N 行，默认 2000 行）
 #[tauri::command]
 pub async fn get_adm_agent_logs(app: tauri::AppHandle, tail: Option<usize>) -> Result<String, AppError> {
-    let agent_path = adm_agent_path(&app)?;
-    let agent_dir = agent_path.parent().unwrap_or(std::path::Path::new("."));
-    let log_path = get_adm_agent_log_path(agent_dir);
+    let log_path = get_adm_agent_log_path(&app)?;
     if !log_path.exists() {
         return Ok("（admAgent 日志文件不存在: {}）".to_string().replace("{}", &log_path.display().to_string()));
     }
@@ -1416,9 +1431,7 @@ pub async fn get_adm_agent_logs(app: tauri::AppHandle, tail: Option<usize>) -> R
 pub async fn export_agent_logs(app: tauri::AppHandle) -> Result<(), AppError> {
     use tauri_plugin_dialog::DialogExt;
 
-    let agent_path = adm_agent_path(&app)?;
-    let agent_dir = agent_path.parent().unwrap_or(std::path::Path::new("."));
-    let log_path = get_adm_agent_log_path(agent_dir);
+    let log_path = get_adm_agent_log_path(&app)?;
     if !log_path.exists() {
         bail!("admAgent 日志文件不存在: {}", log_path.display());
     }
@@ -1527,5 +1540,93 @@ pub async fn open_debug_log_dir(app: tauri::AppHandle) -> Result<(), AppError> {
             .map_err(|e| format!("打开目录失败: {}", e))?;
     }
     Ok(())
+}
+
+/// 读取粘贴/拖入的文件内容，供前端作为附件发送（图片走浏览器剪贴板直读，
+/// 文本等文件剪贴板只带路径，需在此读取真实内容）。
+/// 返回文件名与 base64 编码内容；MIME 由前端按扩展名推断（与选择器逻辑一致）。
+#[tauri::command]
+pub async fn read_attachment_file(path: String) -> Result<serde_json::Value, AppError> {
+    use base64::Engine;
+    let p = PathBuf::from(&path);
+    let meta = std::fs::metadata(&p).map_err(|e| format!("读取文件失败: {}", e))?;
+    if !meta.is_file() {
+        bail!("不是文件: {}", p.display());
+    }
+    const MAX_ATTACH_SIZE: u64 = 20 * 1024 * 1024;
+    if meta.len() > MAX_ATTACH_SIZE {
+        bail!("文件过大: {} (最大 20MB)", p.display());
+    }
+    let data = std::fs::read(&p).map_err(|e| format!("读取文件失败: {}", e))?;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+    let name = p
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.clone());
+    Ok(serde_json::json!({ "name": name, "base64": b64 }))
+}
+
+/// 读取系统剪贴板中的文件路径列表（Windows 资源管理器复制文件时为 CF_HDROP 格式）。
+/// 返回空数组表示剪贴板无文件（复制的是文本/图片等）。WebView2 不把文件路径
+/// 暴露给网页 DataTransfer，故在 Rust 侧直读剪贴板。
+#[cfg(target_os = "windows")]
+#[tauri::command]
+pub async fn read_clipboard_files() -> Result<Vec<String>, String> {
+    use windows::Win32::Foundation::HGLOBAL;
+    use windows::Win32::System::DataExchange::{
+        CloseClipboard, EnumClipboardFormats, GetClipboardData, OpenClipboard,
+    };
+    use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
+    use windows::Win32::System::Ole::CF_HDROP;
+    use windows::Win32::UI::Shell::{DragQueryFileW, HDROP};
+
+    let mut paths: Vec<String> = Vec::new();
+    unsafe {
+        if OpenClipboard(None).is_err() {
+            return Ok(paths);
+        }
+        // 枚举剪贴板格式，定位 CF_HDROP（文件列表）
+        let mut fmt: u32 = 0;
+        loop {
+            let next = EnumClipboardFormats(fmt);
+            if next == 0 {
+                break;
+            }
+            fmt = next;
+            if fmt == CF_HDROP.0 as u32 {
+                if let Ok(handle) = GetClipboardData(CF_HDROP.0 as u32) {
+                    if !handle.0.is_null() {
+                        let ptr = GlobalLock(HGLOBAL(handle.0));
+                        if !ptr.is_null() {
+                            let hdrop = HDROP(ptr);
+                            let count = DragQueryFileW(hdrop, u32::MAX, None);
+                            for i in 0..count {
+                                let len = DragQueryFileW(hdrop, i, None);
+                                if len == 0 {
+                                    continue;
+                                }
+                                let mut buf = vec![0u16; (len + 1) as usize];
+                                DragQueryFileW(hdrop, i, Some(&mut buf));
+                                let s = String::from_utf16_lossy(&buf[..len as usize]);
+                                if !s.is_empty() {
+                                    paths.push(s);
+                                }
+                            }
+                            let _ = GlobalUnlock(HGLOBAL(handle.0));
+                        }
+                    }
+                }
+                break;
+            }
+        }
+        let _ = CloseClipboard();
+    }
+    Ok(paths)
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+pub async fn read_clipboard_files() -> Result<Vec<String>, String> {
+    Ok(Vec::new())
 }
 
