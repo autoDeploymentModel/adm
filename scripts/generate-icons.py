@@ -1,5 +1,6 @@
 """从 source.png 生成全套应用图标"""
 import io
+import os
 import struct
 from PIL import Image
 from PIL.Image import Resampling
@@ -21,7 +22,7 @@ png_sizes = {
 }
 for name, (w, h) in png_sizes.items():
     resized = img.resize((w, h), LANCZOS)
-    path = f"{OUT}/{name}"
+    path = os.path.join(OUT, name)
     resized.save(path, "PNG")
     print(f"  [OK] {path}  ({w}x{h})")
 
@@ -80,7 +81,7 @@ for i, (s, im) in enumerate(zip(ico_sizes, images_ico)):
     total_offset += entry_size
 
 ico_bytes = struct.pack("<HHH", 0, 1, len(ico_sizes)) + ico_dir + ico_data
-with open(f"{OUT}/icon.ico", "wb") as f:
+with open(os.path.join(OUT, "icon.ico"), "wb") as f:
     f.write(ico_bytes)
 ico_count = len(ico_sizes)
 print(f"  [OK] {OUT}/icon.ico  ({ico_count} images: {', '.join(str(s) for s in ico_sizes)})")
@@ -104,7 +105,7 @@ for icon_type, (w, h) in icns_types.items():
     icns_entries += icon_type + struct.pack(">I", entry_size) + png_data
 
 icns_data = b"icns" + struct.pack(">I", 8 + len(icns_entries)) + icns_entries
-with open(f"{OUT}/icon.icns", "wb") as f:
+with open(os.path.join(OUT, "icon.icns"), "wb") as f:
     f.write(icns_data)
 print(f"  [OK] {OUT}/icon.icns  (3 images: ic07/128, ic08/256, ic09/512)")
 
