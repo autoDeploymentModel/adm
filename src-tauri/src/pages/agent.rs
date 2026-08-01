@@ -1566,6 +1566,50 @@ pub async fn read_attachment_file(path: String) -> Result<serde_json::Value, App
     Ok(serde_json::json!({ "name": name, "base64": b64 }))
 }
 
+/// 把前端传入的 base64 附件内容写入临时目录，返回磁盘绝对路径。
+/// 用于"超长文本附件走路径模式"：内容不再内联进 prompt（避免触发
+/// 70% 上下文守卫的死循环），而是落盘后让 Agent 用 view 工具分段读取。
+/// 浏览器选择/拖拽的 File 对象没有磁盘路径，需在此落盘；粘贴路径场景
+/// 前端直接持有真实路径，无需调用本命令。
+#[tauri::command]
+pub async fn save_attachment_file(
+    file_name: String,
+    base64_content: String,
+) -> Result<String, AppError> {
+    use base64::Engine;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(&base64_content)
+        .map_err(|e| format!("附件 base64 解码失败: {}", e))?;
+    // 安全化文件名：仅保留字母数字、点、下划线、连字符，防路径穿越
+    let safe_name: String = file_name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '.' || c == '_' || c == '-' || c == ' ' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim()
+        .to_string();
+    let safe_name = if safe_name.is_empty() {
+        "attachment".to_string()
+    } else {
+        safe_name
+    };
+    let dir = std::env::temp_dir().join("adm_attachments");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建附件临时目录失败: {}", e))?;
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let path = dir.join(format!("{}_{}", ts, safe_name));
+    std::fs::write(&path, &data).map_err(|e| format!("写入附件临时文件失败: {}", e))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
 /// 读取系统剪贴板中的文件路径列表（Windows 资源管理器复制文件时为 CF_HDROP 格式）。
 /// 返回空数组表示剪贴板无文件（复制的是文本/图片等）。WebView2 不把文件路径
 /// 暴露给网页 DataTransfer，故在 Rust 侧直读剪贴板。

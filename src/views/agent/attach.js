@@ -80,12 +80,15 @@ export function addPendingFiles(fileList) {
       reader.onload = function(e) {
         var dataUrl = String(e.target.result); // readAsDataURL 结果必为 data: URL 字符串
         var base64 = dataUrl.split(",")[1] || "";
+        // WebView2 可能给 File 注入 .path；有真实路径时超长文本可走"路径模式"
+        var realPath = (typeof file["path"] === "string" && file["path"]) ? file["path"] : null;
         S.pendingFiles.push({
           name: file.name,
           type: mime,
           size: file.size,
           base64: base64,
           dataUrl: dataUrl,
+          path: realPath,
         });
         renderAttachPreview();
       };
@@ -251,9 +254,10 @@ export async function addPastedPaths(paths) {
       continue;
     }
     if (mime && isSupportedMime(mime)) {
-      // 文本类：直接加入（后端内联进 prompt）
+      // 文本类：加入（后端内联进 prompt；若文件很大，send.js 会改走"路径模式"，
+      // 用真实 path 让 Agent 通过 view 工具分段读取，避免触发上下文守卫）
       var dataUrl = "data:" + mime + ";base64," + base64;
-      S.pendingFiles.push({ name: res.name || path, type: mime, size: size, base64: base64, dataUrl: dataUrl });
+      S.pendingFiles.push({ name: res.name || path, type: mime, size: size, base64: base64, dataUrl: dataUrl, path: path });
       renderAttachPreview();
     } else if (IMAGE_EXT[ext]) {
       // 图片：走压缩流程（与选择器一致）
