@@ -98,7 +98,7 @@ fn adm_agent_path(app: &tauri::AppHandle) -> Result<PathBuf, AppError> {
     Ok(adm_agent_target_dir(app)?.join(adm_agent_file_name()))
 }
 
-// ===== admAgent.json 配置（agent 启动前生成 / 更新）=====
+// ===== admAgent.json 配置（本地模型启动成功后统一生成 / 更新）=====
 
 /// 默认上下文大小（配置文件未显式配置 ctx_size 时使用，与示例一致）
 const DEFAULT_CONTEXT_WINDOW: u32 = 25600;
@@ -139,10 +139,26 @@ fn load_port(app: &tauri::AppHandle) -> Option<u16> {
     settings.launch_params.port
 }
 
-/// 根据上下文大小、端口与图片支持标志构造完整的 admAgent.json 配置结构体。
-/// default_max_tokens 取 context_window 的 30%（四舍五入为整数）。
-fn build_adm_agent_config(context_window: u32, port: u16, supports_images: bool) -> serde_json::Value {
+/// 根据上下文大小、端口、图片支持与推理支持标志构造完整的 admAgent.json 配置结构体。
+/// default_max_tokens 取 context_window 的 30%（四舍五入为整数）；
+/// 模型支持推理时补充 can_reason / reasoning_levels / default_reasoning_effort，
+/// 服务端会发送 reasoning_effort 并遵守 reasoning_content 回传规则。
+fn build_adm_agent_config(
+    context_window: u32,
+    port: u16,
+    supports_images: bool,
+    supports_reasoning: bool,
+) -> serde_json::Value {
     let default_max_tokens = (context_window as f64 * 0.3).round() as u32;
+    let (can_reason, reasoning_levels, default_reasoning_effort) = if supports_reasoning {
+        (
+            serde_json::json!(true),
+            serde_json::json!(["low", "medium", "high"]),
+            serde_json::json!("medium"),
+        )
+    } else {
+        (serde_json::json!(false), serde_json::Value::Null, serde_json::Value::Null)
+    };
     serde_json::json!({
         "model": {
             "provider": "local",
@@ -159,7 +175,10 @@ fn build_adm_agent_config(context_window: u32, port: u16, supports_images: bool)
                         "name": "Local Model",
                         "context_window": context_window,
                         "default_max_tokens": default_max_tokens,
-                        "supports_images": supports_images
+                        "supports_images": supports_images,
+                        "can_reason": can_reason,
+                        "reasoning_levels": reasoning_levels,
+                        "default_reasoning_effort": default_reasoning_effort
                     }
                 ]
             }
@@ -167,12 +186,14 @@ fn build_adm_agent_config(context_window: u32, port: u16, supports_images: bool)
     })
 }
 
-/// 确保 admAgent.json 存在且 context_window / default_max_tokens / base_url / supports_images 与当前配置一致。
+/// 确保 admAgent.json 存在且 context_window / default_max_tokens / base_url /
+/// supports_images / can_reason 与当前配置一致。
 ///
 /// - 目录不存在则创建。
 /// - 文件不存在：写入完整的默认结构（context_window、port 来自配置，default_max_tokens = 30%）。
-/// - 文件已存在：原地更新 providers.local.models[0] 的 context_window、default_max_tokens
-///   与 supports_images（取自 AppState，启动模型时按 mmproj 实际加载判定），
+/// - 文件已存在：原地更新 providers.local.models[0] 的 context_window、default_max_tokens、
+///   supports_images（取自 AppState，启动模型时按 mmproj 实际加载判定）
+///   与 can_reason / reasoning_levels / default_reasoning_effort（按 --reasoning 参数判定），
 ///   以及 providers.local.base_url 中的端口，尽量保留文件中其它字段；
 /// 若结构异常无法原地更新，则回退写入完整默认结构。
 fn ensure_adm_agent_config(app: &tauri::AppHandle) -> Result<(), AppError> {
@@ -186,6 +207,14 @@ fn ensure_adm_agent_config(app: &tauri::AppHandle) -> Result<(), AppError> {
     let supports_images = app
         .state::<AppState>()
         .model_supports_images
+        .lock()
+        .map(|g| *g)
+        .unwrap_or(false);
+
+    // 当前运行模型是否支持推理（start_model 时按 --reasoning 参数判定写入）
+    let supports_reasoning = app
+        .state::<AppState>()
+        .model_supports_reasoning
         .lock()
         .map(|g| *g)
         .unwrap_or(false);
@@ -211,6 +240,18 @@ fn ensure_adm_agent_config(app: &tauri::AppHandle) -> Result<(), AppError> {
                         first["context_window"] = serde_json::json!(ctx);
                         first["default_max_tokens"] = serde_json::json!(default_max_tokens);
                         first["supports_images"] = serde_json::json!(supports_images);
+                        // 推理能力同步：支持时写全推理元数据，不支持时写 false 并清理可能残留的旧值
+                        if supports_reasoning {
+                            first["can_reason"] = serde_json::json!(true);
+                            first["reasoning_levels"] = serde_json::json!(["low", "medium", "high"]);
+                            first["default_reasoning_effort"] = serde_json::json!("medium");
+                        } else {
+                            first["can_reason"] = serde_json::json!(false);
+                            if let Some(obj) = first.as_object_mut() {
+                                obj.remove("reasoning_levels");
+                                obj.remove("default_reasoning_effort");
+                            }
+                        }
                         updated = true;
                     }
                     // 同步更新 base_url 中的端口
@@ -232,7 +273,7 @@ fn ensure_adm_agent_config(app: &tauri::AppHandle) -> Result<(), AppError> {
     }
 
     // 文件不存在，或结构异常无法原地更新：写入完整默认结构
-    let config = build_adm_agent_config(ctx, port, supports_images);
+    let config = build_adm_agent_config(ctx, port, supports_images, supports_reasoning);
     write_json_atomic(&path, &config)
 }
 
@@ -245,14 +286,7 @@ fn write_json_atomic(path: &std::path::Path, value: &serde_json::Value) -> Resul
     Ok(())
 }
 
-/// 点击 Agent 按钮时的「更早时机」调用：仅生成 / 更新 admAgent.json 配置，
-/// 不依赖模型是否已启动或 admAgent 是否已下载。供前端在 goAgent() 阶段提前调用。
-#[tauri::command]
-pub async fn prepare_adm_agent_config(app: tauri::AppHandle) -> Result<(), AppError> {
-    ensure_adm_agent_config(&app)
-}
-
-/// 模型启动成功后同步本地模型能力（supports_images / context_window）到 admAgent：
+/// 模型启动成功后同步本地模型能力（supports_images / can_reason / context_window）到 admAgent：
 /// 1) ensure_adm_agent_config 把最新能力写入 admAgent.json；
 /// 2) 若 server 正在运行，POST /config/set 写一个无害标量触发服务端写盘+从磁盘全量重载
 ///    （服务端只在启动时读配置，SetConfigField 是唯一的热重载入口；
@@ -425,7 +459,7 @@ pub async fn add_cloud_provider(
             .map_err(|e| format!("读取 admAgent.json 失败: {}", e))?;
         serde_json::from_str(&s).map_err(|e| format!("解析 admAgent.json 失败: {}", e))?
     } else {
-        build_adm_agent_config(DEFAULT_CONTEXT_WINDOW, DEFAULT_PORT, false)
+        build_adm_agent_config(DEFAULT_CONTEXT_WINDOW, DEFAULT_PORT, false, false)
     };
 
     if !config.get("providers").map_or(false, |v| v.is_object()) {
@@ -823,10 +857,8 @@ pub async fn start_agent_server(
         }
     }
     stop_agent_server_internal(&state)?;
-
-    if let Err(e) = ensure_adm_agent_config(&app) {
-        eprintln!("[admAgent] 生成 admAgent.json 配置失败: {}", e);
-    }
+    // 注：admAgent.json 由本地模型启动成功后统一写入（sync_local_model_capabilities），
+    // 此处不再生成/更新，避免未运行模型时用空能力覆盖已写入的 can_reason / supports_images。
 
     let agent_path = adm_agent_path(&app)?;
     if !agent_path.exists() {

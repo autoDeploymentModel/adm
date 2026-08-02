@@ -412,6 +412,19 @@ pub async fn start_model(
     }
     *state.model_supports_images.lock().unwrap_or_else(|e| e.into_inner()) = vision_enabled;
 
+    // 推理能力：--reasoning 为 on/true/1 或 auto（自动检测）时视为模型支持推理。
+    // auto 下 llama-server 按模型格式自动启用，能出推理内容即具备该能力，故与 on 同等对待；
+    // 未设置时（None）与 llama-server 的 auto 行为一致，同样视为支持。
+    // 同步记录到 AppState 供 Agent 配置（admAgent.json 的 can_reason）使用。
+    let reasoning_supported = match params.reasoning.as_deref().map(|s| s.to_lowercase()) {
+        Some(s) => matches!(s.as_str(), "on" | "true" | "1" | "auto"),
+        None => true,
+    };
+    *state
+        .model_supports_reasoning
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = reasoning_supported;
+
     if let Some(ctx) = params.ctx_size {
         args.extend(["-c".to_string(), ctx.to_string()]);
     }
