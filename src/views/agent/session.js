@@ -1,4 +1,5 @@
 // 会话管理：列表 / 选择 / 新建 / 消息刷新 / 上下文估算
+import { t as _t } from "../../i18n.js";
 import { S, invoke } from "./state.js";
 import { api } from "./api.js";
 import { escapeHtml, formatTime } from "./utils.js";
@@ -36,7 +37,7 @@ export async function loadConversations(restoreCurrent) {
     }
   }
   if (lastErr !== null) {
-    reportError(lastErr, { prefix: "加载会话列表失败: " });
+    reportError(lastErr, { prefix: _t("加载会话列表失败: ") });
     renderConversationList();
     return;
   }
@@ -86,7 +87,7 @@ export function renderConversationList() {
   }
 
   if (list.length === 0) {
-    var emptyText = S.sessionViewMode === "current" ? "当前无选中会话" : "暂无会话";
+    var emptyText = S.sessionViewMode === "current" ? _t("当前无选中会话") : _t("暂无会话");
     container.innerHTML = '<div style="padding:12px 14px;color:var(--c-text-4);font-size:12px;">' + emptyText + '</div>';
     return;
   }
@@ -105,20 +106,20 @@ export function renderConversationList() {
 
     var starHtml = isActive ? '<span class="conv-item-star">★</span>' : '';
     var busyHtml = isBusy
-      ? '<span class="conv-item-busy' + (isQueuedRun ? " queued" : "") + '" title="' + (isQueuedRun ? "排队中" : "运行中") + '"></span>'
+      ? '<span class="conv-item-busy' + (isQueuedRun ? " queued" : "") + '" title="' + (isQueuedRun ? _t("排队中") : _t("运行中")) + '"></span>'
       : '';
 
     item.innerHTML =
       '<div class="conv-item-title">' + starHtml + busyHtml +
-        '<span style="overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(conv.title || conv.name || "新会话") + "</span>" +
+        '<span style="overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(conv.title || conv.name || _t("新会话")) + "</span>" +
       "</div>" +
       '<div class="conv-item-meta">' +
-        '<span>' + msgCount + ' 条消息</span>' +
+        '<span>' + msgCount + ' ' + _t(' 条消息') + '</span>' +
         (lastTime ? '<span>' + formatTime(lastTime) + "</span>" : "") +
       "</div>" +
       '<div class="conv-item-actions">' +
-        '<button class="conv-action-btn" data-action="rename" title="重命名">✎</button>' +
-        '<button class="conv-action-btn delete" data-action="delete" title="删除">✕</button>' +
+        '<button class="conv-action-btn" data-action="rename" title="' + _t("重命名") + '">✎</button>' +
+        '<button class="conv-action-btn delete" data-action="delete" title="' + _t("删除") + '">✕</button>' +
       "</div>";
 
     item.addEventListener("click", function() { selectConversation(conv.id); });
@@ -142,7 +143,7 @@ function handleConvAction(action, convId) {
     case "rename":
       var oldConv = S.conversations.find(function(c) { return c.id === convId; });
       var defaultName = oldConv ? (oldConv.title || oldConv.name || "") : "";
-      var newName = prompt("重命名会话:", defaultName);
+      var newName = prompt(_t("重命名会话:"), defaultName);
       if (newName && newName !== defaultName) {
         // 服务端 PUT 是整行更新且 session id 取自 body（忽略路径 sid），
         // 必须回传完整会话字段，否则报 sql: no rows / token 统计被清零。
@@ -166,11 +167,11 @@ function handleConvAction(action, convId) {
               document.getElementById("agent-conv-title").textContent = newName;
             }
           })
-          .catch(function(e) { reportError(e, { prefix: "重命名失败: " }); });
+          .catch(function(e) { reportError(e, { prefix: _t("重命名失败: ") }); });
       }
       break;
     case "delete":
-      showConfirm("确定删除此会话？", function() {
+      showConfirm(_t("确定删除此会话？"), function() {
         api("DELETE", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions/" + convId)
           .then(function() {
             if (S.currentConvId === convId) {
@@ -181,11 +182,11 @@ function handleConvAction(action, convId) {
               S.messages = [];
               renderMessages();
               renderTodos([]);
-              document.getElementById("agent-conv-title").textContent = "选择或创建一个会话";
+              document.getElementById("agent-conv-title").textContent = _t("选择或创建一个会话");
             }
             loadConversations();
           })
-          .catch(function(e) { reportError(e, { prefix: "删除失败: " }); });
+          .catch(function(e) { reportError(e, { prefix: _t("删除失败: ") }); });
       });
       break;
   }
@@ -204,18 +205,18 @@ export async function selectConversation(convId) {
   if (isCurrentQueued) {
     var stateElQ = document.getElementById("agent-status-state");
     if (stateElQ) {
-      stateElQ.innerHTML = '<span class="status-state-dot busy"></span>排队中';
+      stateElQ.innerHTML = '<span class="status-state-dot busy"></span>' + _t('排队中');
     }
-    showInfo("当前会话有消息排队中，将在其它会话运行完成后自动执行");
+    showInfo(_t("当前会话有消息排队中，将在其它会话运行完成后自动执行"));
   } else if (isRunningElsewhere) {
     var runningConv = S.conversations.find(function(c) { return c.id === S.activeRun.sessionId; });
-    var runningName = runningConv ? (runningConv.title || runningConv.name || "其它会话") : "其它会话";
+    var runningName = runningConv ? (runningConv.title || runningConv.name || _t("其它会话")) : _t("其它会话");
     updateStatusBar("busy", null, S.contextUsage.used);
     var stateEl = document.getElementById("agent-status-state");
     if (stateEl) {
-      stateEl.innerHTML = '<span class="status-state-dot busy"></span>' + escapeHtml(runningName) + " 运行中";
+      stateEl.innerHTML = '<span class="status-state-dot busy"></span>' + escapeHtml(runningName) + " " + _t("运行中");
     }
-    showInfo("会话「" + runningName + "」正在运行，当前会话可正常发送，消息会排队等待");
+    showInfo(_t("会话「") + runningName + _t("」正在运行，当前会话可正常发送，消息会排队等待"));
   }
 
   try {
@@ -226,7 +227,7 @@ export async function selectConversation(convId) {
 
     // 获取会话信息
     S.currentConv = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions/" + convId);
-    document.getElementById("agent-conv-title").textContent = S.currentConv.title || "会话";
+    document.getElementById("agent-conv-title").textContent = S.currentConv.title || _t("会话");
 
     // 单独获取消息列表
     S.messages = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions/" + convId + "/messages");
@@ -250,7 +251,7 @@ export async function selectConversation(convId) {
     /** @type {HTMLButtonElement} */ (document.getElementById("agent-undo-btn")).disabled = false;
   } catch (e) {
     console.error("[agent] 加载会话失败:", convId, e);
-    reportError(e, { prefix: "加载会话失败: " });
+    reportError(e, { prefix: _t("加载会话失败: ") });
   }
 }
 
@@ -260,11 +261,11 @@ export async function newConversation() {
   try {
     // POST /v1/workspaces/{id}/sessions → 返回 Session 对象
     const resp = await api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions", {
-      title: "新会话 " + new Date().toLocaleTimeString("zh-CN", { hour12: false }),
+      title: _t("新会话 ") + new Date().toLocaleTimeString("zh-CN", { hour12: false }),
     });
     // 检查响应是否有效（避免无限递归）
     if (!resp || !resp.id) {
-      showError("创建会话失败: 服务端返回无效响应");
+      showError(_t("创建会话失败: 服务端返回无效响应"));
       return;
     }
     resetPermissionState();
@@ -279,13 +280,13 @@ export async function newConversation() {
     await loadConversations();
     renderMessages();
     renderTodos([]);
-    document.getElementById("agent-conv-title").textContent = resp.title || "新会话";
+    document.getElementById("agent-conv-title").textContent = resp.title || _t("新会话");
     updateContextUsage();
 
     // 启用操作按钮
     /** @type {HTMLButtonElement} */ (document.getElementById("agent-undo-btn")).disabled = false;
   } catch (e) {
-    reportError(e, { prefix: "创建会话失败: " });
+    reportError(e, { prefix: _t("创建会话失败: ") });
   }
 }
 

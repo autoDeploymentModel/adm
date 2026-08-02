@@ -1,4 +1,5 @@
 // 模型切换与 provider 列表
+import { t as _t } from "../../i18n.js";
 import { S, invoke } from "./state.js";
 import { api } from "./api.js";
 import { escapeHtml, formatTokens, slugifyModelId, normalizeReasoningEffort } from "./utils.js";
@@ -42,7 +43,7 @@ export async function switchModel(providerKey, displayName, ctxLen) {
     s.agent_temperature = S.settings.agent_temperature || null;
     await invoke("save_settings", { settings: s });
   } catch (e) {
-    reportError(e, { prefix: "保存设置失败: " });
+    reportError(e, { prefix: _t("保存设置失败: ") });
   }
 
   // 通知服务端 Agent 切换模型并重新加载配置（关键！）
@@ -72,7 +73,7 @@ export async function switchModel(providerKey, displayName, ctxLen) {
         console.warn("[agent] /agent/update 失败，挂起待重试:", updErr);
       }
     } catch (e) {
-      reportError(e, { prefix: "通知 Agent 切换模型失败: " });
+      reportError(e, { prefix: _t("通知 Agent 切换模型失败: ") });
     }
   }
 }
@@ -183,7 +184,7 @@ export function updateModelDropdown() {
   var isLocalSelected = currentProvider === "local" || currentProvider.startsWith("local:");
   localItem.className = "model-item" + (isLocalSelected ? " selected" : "");
   var localLabel = S.localModels.length > 0 ? S.localModels.length + " Local Models" : "Local Model";
-  localItem.innerHTML = '<span class="model-item-name">🏠 ' + localLabel + '</span><span class="model-item-ctx">本地</span>';
+  localItem.innerHTML = '<span class="model-item-name">🏠 ' + localLabel + '</span><span class="model-item-ctx">' + _t("本地") + '</span>';
   localItem.addEventListener("click", function() {
     switchModel("local", "Local Model", 0);
   });

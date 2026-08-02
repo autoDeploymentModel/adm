@@ -1,4 +1,5 @@
 // 通用 UI：状态栏 / 上下文用量 / 错误与确认弹窗 / 滚动模式 / 安全超时 / 右键菜单
+import { t as _t } from "../../i18n.js";
 import { S } from "./state.js";
 import { api } from "./api.js";
 import { formatTokens, isMsgAreaAtBottom } from "./utils.js";
@@ -56,7 +57,7 @@ export function startSendSafetyTimer() {
     S.queuedRun = null;
     updateSendButton();
     updateStatusBar("ready", null, S.contextUsage.used);
-    showError("运行超时，已自动重置状态");
+    showError(_t("运行超时，已自动重置状态"));
   }, 180000);
 }
 
@@ -84,7 +85,7 @@ export function showCopyPasteMenu(e, targetInput) {
 
   var items = [];
   if (hasSelection) {
-    items.push({ label: "复制", action: function() {
+    items.push({ label: _t("复制"), action: function() {
       var sel = window.getSelection();
       if (sel && sel.toString()) {
         navigator.clipboard.writeText(sel.toString()).catch(function() {
@@ -94,7 +95,7 @@ export function showCopyPasteMenu(e, targetInput) {
     }});
   }
   if (targetInput) {
-    items.push({ label: "粘贴", action: function() {
+    items.push({ label: _t("粘贴"), action: function() {
       navigator.clipboard.readText().then(function(text) {
         if (text) {
           var start = targetInput.selectionStart;
@@ -143,18 +144,18 @@ export function updateSendButton() {
   var isCurrentRun = S.isSending && S.activeRun && S.activeRun.sessionId === S.currentConvId;
   var isCurrentQueued = !!(S.queuedRun && S.queuedRun.sessionId === S.currentConvId);
   if (isCurrentRun) {
-    btn.textContent = "⏹ 取消";
+    btn.textContent = _t("⏹ 取消");
     btn.classList.add("cancel");
-    btn.title = "停止当前会话的运行";
+    btn.title = _t("停止当前会话的运行");
   } else if (isCurrentQueued) {
-    btn.textContent = "⏹ 取消排队";
+    btn.textContent = _t("⏹ 取消排队");
     btn.classList.add("cancel");
-    btn.title = "取消当前会话已排队、尚未开始的消息";
+    btn.title = _t("取消当前会话已排队、尚未开始的消息");
   } else {
-    btn.textContent = "📤 发送";
+    btn.textContent = _t("📤 发送");
     btn.classList.remove("cancel");
     btn.title = S.isSending
-      ? "当前会话未在运行，消息将发送到当前会话（若工作区忙碌会排队等待）"
+      ? _t("当前会话未在运行，消息将发送到当前会话（若工作区忙碌会排队等待）")
       : "";
     // 「正在思考」指示器只在 renderMessages 内按 isSending 创建/移除；
     // 超时/取消/断线等路径重置 isSending 后不会触发重渲染，需在此同步移除，
@@ -174,12 +175,12 @@ export function updateModeToggle() {
     if (modeText) modeText.textContent = "Plan";
     if (modeIcon) modeIcon.textContent = "📋";
     btn.classList.add("plan");
-    btn.title = "当前为 Plan 模式（只读调研并产出计划，不修改任何文件），点击切换为执行模式";
+    btn.title = _t("当前为 Plan 模式（只读调研并产出计划，不修改任何文件），点击切换为执行模式");
   } else {
-    if (modeText) modeText.textContent = "执行";
+    if (modeText) modeText.textContent = _t("执行");
     if (modeIcon) modeIcon.textContent = "⚡";
     btn.classList.remove("plan");
-    btn.title = "当前为执行模式（直接执行修改），点击切换 Plan 模式（只读计划）";
+    btn.title = _t("当前为执行模式（直接执行修改），点击切换 Plan 模式（只读计划）");
   }
 }
 
@@ -227,14 +228,14 @@ export function updateStatusBar(state, workdir, tokens) {
 
   if (stateEl) {
     var dotClass = "ready";
-    var stateText = "就绪";
-    if (state === "busy") { dotClass = "busy"; stateText = "运行中"; }
-    else if (state === "error") { dotClass = "error"; stateText = "错误"; }
+    var stateText = _t("就绪");
+    if (state === "busy") { dotClass = "busy"; stateText = _t("运行中"); }
+    else if (state === "error") { dotClass = "error"; stateText = _t("错误"); }
     stateEl.innerHTML = '<span class="status-state-dot ' + dotClass + '"></span>' + stateText;
   }
 
   if (workdir !== null && workdirEl) {
-    workdirEl.textContent = "工作区: " + (workdir || "默认");
+    workdirEl.textContent = _t("工作区: ") + (workdir || _t("默认"));
     workdirEl.title = workdir || "";
   }
 
@@ -282,7 +283,7 @@ export function reportError(err, opts) {
   var msg = getErrorMessage(err);
   if (!msg) return;
   if (classifyError(err) === ERROR_QUOTA) {
-    showNotice("余额不足，任务中断", "error");
+    showNotice(_t("余额不足，任务中断"), "error");
     return;
   }
   showNotice((opts.prefix || "") + msg + (opts.hint || ""), opts.level || "error");
@@ -317,12 +318,12 @@ export function showConfirm(message, onOk) {
     '<div class="permission-modal">' +
       '<div class="permission-header">' +
         '<span class="permission-icon">⚠️</span>' +
-        '<span class="permission-title">确认操作</span>' +
+        '<span class="permission-title">' + _t("确认操作") + '</span>' +
       '</div>' +
       '<div class="permission-body"></div>' +
       '<div class="permission-footer">' +
-        '<button class="settings-btn settings-btn-secondary" data-act="cancel">取消</button>' +
-        '<button class="settings-btn settings-btn-primary" data-act="ok">确定</button>' +
+        '<button class="settings-btn settings-btn-secondary" data-act="cancel">' + _t("取消") + '</button>' +
+        '<button class="settings-btn settings-btn-primary" data-act="ok">' + _t("确定") + '</button>' +
       '</div>' +
     '</div>';
   overlay.querySelector(".permission-body").textContent = message;

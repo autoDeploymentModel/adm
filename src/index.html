@@ -258,6 +258,7 @@
   </style>
   <script>
     // 主题：尽早同步应用（在 body 渲染前），避免首屏闪烁
+    // 名称字段为显示文案（设置页主题卡片用），id 才是持久化键；i18n 未就绪时保持中文
     window.__ADM_THEMES = [
       { id: "default", name: "暗夜紫",      colors: ["#1a1a2e", "#16213e", "#6c63ff"] },
       { id: "vscode",  name: "VS Code 深色", colors: ["#1e1e1e", "#252526", "#4a9eff"] },
@@ -293,23 +294,23 @@
     <div id="hardware-bar">
       <div id="home-btn" onclick="location.hash='#/list'">
         <span class="btn-icon">&#8962;</span>
-        <span class="btn-text">首页</span>
+        <span class="btn-text" data-i18n="首页">首页</span>
       </div>
       <div id="settings-btn" onclick="location.hash='#/settings'">
         <span class="btn-icon">&#9881;</span>
-        <span class="btn-text">设置</span>
+        <span class="btn-text" data-i18n="设置">设置</span>
       </div>
       <div id="agent-btn" onclick="goAgent()">
         <span class="btn-icon">&#129302;</span>
-        <span class="btn-text">Agent</span>
+        <span class="btn-text" data-i18n="Agent">Agent</span>
       </div>
       <div id="hw-items">
         <div class="hw-item">
-          <span class="hw-label">内存</span>
+          <span class="hw-label" data-i18n="内存">内存</span>
           <span class="hw-value" id="ram-info">--</span>
         </div>
         <div class="hw-item">
-          <span class="hw-label" id="gpu-label">显存</span>
+          <span class="hw-label" id="gpu-label" data-i18n="显存">显存</span>
           <span class="hw-value" id="vram-info">--</span>
         </div>
         <div class="hw-item">
@@ -329,6 +330,14 @@
     const listen = window.__TAURI__?.event?.listen || window.__TAURI_INTERNALS__?.listen;
     window.__adm_invoke = invoke;
     window.__adm_listen = listen;
+
+    // 预加载 i18n 模块并同步绑定 t()（顶层 await，后续所有动态文本走 t）
+    const _i18n = await import("./i18n.js");
+    const t = _i18n.t;
+    let _settingsLang = null;
+    try { _settingsLang = (await invoke("load_settings")).language; } catch (_) {}
+    _i18n.syncLanguageFromSettings({ language: _settingsLang });
+    _i18n.applyToDOM(document);
 
     // 底部硬件栏（壳层常驻）禁用右键，屏蔽浏览器默认菜单
     document.getElementById("hardware-bar").addEventListener("contextmenu", function(e) { e.preventDefault(); });
@@ -411,7 +420,7 @@
       silent = silent || false;
       try {
         if (!silent) {
-          showUpdateDialog('<div class="checking-text"><span class="spinner"></span>正在检查更新...</div>');
+          showUpdateDialog('<div class="checking-text"><span class="spinner"></span>' + t("正在检查更新...") + '</div>');
         }
         const result = await invoke("check_update");
 
@@ -419,15 +428,15 @@
           pendingLlamacppResult = result;
           const html = `
             <div class="update-icon">📥</div>
-            <div class="update-title">发现新版本</div>
-            <div class="update-desc">有新版本可用，是否前往下载？</div>
+            <div class="update-title">${t("发现新版本")}</div>
+            <div class="update-desc">${t("有新版本可用，是否前往下载？")}</div>
             <div class="update-info-row">
-              <div class="info-item"><div class="info-label">当前版本</div><div class="info-value">v${escHtml(result.current_version)}</div></div>
-              <div class="info-item"><div class="info-label">最新版本</div><div class="info-value">v${escHtml(result.remote_version)}</div></div>
+              <div class="info-item"><div class="info-label">${t("当前版本")}</div><div class="info-value">v${escHtml(result.current_version)}</div></div>
+              <div class="info-item"><div class="info-label">${t("最新版本")}</div><div class="info-value">v${escHtml(result.remote_version)}</div></div>
             </div>
             <div class="update-buttons">
-              <button class="update-btn-primary" onclick="openUrl('${escHtml(result.download_url)}')">下载更新</button>
-              <button class="update-btn-secondary" onclick="onSystemUpdateDismiss()">稍后再说</button>
+              <button class="update-btn-primary" onclick="openUrl('${escHtml(result.download_url)}')">${t("下载更新")}</button>
+              <button class="update-btn-secondary" onclick="onSystemUpdateDismiss()">${t("稍后再说")}</button>
             </div>`;
           showUpdateDialog(html);
           return;
@@ -447,20 +456,20 @@
         if (!silent) {
           showUpdateDialog(`
             <div class="update-icon">✅</div>
-            <div class="update-title">已是最新版本</div>
-            <div class="update-desc">当前版本 v${result.current_version} 已是最新</div>
+            <div class="update-title">${t("已是最新版本")}</div>
+            <div class="update-desc">${t("当前版本 v")}${result.current_version} ${t("已是最新")}</div>
             <div class="update-buttons" style="margin-top:16px;">
-              <button class="update-btn-secondary" onclick="hideUpdateDialog()">确定</button>
+              <button class="update-btn-secondary" onclick="hideUpdateDialog()">${t("确定")}</button>
             </div>`);
         }
       } catch (e) {
         if (!silent) {
           showUpdateDialog(`
             <div class="update-icon">❌</div>
-            <div class="update-title">检查更新失败</div>
+            <div class="update-title">${t("检查更新失败")}</div>
             <div class="update-desc">${e}</div>
             <div class="update-buttons" style="margin-top:16px;">
-              <button class="update-btn-secondary" onclick="hideUpdateDialog()">确定</button>
+              <button class="update-btn-secondary" onclick="hideUpdateDialog()">${t("确定")}</button>
             </div>`);
         }
       }
@@ -470,10 +479,10 @@
       vcRedistMandatory = true;
       const html = `
         <div class="update-icon">📦</div>
-        <div class="update-title">需要安装 VC++ 运行库</div>
-        <div class="update-desc">检测到系统未安装 Visual C++ 2015-2022 运行库，这是运行 llama-server 的必要组件。</div>
+        <div class="update-title">${t("需要安装 VC++ 运行库")}</div>
+        <div class="update-desc">${t("检测到系统未安装 Visual C++ 2015-2022 运行库，这是运行 llama-server 的必要组件。")}</div>
         <div class="update-buttons" style="margin-top:16px;">
-          <button class="update-btn-primary" onclick="downloadVcRedist()">下载安装</button>
+          <button class="update-btn-primary" onclick="downloadVcRedist()">${t("下载安装")}</button>
         </div>`;
       showUpdateDialog(html);
     }
@@ -482,10 +491,10 @@
       openUrl('https://aka.ms/vs/17/release/vc_redist.x64.exe');
       showUpdateDialog(`
         <div class="update-icon">📋</div>
-        <div class="update-title">请完成安装</div>
-        <div class="update-desc">下载已开始，请运行安装程序完成 VC++ 运行库的安装，安装完成后点击下方按钮继续。</div>
+        <div class="update-title">${t("请完成安装")}</div>
+        <div class="update-desc">${t("下载已开始，请运行安装程序完成 VC++ 运行库的安装，安装完成后点击下方按钮继续。")}</div>
         <div class="update-buttons" style="margin-top:16px;">
-          <button class="update-btn-primary" onclick="onVcRedistInstalled()">安装完成</button>
+          <button class="update-btn-primary" onclick="onVcRedistInstalled()">${t("安装完成")}</button>
         </div>`);
     }
 
@@ -514,39 +523,39 @@
     }
 
     async function startLlamacppUpdate(result) {
-      const isNotInstalled = !result.llamacpp_local_version || result.llamacpp_local_version === "未安装";
+      const isNotInstalled = !result.llamacpp_local_version || result.llamacpp_local_version === "未安装"; // 未安装: 后端返回固定值，不参与翻译
       llamacppIsMandatory = isNotInstalled;
 
-      const localVer = escHtml(result.llamacpp_local_version || "未安装");
+      const localVer = escHtml(result.llamacpp_local_version || "未安装"); // 同上
       const remoteVer = escHtml(result.llamacpp_remote_version || "");
       const downloadUrl = result.llamacpp_download_url;
 
       if (!downloadUrl) {
         showUpdateDialog(`
           <div class="update-icon">⚠️</div>
-          <div class="update-title">无法获取下载地址</div>
-          <div class="update-desc">未检测到支持的 NVIDIA/AMD/Intel 显卡，无法下载对应版本的 llamacpp。</div>
-          <div class="update-buttons" style="margin-top:16px;"><button class="update-btn-secondary" onclick="hideUpdateDialog()">关闭</button></div>`);
+          <div class="update-title">${t("无法获取下载地址")}</div>
+          <div class="update-desc">${t("未检测到支持的 NVIDIA/AMD/Intel 显卡，无法下载对应版本的 llamacpp。")}</div>
+          <div class="update-buttons" style="margin-top:16px;"><button class="update-btn-secondary" onclick="hideUpdateDialog()">${t("关闭")}</button></div>`);
         return;
       }
 
       let buttonsHtml;
       if (isNotInstalled) {
-        buttonsHtml = `<div class="update-buttons" style="margin-top:16px;"><button class="update-btn-primary" id="llamacpp-start-btn" onclick="doLlamacppDownload()">开始下载</button></div>`;
+        buttonsHtml = `<div class="update-buttons" style="margin-top:16px;"><button class="update-btn-primary" id="llamacpp-start-btn" onclick="doLlamacppDownload()">${t("开始下载")}</button></div>`;
       } else {
-        buttonsHtml = `<div class="update-buttons" style="margin-top:16px;"><button class="update-btn-primary" id="llamacpp-start-btn" onclick="doLlamacppDownload()">开始下载</button><button class="update-btn-secondary" onclick="hideUpdateDialog()">稍后再说</button></div>`;
+        buttonsHtml = `<div class="update-buttons" style="margin-top:16px;"><button class="update-btn-primary" id="llamacpp-start-btn" onclick="doLlamacppDownload()">${t("开始下载")}</button><button class="update-btn-secondary" onclick="hideUpdateDialog()">${t("稍后再说")}</button></div>`;
       }
 
       const html = `
         <div class="update-icon">🔧</div>
-        <div class="update-title">${isNotInstalled ? "需要安装 LLamaCPP" : "LLamaCPP 需要更新"}</div>
-        <div class="update-desc">${isNotInstalled ? "首次使用需要安装 LLamaCPP 运行库" : "检测到 LLamaCPP 运行库需要更新"}</div>
+        <div class="update-title">${isNotInstalled ? t("需要安装 LLamaCPP") : t("LLamaCPP 需要更新")}</div>
+        <div class="update-desc">${isNotInstalled ? t("首次使用需要安装 LLamaCPP 运行库") : t("检测到 LLamaCPP 运行库需要更新")}</div>
         <div class="update-info-row">
-          <div class="info-item"><div class="info-label">当前版本</div><div class="info-value">${localVer}</div></div>
-          <div class="info-item"><div class="info-label">最新版本</div><div class="info-value">${remoteVer}</div></div>
+          <div class="info-item"><div class="info-label">${t("当前版本")}</div><div class="info-value">${localVer}</div></div>
+          <div class="info-item"><div class="info-label">${t("最新版本")}</div><div class="info-value">${remoteVer}</div></div>
         </div>
         <div class="llamacpp-progress-bar"><div class="llamacpp-progress-fill" id="llamacpp-progress-fill" style="width: 0%"></div></div>
-        <div class="llamacpp-status-text" id="llamacpp-status-text">准备下载...</div>
+        <div class="llamacpp-status-text" id="llamacpp-status-text">${t("准备下载...")}</div>
         ${buttonsHtml}`;
       showUpdateDialog(html);
 
@@ -562,16 +571,16 @@
       var statusText = document.getElementById("llamacpp-status-text");
       var progressFill = document.getElementById("llamacpp-progress-fill");
       if (!pendingLlamacppUrl) {
-        if (statusText) statusText.textContent = "下载失败: 缺少下载地址";
-        if (startBtn) { startBtn.style.display = ""; startBtn.textContent = "重试"; }
+        if (statusText) statusText.textContent = t("下载失败: 缺少下载地址");
+        if (startBtn) { startBtn.style.display = ""; startBtn.textContent = t("重试"); }
         return;
       }
       try {
         await invoke("download_and_extract_llamacpp", { url: pendingLlamacppUrl });
       } catch (e) {
-        if (statusText) statusText.textContent = "下载失败: " + e;
+        if (statusText) statusText.textContent = t("下载失败: ") + e;
         if (progressFill) progressFill.style.width = "0%";
-        if (startBtn) { startBtn.style.display = ""; startBtn.textContent = "重试"; }
+        if (startBtn) { startBtn.style.display = ""; startBtn.textContent = t("重试"); }
       }
     }
 
@@ -583,13 +592,13 @@
           var statusText = document.getElementById("llamacpp-status-text");
           var progressFill = document.getElementById("llamacpp-progress-fill");
           if (payload.status === "downloading") {
-            if (statusText) statusText.textContent = "正在下载... " + payload.progress + "%";
+            if (statusText) statusText.textContent = t("正在下载... ") + payload.progress + "%";
             if (progressFill) progressFill.style.width = payload.progress + "%";
           } else if (payload.status === "extracting") {
-            if (statusText) statusText.textContent = "正在解压安装...";
+            if (statusText) statusText.textContent = t("正在解压安装...");
             if (progressFill) progressFill.style.width = "95%";
           } else if (payload.status === "done") {
-            if (statusText) statusText.textContent = "安装完成！";
+            if (statusText) statusText.textContent = t("安装完成！");
             if (progressFill) progressFill.style.width = "100%";
             llamacppIsMandatory = false;
             setTimeout(function () { hideUpdateDialog(); }, 1500);
@@ -607,19 +616,19 @@
         if (osName === "macos") {
           const arch = String(await invoke("get_platform_arch")).toLowerCase();
           if (arch !== "aarch64" && arch !== "arm64") {
-            showComingSoon("当前仅支持 Apple Silicon (M 系列) Mac");
+            showComingSoon(t("当前仅支持 Apple Silicon (M 系列) Mac"));
             return;
           }
         }
         try { await invoke("prepare_adm_agent_config"); } catch (_) {}
         const running = await invoke("is_model_running");
         if (!running) {
-          const ok = await showShellConfirm("当前未启动本地模型，进入 Agent 后可能无法使用本地模型对话。\n是否继续进入？");
+          const ok = await showShellConfirm(t("当前未启动本地模型，进入 Agent 后可能无法使用本地模型对话。\n是否继续进入？"));
           if (!ok) return;
         }
         location.hash = "#/agent";
       } catch (e) {
-        showComingSoon("操作失败: " + e);
+        showComingSoon(t("操作失败: ") + e);
       }
     }
 
@@ -633,8 +642,8 @@
             '<div style="font-size:36px;margin-bottom:12px;">⚠️</div>' +
             '<div class="sc-msg" style="font-size:14px;color:var(--c-text);line-height:1.7;margin-bottom:20px;white-space:pre-line;"></div>' +
             '<div style="display:flex;gap:12px;justify-content:center;">' +
-              '<button data-act="cancel" style="background:var(--c-overlay);color:var(--c-text);border:none;padding:10px 28px;border-radius:8px;font-size:14px;cursor:pointer;">取消</button>' +
-              '<button data-act="ok" style="background:var(--c-accent);color:#fff;border:none;padding:10px 28px;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer;">确定</button>' +
+              '<button data-act="cancel" style="background:var(--c-overlay);color:var(--c-text);border:none;padding:10px 28px;border-radius:8px;font-size:14px;cursor:pointer;">' + t("取消") + '</button>' +
+              '<button data-act="ok" style="background:var(--c-accent);color:#fff;border:none;padding:10px 28px;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer;">' + t("确定") + '</button>' +
             '</div>' +
           '</div>';
         overlay.querySelector(".sc-msg").textContent = message;
@@ -654,7 +663,7 @@
         tip.className = "global-toast";
         document.body.appendChild(tip);
       }
-      tip.textContent = msg || "该功能即将开放，敬请期待";
+      tip.textContent = msg || t("该功能即将开放，敬请期待");
       tip.style.display = "block";
       clearTimeout(showComingSoon._t);
       showComingSoon._t = setTimeout(function () { tip.style.display = "none"; }, 2500);
@@ -680,9 +689,13 @@
         document.getElementById("ram-info").textContent = formatBytes(systemInfo.total_ram);
         if (systemInfo.has_gpu && systemInfo.total_vram > 0) {
           document.getElementById("vram-info").textContent = formatBytes(systemInfo.total_vram);
-          if (hwinfo.gpu && hwinfo.gpu.model) document.getElementById("gpu-label").textContent = hwinfo.gpu.model;
+          if (hwinfo.gpu && hwinfo.gpu.model) {
+            const gpuLabel = document.getElementById("gpu-label");
+            gpuLabel.textContent = hwinfo.gpu.model;
+            gpuLabel.removeAttribute("data-i18n"); // 型号优先，语言切换不再覆盖
+          }
         } else {
-          document.getElementById("vram-info").textContent = "无显卡";
+          document.getElementById("vram-info").textContent = t("无显卡");
         }
         const cpuCores = systemInfo.cpu_physical_cores;
         const cpuThreads = systemInfo.cpu_logical_cores;
@@ -693,7 +706,7 @@
         }
       } catch (e) {
         console.error("更新硬件栏失败:", e);
-        document.getElementById("ram-info").textContent = "加载失败";
+        document.getElementById("ram-info").textContent = t("加载失败");
       }
     }
 
@@ -713,7 +726,7 @@
       if (currentView && currentView.unmount) { try { currentView.unmount(); } catch (_) {} }
       currentView = null;
       document.getElementById("view-root").innerHTML =
-        '<div class="view-loading"><div class="view-loading-spinner"></div><div class="view-loading-text">页面加载中...</div></div>';
+        '<div class="view-loading"><div class="view-loading-spinner"></div><div class="view-loading-text">' + t("页面加载中...") + '</div></div>';
     }
 
     async function renderRoute() {
@@ -762,7 +775,7 @@
 
       if (loadErr) {
         console.error("[index] 加载视图失败:", loadErr);
-        root.innerHTML = '<div style="padding:40px;color:#ff6b6b;">页面加载失败: ' + loadErr + '</div>';
+        root.innerHTML = '<div style="padding:40px;color:#ff6b6b;">' + t("页面加载失败: ") + loadErr + '</div>';
         return;
       }
 
@@ -774,7 +787,7 @@
         console.log("[index] 视图已挂载:", path);
       } catch (e) {
         console.error("[index] 挂载视图失败:", e);
-        root.innerHTML = '<div style="padding:40px;color:#ff6b6b;">页面加载失败: ' + e + '</div>';
+        root.innerHTML = '<div style="padding:40px;color:#ff6b6b;">' + t("页面加载失败: ") + e + '</div>';
       }
     }
 
@@ -806,7 +819,7 @@
         console.log("[index] 系统信息获取完成:", systemInfo);
       } catch (e) {
         console.error("[index] 获取系统信息失败:", e);
-        document.getElementById("ram-info").textContent = "加载失败";
+        document.getElementById("ram-info").textContent = t("加载失败");
       }
       console.log("[index] init() 完成");
     }

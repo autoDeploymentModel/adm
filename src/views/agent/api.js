@@ -1,4 +1,5 @@
 // admAgent HTTP API 客户端
+import { t as _t } from "../../i18n.js";
 import { invoke } from "./state.js";
 
 // ===== API 客户端 =====
@@ -26,5 +27,5 @@ export async function waitForServerReady() {
       await new Promise(function(resolve) { setTimeout(resolve, 500); });
     }
   }
-  throw new Error("等待 server 超时");
+  throw new Error(_t("等待 server 超时"));
 }

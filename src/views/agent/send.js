@@ -1,4 +1,5 @@
 // 发送消息（fire-and-forget，结果经 SSE 返回）
+import { t as _t } from "../../i18n.js";
 import { S, invoke } from "./state.js";
 import { api } from "./api.js";
 import { autoResize, generateRunId } from "./utils.js";
@@ -29,7 +30,7 @@ export async function sendMessage() {
       try {
         await api("POST", "/v1/workspaces/" + S.queuedRun.workspaceId + "/agent/sessions/" + S.queuedRun.sessionId + "/prompts/clear");
       } catch (e) {
-        reportError(e, { prefix: "取消排队失败: " });
+        reportError(e, { prefix: _t("取消排队失败: ") });
         return;
       }
       S.queuedRun = null;
@@ -51,7 +52,7 @@ export async function sendMessage() {
       try {
         await api("POST", "/v1/workspaces/" + activeRun.workspaceId + "/agent/sessions/" + activeRun.sessionId + "/cancel");
       } catch (e) {
-        reportError(e, { prefix: "取消失败: " });
+        reportError(e, { prefix: _t("取消失败: ") });
         return;
       }
     }
@@ -93,7 +94,7 @@ export async function sendMessage() {
   }
   console.log("[agent] 图片检查:", { hasImages, agentInfo: S.agentInfo ? S.agentInfo.model : null, supports_images: S.agentInfo && S.agentInfo.model ? S.agentInfo.model.supports_images : "N/A" });
   if (hasImages && S.agentInfo && S.agentInfo.model && S.agentInfo.model.supports_images !== true) {
-    showError("当前模型 (" + (S.agentInfo.model.id || "未知") + ") 不支持图片，请仅发送文本或切换到支持图片的模型");
+    showError(_t("当前模型 (") + (S.agentInfo.model.id || _t("未知")) + _t(") 不支持图片，请仅发送文本或切换到支持图片的模型"));
     return;
   }
 
@@ -145,7 +146,7 @@ export async function sendMessage() {
     // 只发附件不输文字时补默认提示词（能走到这里 text 为空时 filesToSend 必非空）
     var body = {
       session_id: sessionId,
-      prompt: text || "（用户发来附件，请查看并处理）",
+      prompt: text || _t("（用户发来附件，请查看并处理）"),
       run_id: runId,
     };
     if (filesToSend.length > 0) {
@@ -182,9 +183,9 @@ export async function sendMessage() {
       }
       if (attachments.length > 0) body.attachments = attachments;
       if (pathModeHints.length > 0) {
-        var hint = "\n\n<system_info>以下附件文件较大，内容未内联（已保存到磁盘路径）。请用 view 工具分段读取后分析：每次读取一部分（可用 offset/limit 参数控制行范围），不要尝试一次读完整个文件。如需汇总，可先浏览开头与关键片段。</system_info>\n";
+        var hint = "\n\n<system_info>" + _t("以下附件文件较大，内容未内联（已保存到磁盘路径）。请用 view 工具分段读取后分析：每次读取一部分（可用 offset/limit 参数控制行范围），不要尝试一次读完整个文件。如需汇总，可先浏览开头与关键片段。") + "</system_info>\n";
         pathModeHints.forEach(function(h) {
-          hint += "- 附件 '" + h.name + "'（约 " + (h.size / 1024).toFixed(0) + "KB）路径: " + h.path + "\n";
+          hint += "- " + _t("附件 '") + h.name + "'（" + _t("约 ") + (h.size / 1024).toFixed(0) + "KB）" + _t("路径: ") + h.path + "\n";
         });
         body.prompt = (body.prompt || "") + hint;
       }
@@ -203,7 +204,7 @@ export async function sendMessage() {
     // 初始化本轮运行统计：供假完成检测（A）与自动续跑进度判定（C）使用
     S.runStats = {
       sessionId: sessionId,
-      prompt: text || "（用户发来附件，请查看并处理）",
+      prompt: text || _t("（用户发来附件，请查看并处理）"),
       toolCalls: 0,
       sideEffectCalls: 0,
       sideEffectSuccess: 0,
@@ -214,7 +215,7 @@ export async function sendMessage() {
     armAutoContinue(sessionId);
     // 排队场景提示：queuedRun 已在发送前设置（供指示器/按钮/列表标识用），此处仅提示与刷新
     if (wasBusyOther) {
-      showInfo("当前有会话正在运行，消息已排队，将在其完成后自动执行");
+      showInfo(_t("当前有会话正在运行，消息已排队，将在其完成后自动执行"));
       renderConversationList();
     }
     startSendSafetyTimer();
@@ -233,7 +234,7 @@ export async function sendMessage() {
       clearSendSafetyTimer();
       updateStatusBar("ready", null, S.contextUsage.used);
     }
-    S.messages.push({ role: "error", content: "发送失败: " + getErrorMessage(e), type: "error" });
+    S.messages.push({ role: "error", content: _t("发送失败: ") + getErrorMessage(e), type: "error" });
     renderMessages();
   }
 }

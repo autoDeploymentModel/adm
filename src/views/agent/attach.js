@@ -1,4 +1,5 @@
 // 附件处理：选择 / 压缩 / 预览
+import { t as _t } from "../../i18n.js";
 import { S, invoke } from "./state.js";
 import { showError, showInfo } from "./ui.js";
 import { getErrorMessage } from "./error.js";
@@ -61,11 +62,11 @@ export function addPendingFiles(fileList) {
   var files = Array.from(fileList);
   files.forEach(function(file) {
     if (file.size > 20 * 1024 * 1024) {
-      showError("文件过大: " + file.name + " (最大 20MB)");
+      showError(_t("文件过大: ") + file.name + _t(" (最大 20MB)"));
       return;
     }
     if (!isSupportedFile(file)) {
-      showError("暂不支持该格式: " + file.name + "（支持文本/图片，如 txt、md、log、json、csv、代码等）");
+      showError(_t("暂不支持该格式: ") + file.name + _t("（支持文本/图片，如 txt、md、log、json、csv、代码等）"));
       return;
     }
     var mime = inferMime(file);
@@ -74,7 +75,7 @@ export function addPendingFiles(fileList) {
         S.pendingFiles.push(result);
         renderAttachPreview();
       }).catch(function() {
-        showError("图片处理失败: " + file.name);
+        showError(_t("图片处理失败: ") + file.name);
       });
     } else {
       var reader = new FileReader();
@@ -127,10 +128,10 @@ function compressImage(file) {
         console.log("[agent] 图片压缩: " + file.name + " " + w + "x" + h + " -> " + tw + "x" + th + ", " + (file.size / 1024).toFixed(0) + "KB -> " + (compressedSize / 1024).toFixed(0) + "KB");
         resolve({ name: file.name, type: file.type || "image/jpeg", size: compressedSize, base64: base64, dataUrl: compressedDataUrl });
       };
-      img.onerror = function() { reject(new Error("图片加载失败")); };
+      img.onerror = function() { reject(new Error(_t("图片加载失败"))); };
       img.src = dataUrl;
     };
-    reader.onerror = function() { reject(new Error("文件读取失败")); };
+    reader.onerror = function() { reject(new Error(_t("文件读取失败"))); };
     reader.readAsDataURL(file);
   });
 }
@@ -242,24 +243,24 @@ export async function addPastedPaths(paths) {
         insertPathText(path);
         continue;
       }
-      showError("暂不支持该格式: " + path + "（支持文本/图片，如 txt、md、log、json、csv、代码等）");
+      showError(_t("暂不支持该格式: ") + path + _t("（支持文本/图片，如 txt、md、log、json、csv、代码等）"));
       continue;
     }
     var res;
     try {
       res = await invoke("read_attachment_file", { path: path });
     } catch (e) {
-      showError("读取文件失败: " + path + " (" + getErrorMessage(e) + ")");
+      showError(_t("读取文件失败: ") + path + " (" + getErrorMessage(e) + ")");
       continue;
     }
     if (!res || !res.base64) {
-      showError("读取文件失败: " + path);
+      showError(_t("读取文件失败: ") + path);
       continue;
     }
     var base64 = res.base64;
     var size = Math.round(base64.length * 3 / 4);
     if (size > 20 * 1024 * 1024) {
-      showError("文件过大: " + (res.name || path) + " (最大 20MB)");
+      showError(_t("文件过大: ") + (res.name || path) + _t(" (最大 20MB)"));
       continue;
     }
     if (mime && isSupportedMime(mime)) {
@@ -286,14 +287,14 @@ export async function addPastedPaths(paths) {
           S.pendingFiles.push(result);
           renderAttachPreview();
         }).catch(function() {
-          showError("图片处理失败: " + (res.name || path));
+          showError(_t("图片处理失败: ") + (res.name || path));
         });
       } else {
         S.pendingFiles.push({ name: res.name || path, type: dataUrl2.split(";")[0].slice(5), size: size, base64: base64, dataUrl: dataUrl2 });
         renderAttachPreview();
       }
     } else {
-      showError("暂不支持该格式: " + (res.name || path) + "（支持文本/图片，如 txt、md、log、json、csv、代码等）");
+      showError(_t("暂不支持该格式: ") + (res.name || path) + _t("（支持文本/图片，如 txt、md、log、json、csv、代码等）"));
     }
   }
 }
@@ -307,7 +308,7 @@ function insertPathText(path) {
   input.value = cur + sep + path;
   input.dispatchEvent(new Event("input", { bubbles: true }));
   input.focus();
-  showInfo("已把文件夹路径插入输入框: " + path);
+  showInfo(_t("已把文件夹路径插入输入框: ") + path);
 }
 
 // MIME 是否作为文本附件支持（与 isSupportedFile 对文本的判定一致）

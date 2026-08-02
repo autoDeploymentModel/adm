@@ -1,6 +1,7 @@
 // Agent 模式同步（执行/Plan）与权限请求自动处理
 // 审批弹窗已移除：执行模式 = YOLO 直通（服务端 skip=true，不产生权限请求）；
 // Plan 模式 = 服务端只挂载只读工具（/agent/mode plan=true），模型无法修改和写入。
+import { t as _t } from "../../i18n.js";
 import { S } from "./state.js";
 import { api } from "./api.js";
 import { reportError } from "./ui.js";
@@ -28,7 +29,7 @@ export async function syncModeToServer() {
     });
   } catch (e) {
     console.warn("[agent] 同步 Plan 模式到服务端失败:", e);
-    reportError(e, { prefix: "同步 Plan 模式失败（旧版 admAgent 不支持，请更新）: " });
+    reportError(e, { prefix: _t("同步 Plan 模式失败（旧版 admAgent 不支持，请更新）: ") });
   }
 }
 

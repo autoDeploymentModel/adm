@@ -1,4 +1,5 @@
 // @ts-nocheck -- 历史视图暂未类型化（jsconfig checkJs 全局开启，新代码请勿加此标记）
+import { t as _t } from "../i18n.js";
 const template = `
 <style>
   /* 全局 reset（*）由 index.html 壳层统一提供，视图内不重复定义；选择器尽量限定在本视图容器内 */
@@ -264,38 +265,38 @@ const template = `
 </style>
 <div id="image-wrap">
   <div id="header">
-    <button class="back-btn" id="back-btn">← 返回</button>
-    <span id="model-name">文生图</span>
+    <button class="back-btn" id="back-btn">← ${_t("返回")}</button>
+    <span id="model-name">${_t("文生图")}</span>
     <span id="sd-status"></span>
   </div>
 
   <div id="content">
     <div id="download-section">
-      <div class="download-title">正在准备 SD 推理框架...</div>
-      <div class="download-desc" id="download-desc">检测到 SD 推理框架未安装，正在下载...</div>
+      <div class="download-title">${_t("正在准备 SD 推理框架...")}</div>
+      <div class="download-desc" id="download-desc">${_t("检测到 SD 推理框架未安装，正在下载...")}</div>
       <div class="progress-bar"><div class="progress-fill" id="download-progress-fill"></div></div>
-      <div class="progress-text" id="download-progress-text">准备中...</div>
+      <div class="progress-text" id="download-progress-text">${_t("准备中...")}</div>
     </div>
 
     <div id="generate-section">
       <div class="input-group">
-        <label class="input-label" for="prompt-input">提示词</label>
-        <textarea id="prompt-input" placeholder="请输入图片描述..." spellcheck="false"></textarea>
+        <label class="input-label" for="prompt-input">${_t("提示词")}</label>
+        <textarea id="prompt-input" placeholder="${_t("请输入图片描述...")}" spellcheck="false"></textarea>
       </div>
       <div class="size-row">
-        <div class="size-field"><label>宽度</label><input type="number" id="width-input" value="1080" min="64" max="4096"></div>
-        <div class="size-field"><label>高度</label><input type="number" id="height-input" value="1920" min="64" max="4096"></div>
+        <div class="size-field"><label>${_t("宽度")}</label><input type="number" id="width-input" value="1080" min="64" max="4096"></div>
+        <div class="size-field"><label>${_t("高度")}</label><input type="number" id="height-input" value="1920" min="64" max="4096"></div>
       </div>
-      <button class="generate-btn" id="generate-btn">生成图片</button>
+      <button class="generate-btn" id="generate-btn">${_t("生成图片")}</button>
       <div id="image-result-section">
         <div class="result-header">
-          <span class="result-label">生成结果</span>
-          <button class="save-btn" id="save-btn" style="display:none">💾 另存为</button>
+          <span class="result-label">${_t("生成结果")}</span>
+          <button class="save-btn" id="save-btn" style="display:none">${_t("💾 另存为")}</button>
         </div>
         <div id="image-container">
           <div class="image-placeholder">
             <div class="image-placeholder-icon">🖼️</div>
-            <div class="image-placeholder-text">生成的图片将显示在这里</div>
+            <div class="image-placeholder-text">${_t("生成的图片将显示在这里")}</div>
           </div>
         </div>
       </div>
@@ -303,8 +304,8 @@ const template = `
 
     <div id="log-section">
       <div class="log-header">
-        <span class="log-label">运行日志</span>
-        <button class="log-clear-btn" id="log-clear-btn">清空</button>
+        <span class="log-label">${_t("运行日志")}</span>
+        <button class="log-clear-btn" id="log-clear-btn">${_t("清空")}</button>
       </div>
       <div id="log-content"></div>
     </div>
@@ -366,18 +367,18 @@ function updateProgressUI(progress, status) {
   const desc = document.getElementById('download-desc');
 
   if (status === "resuming" || status === "downloading") {
-    desc.textContent = status === "resuming" ? "检测到已下载部分文件，继续下载..." : "正在下载 SD 推理框架...";
+    desc.textContent = status === "resuming" ? _t("检测到已下载部分文件，继续下载...") : _t("正在下载 SD 推理框架...");
     fill.style.width = progress + "%";
-    text.textContent = "下载中 " + progress + "%";
+    text.textContent = _t("下载中 ") + progress + "%";
   } else if (status === "extracting") {
-    desc.textContent = "正在解压安装...";
+    desc.textContent = _t("正在解压安装...");
     fill.style.width = "95%";
-    text.textContent = "正在解压...";
+    text.textContent = _t("正在解压...");
   } else if (status === "done") {
-    desc.textContent = "安装完成！";
+    desc.textContent = _t("安装完成！");
     fill.style.width = "100%";
-    text.textContent = "完成";
-    document.getElementById('sd-status').textContent = '✓ SD 就绪';
+    text.textContent = _t("完成");
+    document.getElementById('sd-status').textContent = _t('✓ SD 就绪');
     stopProgressPoll();
     setTimeout(function() { showGenerateSection(); }, 500);
   }
@@ -410,32 +411,32 @@ function stopProgressPoll() {
 }
 
 async function startDownload() {
-  document.getElementById('sd-status').textContent = '⏳ 下载中...';
+  document.getElementById('sd-status').textContent = _t('⏳ 下载中...');
   showDownloadSection();
   try {
     await invoke()("download_and_extract_sd");
   } catch (e) {
     if (e && e.indexOf && e.indexOf("正在下载中") !== -1) {
-      document.getElementById('sd-status').textContent = '⏳ 下载中...';
+      document.getElementById('sd-status').textContent = _t('⏳ 下载中...');
       showDownloadSection();
       startProgressPoll();
       return;
     }
-    document.getElementById('sd-status').textContent = '✗ 错误';
-    showToast("SD 下载失败: " + e);
+    document.getElementById('sd-status').textContent = _t('✗ 错误');
+    showToast(_t("SD 下载失败: ") + e);
   }
 }
 
 async function initPage() {
   console.log("[model_image] initPage() 检测 SD 状态");
   try {
-    document.getElementById('sd-status').textContent = '检测中...';
+    document.getElementById('sd-status').textContent = _t('检测中...');
     const status = await invoke()("get_sd_status");
     if (status.exists) {
-      document.getElementById('sd-status').textContent = '✓ SD 就绪';
+      document.getElementById('sd-status').textContent = _t('✓ SD 就绪');
       showGenerateSection();
     } else if (status.downloading) {
-      document.getElementById('sd-status').textContent = '⏳ 下载中...';
+      document.getElementById('sd-status').textContent = _t('⏳ 下载中...');
       showDownloadSection();
       updateProgressUI(status.progress, "downloading");
       startProgressPoll();
@@ -443,32 +444,32 @@ async function initPage() {
       await startDownload();
     }
   } catch (e) {
-    document.getElementById('sd-status').textContent = '✗ 错误';
-    showToast("SD 初始化失败: " + e);
+    document.getElementById('sd-status').textContent = _t('✗ 错误');
+    showToast(_t("SD 初始化失败: ") + e);
   }
 }
 
 async function handleGenerate() {
   const prompt = document.getElementById('prompt-input').value.trim();
   console.log("[model_image] 开始生成图片, prompt:", prompt.substring(0, 50) + "...");
-  if (!prompt) { showToast("请输入提示词"); return; }
+  if (!prompt) { showToast(_t("请输入提示词")); return; }
 
   const width = parseInt(document.getElementById('width-input').value) || 1080;
   const height = parseInt(document.getElementById('height-input').value) || 1920;
 
   if (width < 64 || width > 4096 || height < 64 || height > 4096) {
-    showToast("宽度和高度需在 64-4096 之间");
+    showToast(_t("宽度和高度需在 64-4096 之间"));
     return;
   }
 
   const btn = document.getElementById('generate-btn');
-  btn.textContent = "生成中...";
+  btn.textContent = _t("生成中...");
   btn.disabled = true;
   isGenerating = true;
 
   currentImagePath = '';
   document.getElementById('save-btn').style.display = 'none';
-  document.getElementById('image-container').innerHTML = '<div class="image-placeholder"><div class="image-placeholder-icon">⏳</div><div class="image-placeholder-text">正在生成...</div></div>';
+  document.getElementById('image-container').innerHTML = '<div class="image-placeholder"><div class="image-placeholder-icon">⏳</div><div class="image-placeholder-text">' + _t("正在生成...") + '</div></div>';
   clearLogs();
 
   try {
@@ -483,11 +484,11 @@ async function handleGenerate() {
         modelDiffusion = model.model_diffusion || null;
         modelVae = model.model_vae || null;
       }
-    } catch (e) { showToast("获取模型信息失败: " + e); }
+    } catch (e) { showToast(_t("获取模型信息失败: ") + e); }
 
     if (!modelUrl) {
-      showToast("未找到模型文件信息");
-      btn.textContent = "生成图片";
+      showToast(_t("未找到模型文件信息"));
+      btn.textContent = _t("生成图片");
       btn.disabled = false;
       isGenerating = false;
       return;
@@ -504,20 +505,20 @@ async function handleGenerate() {
       modelVae: modelVae
     });
   } catch (e) {
-    showToast("生成失败: " + e);
-    btn.textContent = "生成图片";
+    showToast(_t("生成失败: ") + e);
+    btn.textContent = _t("生成图片");
     btn.disabled = false;
     isGenerating = false;
   }
 }
 
 async function saveAsImage() {
-  if (!currentImagePath) { showToast("没有可保存的图片"); return; }
+  if (!currentImagePath) { showToast(_t("没有可保存的图片")); return; }
   try {
     await invoke()("save_sd_image_as", { sourcePath: currentImagePath });
   } catch (e) {
     if (e && e.indexOf && e.indexOf("用户取消了保存") !== -1) return;
-    showToast("保存失败: " + e);
+    showToast(_t("保存失败: ") + e);
   }
 }
 
@@ -531,29 +532,29 @@ function handleTauriEvent(type, payload) {
       if (payload.model_id === modelId) addLogLine(payload.line, payload.source);
       break;
     case "sd-started":
-      if (payload.model_id === modelId) addLogLine("SD 进程已启动", "info");
+      if (payload.model_id === modelId) addLogLine(_t("SD 进程已启动"), "info");
       break;
     case "sd-complete":
       if (payload.model_id === modelId) {
-        addLogLine("生成进程已结束", "info");
+        addLogLine(_t("生成进程已结束"), "info");
         const btn = document.getElementById('generate-btn');
-        if (btn) { btn.textContent = "生成图片"; btn.disabled = false; }
+        if (btn) { btn.textContent = _t("生成图片"); btn.disabled = false; }
         isGenerating = false;
       }
       break;
     case "sd-image-result":
       if (payload.model_id === modelId && payload.image_data) {
         const container = document.getElementById('image-container');
-        if (container) container.innerHTML = '<img src="data:image/png;base64,' + payload.image_data + '" alt="生成图片">';
+        if (container) container.innerHTML = '<img src="data:image/png;base64,' + payload.image_data + '" alt="' + _t("生成图片") + '">';
         currentImagePath = payload.file_path || '';
         const saveBtn = document.getElementById('save-btn');
         if (currentImagePath && saveBtn) saveBtn.style.display = '';
       }
       break;
     case "sd-error":
-      showToast("生成出错: " + (payload.message || "未知错误"));
+      showToast(_t("生成出错: ") + (payload.message || _t("未知错误")));
       const ebtn = document.getElementById('generate-btn');
-      if (ebtn) { ebtn.textContent = "生成图片"; ebtn.disabled = false; }
+      if (ebtn) { ebtn.textContent = _t("生成图片"); ebtn.disabled = false; }
       isGenerating = false;
       break;
   }
@@ -583,7 +584,7 @@ export default {
     modelId = params.model_id || '';
     isGenerating = false;
     currentImagePath = '';
-    document.getElementById('model-name').textContent = modelId ? '文生图 - ' + modelId : '文生图';
+    document.getElementById('model-name').textContent = modelId ? _t('文生图 - ') + modelId : _t('文生图');
 
     document.getElementById('back-btn').addEventListener('click', goBack);
     document.getElementById('generate-btn').addEventListener('click', handleGenerate);

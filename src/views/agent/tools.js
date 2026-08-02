@@ -1,4 +1,5 @@
 // 工具面板（Skill / LSP / MCP）
+import { t as _t } from "../../i18n.js";
 import { S } from "./state.js";
 import { api } from "./api.js";
 
@@ -9,12 +10,12 @@ export async function loadTools() {
   if (!S.serverInfo) return;
   var wsId = S.serverInfo.workspace_id;
 
-  // MCP/LSP 共用的 state 字符串 → 中文标签 + 颜色
+  // MCP/LSP 共用的 state 字符串 → 中文标签 + 颜色（显示时经 _t 翻译）
   var stateMap = {
-    connected: { label: "已连接", color: "green" },
-    starting:  { label: "启动中", color: "yellow" },
-    disabled:  { label: "已禁用", color: "gray" },
-    error:     { label: "错误",   color: "red" },
+    connected: { label: _t("已连接"), color: "green" },
+    starting:  { label: _t("启动中"), color: "yellow" },
+    disabled:  { label: _t("已禁用"), color: "gray" },
+    error:     { label: _t("错误"),   color: "red" },
   };
 
   // 并行请求四个端点（工作区详情用于 skill 状态快照）
@@ -61,9 +62,9 @@ export async function loadTools() {
       var name = s.name || s.id || "unknown";
       // 快照里 state=1 为发现/解析错误；能出现在 /skills 列表里的默认视为已加载
       var snap = skillStates[name];
-      var status = { label: "已加载", color: "green", title: "" };
+      var status = { label: _t("已加载"), color: "green", title: "" };
       if (snap && snap.state === 1) {
-        status = { label: "错误", color: "red", title: snap.error || "" };
+        status = { label: _t("错误"), color: "red", title: snap.error || "" };
       }
       skillTools.push({
         name: name,
@@ -80,7 +81,7 @@ export async function loadTools() {
     var mcpStates = results[1].value;
     if (mcpStates && typeof mcpStates === "object" && !Array.isArray(mcpStates)) {
       Object.values(mcpStates).forEach(function(m) {
-        var st = stateMap[m.state] || { label: m.state || "未知", color: "gray" };
+        var st = stateMap[m.state] || { label: m.state || _t("未知"), color: "gray" };
         mcpTools.push({
           name: m.name || "unknown",
           status: st.label,
@@ -98,7 +99,7 @@ export async function loadTools() {
     if (lspStates && typeof lspStates === "object" && !Array.isArray(lspStates)) {
       Object.keys(lspStates).forEach(function(key) {
         var l = lspStates[key];
-        var st = stateMap[l.state] || { label: l.state || "未知", color: "gray" };
+        var st = stateMap[l.state] || { label: l.state || _t("未知"), color: "gray" };
         lspTools.push({
           name: l.name || key,
           status: st.label,
@@ -124,7 +125,7 @@ export function renderToolsList() {
   container.innerHTML = "";
 
   if (tools.length === 0) {
-    container.innerHTML = '<div class="tool-item"><span class="tool-dot gray"></span><span class="tool-name" style="color:var(--c-text-4);">暂无工具</span></div>';
+    container.innerHTML = '<div class="tool-item"><span class="tool-dot gray"></span><span class="tool-name" style="color:var(--c-text-4);">' + _t("暂无工具") + '</span></div>';
     return;
   }
 

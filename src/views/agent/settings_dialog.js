@@ -1,4 +1,5 @@
 // 设置弹窗 / 云端模型添加 / admAgent 版本显示
+import { t as _t } from "../../i18n.js";
 import { S, invoke } from "./state.js";
 import { api } from "./api.js";
 import { parseContextSize, escapeHtml, $input, normalizeReasoningEffort } from "./utils.js";
@@ -95,16 +96,16 @@ export async function saveSettings() {
         }
       } catch (e) {
         console.warn("[agent] 切换工作区失败:", e);
-        reportError(e, { prefix: "切换工作目录失败: " });
+        reportError(e, { prefix: _t("切换工作目录失败: ") });
       }
     } else {
       // 工作目录未变化，只更新 UI
-      S.workspaceInfo = { path: workdir || "默认", name: workdir ? workdir.split(/[\\/]/).pop() : "默认工作区" };
+      S.workspaceInfo = { path: workdir || "默认", name: workdir ? workdir.split(/[\\/]/).pop() : _t("默认工作区") };
     }
     updateWorkspaceSelector();
     updateStatusBar("ready", workdir, S.contextUsage.used);
   } catch (e) {
-    reportError(e, { prefix: "保存设置失败: " });
+    reportError(e, { prefix: _t("保存设置失败: ") });
   }
 }
 
@@ -124,8 +125,8 @@ function formatCtxInput(n) {
 function setAddModelDialogMode(isEdit) {
   var title = document.getElementById("add-model-title");
   var submit = document.getElementById("add-model-submit");
-  if (title) title.textContent = isEdit ? "修改云端模型" : "添加云端模型";
-  if (submit) submit.textContent = isEdit ? "保存" : "添加";
+  if (title) title.textContent = isEdit ? _t("修改云端模型") : _t("添加云端模型");
+  if (submit) submit.textContent = isEdit ? _t("保存") : _t("添加");
 }
 
 function clearAddModelForm() {
@@ -175,7 +176,7 @@ function renderProviderList() {
   container.innerHTML = "";
 
   if (S.providers.length === 0) {
-    container.innerHTML = '<div style="color:var(--c-text-4);font-size:12px;padding:8px 0;">暂无云端模型</div>';
+    container.innerHTML = '<div style="color:var(--c-text-4);font-size:12px;padding:8px 0;">' + _t("暂无云端模型") + '</div>';
     return;
   }
 
@@ -186,16 +187,16 @@ function renderProviderList() {
       '<div class="provider-card-header">' +
         '<span class="provider-name">' + escapeHtml(p.name) + '</span>' +
         '<div class="provider-actions">' +
-          '<button class="provider-action-btn edit" data-key="' + p.key + '">修改</button>' +
-          '<button class="provider-action-btn delete" data-key="' + p.key + '">删除</button>' +
+          '<button class="provider-action-btn edit" data-key="' + p.key + '">' + _t("修改") + '</button>' +
+          '<button class="provider-action-btn delete" data-key="' + p.key + '">' + _t("删除") + '</button>' +
         '</div>' +
       '</div>' +
-      '<div class="provider-detail">' + escapeHtml(p.base_url) + ' · 上下文: ' + (p.context_window || '默认') + (p.supports_images ? ' · 支持图片' : '') + (p.can_reason ? ' · 思考模式' : '') + '</div>';
+      '<div class="provider-detail">' + escapeHtml(p.base_url) + ' · ' + _t("上下文: ") + (p.context_window || _t('默认')) + (p.supports_images ? ' · ' + _t("支持图片") : '') + (p.can_reason ? ' · ' + _t("思考模式") : '') + '</div>';
     card.querySelector(".edit").addEventListener("click", function() {
       showEditModelDialog(p);
     });
     card.querySelector(".delete").addEventListener("click", function() {
-      showConfirm("确定删除云端模型「" + p.name + "」？", async function() {
+      showConfirm(_t("确定删除云端模型「") + p.name + _t("」？"), async function() {
         try {
           await invoke("delete_cloud_provider", { key: p.key });
           // 同步从运行中的 server 内存配置移除（否则服务端仍持有已删 provider 直到重启）
@@ -218,7 +219,7 @@ function renderProviderList() {
           renderProviderList();
           updateModelDropdown();
         } catch (e) {
-          reportError(e, { prefix: "删除失败: " });
+          reportError(e, { prefix: _t("删除失败: ") });
         }
       });
     });
@@ -243,7 +244,7 @@ export async function addModel() {
   var canReason = $input("add-model-reasoning").checked;
 
   if (!modelId || !baseUrl || !apiKey) {
-    addModelMsg("请填写模型ID、API地址和密钥", true);
+    addModelMsg(_t("请填写模型ID、API地址和密钥"), true);
     return;
   }
 
@@ -279,14 +280,14 @@ export async function addModel() {
       if (active === key || active.indexOf(key + "/") === 0) {
         await switchModel(key, name, ctx);
       }
-      addModelMsg("修改成功", false);
+      addModelMsg(_t("修改成功"), false);
       setTimeout(function() {
         hideAddModelDialog();
         editingProviderKey = null;
         clearAddModelForm();
       }, 1000);
     } catch (e) {
-      addModelMsg("修改失败: " + e, true);
+      addModelMsg(_t("修改失败: ") + e, true);
     }
     return;
   }
@@ -333,9 +334,9 @@ export async function addModel() {
     renderProviderList();
     updateModelDropdown();
     if (runtimeConfirmed) {
-      addModelMsg("添加成功", false);
+      addModelMsg(_t("添加成功"), false);
     } else {
-      addModelMsg("配置已保存，但当前服务未加载该模型；重启 Agent 后生效" + (syncError ? ": " + syncError : ""), true);
+      addModelMsg(_t("配置已保存，但当前服务未加载该模型；重启 Agent 后生效") + (syncError ? ": " + syncError : ""), true);
       return;
     }
     setTimeout(function() {
@@ -343,6 +344,6 @@ export async function addModel() {
       clearAddModelForm();
     }, 1000);
   } catch (e) {
-    addModelMsg("添加失败: " + e, true);
+    addModelMsg(_t("添加失败: ") + e, true);
   }
 }

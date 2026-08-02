@@ -1,4 +1,5 @@
 // @ts-nocheck -- 历史视图暂未类型化（jsconfig checkJs 全局开启，新代码请勿加此标记）
+import { t as _t } from "../i18n.js";
 const template = `
 <style>
   /* 全局 reset（*）由 index.html 壳层统一提供，视图内不重复定义；选择器尽量限定在本视图容器内 */
@@ -425,26 +426,26 @@ const template = `
   }
 </style>
 <div id="model-list-root">
-<div class="page-title">模型列表</div>
+<div class="page-title">${_t("模型列表")}</div>
 <div class="filter-bar">
-  <label for="model-type-select">模型类型</label>
+  <label for="model-type-select">${_t("模型类型")}</label>
   <select id="model-type-select"></select>
   <span class="model-desc-text" id="model-desc-text"></span>
 </div>
 <main>
   <div class="card-grid" id="model-grid">
     <div class="grid-message">
-      <span class="loading-spinner"></span>正在加载模型列表...
+      <span class="loading-spinner"></span>${_t("正在加载模型列表...")}
     </div>
   </div>
 </main>
 <div id="delete-modal" class="modal-overlay" style="display:none;">
   <div class="modal-box">
-    <h3>确认删除</h3>
-    <p id="delete-modal-msg">确定要删除此模型吗？删除后无法恢复。</p>
+    <h3>${_t("确认删除")}</h3>
+    <p id="delete-modal-msg">${_t("确定要删除此模型吗？删除后无法恢复。")}</p>
     <div class="modal-actions">
-      <button class="btn btn-cancel" id="delete-modal-cancel">取消</button>
-      <button class="btn btn-confirm-delete" id="delete-modal-confirm">确认删除</button>
+      <button class="btn btn-cancel" id="delete-modal-cancel">${_t("取消")}</button>
+      <button class="btn btn-confirm-delete" id="delete-modal-confirm">${_t("确认删除")}</button>
     </div>
   </div>
 </div>
@@ -555,7 +556,7 @@ async function populateTypeFilter() {
   S().modelTypes.forEach(function(item) {
     var opt = document.createElement("option");
     opt.value = item.type === "全部模型" ? "all" : item.type;
-    opt.textContent = item.type;
+    opt.textContent = item.type === "全部模型" ? _t("全部模型") : item.type;
     select.appendChild(opt);
   });
   select.addEventListener("change", function() {
@@ -572,7 +573,7 @@ function renderModelTable() {
   const st = S();
 
   if (filteredList.length === 0) {
-    grid.innerHTML = '<div class="empty-state"><p>暂无可用模型</p></div>';
+    grid.innerHTML = '<div class="empty-state"><p>' + _t("暂无可用模型") + '</p></div>';
     return;
   }
 
@@ -588,11 +589,11 @@ function renderModelTable() {
 
     let statusHtml = "";
     if (isRunning) {
-      statusHtml = '<span class="status-badge status-running">已启动</span>';
+      statusHtml = '<span class="status-badge status-running">' + _t("已启动") + '</span>';
     } else if (available) {
-      statusHtml = '<span class="status-badge status-available">可用</span>';
+      statusHtml = '<span class="status-badge status-available">' + _t("可用") + '</span>';
     } else {
-      statusHtml = '<span class="status-badge status-unavailable">不可用</span>';
+      statusHtml = '<span class="status-badge status-unavailable">' + _t("不可用") + '</span>';
     }
 
     const partSize = st.partFiles[model.model_id];
@@ -605,42 +606,42 @@ function renderModelTable() {
     if (downloaded) {
       downloadBtnHtml = '';
     } else if (isDownloadingMmproj) {
-      downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" disabled>下载 mmproj...</button>';
+      downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" disabled>' + _t("下载 mmproj...") + '</button>';
     } else if (isDownloadingDiffusion) {
-      downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" disabled>下载 diffusion...</button>';
+      downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" disabled>' + _t("下载 diffusion...") + '</button>';
     } else if (isDownloadingVae) {
-      downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" disabled>下载 vae...</button>';
+      downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" disabled>' + _t("下载 vae...") + '</button>';
     } else if (downloadingProgress !== undefined) {
       downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" disabled>' + downloadingProgress + '%</button>';
     } else if (partSize && partSize > 0) {
-      downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-url="' + escapeHtml(model.model_url) + '" data-model-mmproj="' + escapeHtml(model.model_mmproj || '') + '" data-model-diffusion="' + escapeHtml(model.model_diffusion || '') + '" data-model-vae="' + escapeHtml(model.model_vae || '') + '" data-model-type="' + escapeHtml(model.model_type || '') + '" id="dl-' + safeModelId + '">继续下载</button>';
+      downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-url="' + escapeHtml(model.model_url) + '" data-model-mmproj="' + escapeHtml(model.model_mmproj || '') + '" data-model-diffusion="' + escapeHtml(model.model_diffusion || '') + '" data-model-vae="' + escapeHtml(model.model_vae || '') + '" data-model-type="' + escapeHtml(model.model_type || '') + '" id="dl-' + safeModelId + '">' + _t("继续下载") + '</button>';
     } else if (available) {
-      downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-url="' + escapeHtml(model.model_url) + '" data-model-mmproj="' + escapeHtml(model.model_mmproj || '') + '" data-model-diffusion="' + escapeHtml(model.model_diffusion || '') + '" data-model-vae="' + escapeHtml(model.model_vae || '') + '" data-model-type="' + escapeHtml(model.model_type || '') + '" id="dl-' + safeModelId + '">下载</button>';
+      downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-url="' + escapeHtml(model.model_url) + '" data-model-mmproj="' + escapeHtml(model.model_mmproj || '') + '" data-model-diffusion="' + escapeHtml(model.model_diffusion || '') + '" data-model-vae="' + escapeHtml(model.model_vae || '') + '" data-model-type="' + escapeHtml(model.model_type || '') + '" id="dl-' + safeModelId + '">' + _t("下载") + '</button>';
     } else {
-      downloadBtnHtml = '<button class="btn btn-download" disabled>下载</button>';
+      downloadBtnHtml = '<button class="btn btn-download" disabled>' + _t("下载") + '</button>';
     }
 
     let actionsHtml = "";
     if (isRunning) {
-actionsHtml = '<button class="btn btn-view" id="view-' + safeModelId + '">查看模型</button>';
-      actionsHtml += '<button class="btn btn-stop" data-stop-btn="' + safeModelId + '" id="stop-' + safeModelId + '">关闭模型</button>';
+actionsHtml = '<button class="btn btn-view" id="view-' + safeModelId + '">' + _t("查看模型") + '</button>';
+      actionsHtml += '<button class="btn btn-stop" data-stop-btn="' + safeModelId + '" id="stop-' + safeModelId + '">' + _t("关闭模型") + '</button>';
     } else if (model.model_type === "文本生成图片" && downloaded) {
-      actionsHtml = '<button class="btn btn-start" id="img-' + safeModelId + '">生成图片</button>';
+      actionsHtml = '<button class="btn btn-start" id="img-' + safeModelId + '">' + _t("生成图片") + '</button>';
     } else if (downloaded && available) {
-      actionsHtml = '<button class="btn btn-start" data-start-btn="' + safeModelId + '" id="start-' + safeModelId + '">启动</button>';
+      actionsHtml = '<button class="btn btn-start" data-start-btn="' + safeModelId + '" id="start-' + safeModelId + '">' + _t("启动") + '</button>';
     } else if (downloaded) {
-      actionsHtml = '<button class="btn btn-start" disabled>启动</button>';
+      actionsHtml = '<button class="btn btn-start" disabled>' + _t("启动") + '</button>';
     } else {
       actionsHtml = '';
     }
     if (downloaded && !isRunning) {
-      actionsHtml += '<button class="btn btn-delete" data-delete-btn="' + safeModelId + '">删除</button>';
+      actionsHtml += '<button class="btn btn-delete" data-delete-btn="' + safeModelId + '">' + _t("删除") + '</button>';
     }
 
     const features = [];
-    if (model.support_tools) features.push('<span class="feature-badge feature-supported">工具调用</span>');
-    if (model.support_reasoning) features.push('<span class="feature-badge feature-supported">推理</span>');
-    if (model.support_images) features.push('<span class="feature-badge feature-supported">图片识别</span>');
+    if (model.support_tools) features.push('<span class="feature-badge feature-supported">' + _t("工具调用") + '</span>');
+    if (model.support_reasoning) features.push('<span class="feature-badge feature-supported">' + _t("推理") + '</span>');
+    if (model.support_images) features.push('<span class="feature-badge feature-supported">' + _t("图片识别") + '</span>');
     const featuresHtml = features.length > 0 ? '<div class="card-features">' + features.join('') + '</div>' : '';
 
     const isDownloadingPhase = isDownloadingMmproj || isDownloadingDiffusion || isDownloadingVae;
@@ -649,7 +650,7 @@ actionsHtml = '<button class="btn btn-view" id="view-' + safeModelId + '">查看
 
     card.innerHTML =
       '<div class="card-header"><span class="model-name" title="' + safeModelId + '">' + escapeHtml(model.model_id) + '</span>' + statusHtml + '</div>' +
-      '<div class="card-meta">' + escapeHtml(model.model_type || '-') + ' · ' + escapeHtml(model.model_size) + ' · 需内存 ' + escapeHtml(model.need_ram) + ' GB</div>' +
+      '<div class="card-meta">' + escapeHtml(model.model_type || '-') + ' · ' + escapeHtml(model.model_size) + ' · ' + _t("需内存 ") + escapeHtml(model.need_ram) + _t(" GB") + '</div>' +
       featuresHtml +
       '<div class="card-actions">' + downloadBtnHtml + actionsHtml + '</div>' +
       '<div class="card-progress" data-progress-wrap="' + safeModelId + '" style="display:' + (progressVisible ? 'block' : 'none') + ';">' +
@@ -709,7 +710,7 @@ async function handleDownload(btn) {
   const modelType = btn.dataset.modelType || '';
   if (btn) {
     const hasPart = S().partFiles[modelId] && S().partFiles[modelId] > 0;
-    btn.textContent = hasPart ? "继续下载中..." : "0%";
+    btn.textContent = hasPart ? _t("继续下载中...") : "0%";
     btn.disabled = true;
   }
 
@@ -718,9 +719,9 @@ async function handleDownload(btn) {
     console.log("[model_list] 下载模型 invoke 完成:", modelId);
   } catch (e) {
     console.error("[model_list] 下载失败:", e);
-    showToast("下载失败: " + e);
+    showToast(_t("下载失败: ") + e);
     if (btn) {
-      btn.textContent = "下载";
+      btn.textContent = _t("下载");
       btn.disabled = false;
     }
   }
@@ -741,14 +742,14 @@ async function handleStart(btn) {
     const supportImages = model ? model.support_images : false;
     const modelFilename = model ? getUrlFilename(model.model_url) : null;
 
-    btn.textContent = "启动中...";
+    btn.textContent = _t("启动中...");
     btn.disabled = true;
 
     await invoke()("start_model", { modelId: modelId, params: params, supportImages: supportImages, modelFilename: modelFilename });
     console.log("[model_list] 启动模型 invoke 完成:", modelId);
   } catch (e) {
     console.error("[model_list] 启动失败:", e);
-    showToast("启动失败: " + e);
+    showToast(_t("启动失败: ") + e);
     renderModelTable();
   }
 }
@@ -761,7 +762,7 @@ async function handleStop(btn) {
     S().runningModelPort = null;
     renderModelTable();
   } catch (e) {
-    showToast("停止失败: " + e);
+    showToast(_t("停止失败: ") + e);
   }
 }
 
@@ -777,7 +778,7 @@ function goModel(modelId) {
 
 function showDeleteConfirm(modelId) {
   const modal = document.getElementById("delete-modal");
-  document.getElementById("delete-modal-msg").textContent = '确定要删除模型 "' + modelId + '" 吗？删除后无法恢复。';
+  document.getElementById("delete-modal-msg").textContent = _t("确定要删除模型 \"") + modelId + _t("\" 吗？删除后无法恢复。");
   modal.style.display = "flex";
   modal.dataset.modelId = modelId;
 }
@@ -794,7 +795,7 @@ async function handleDelete(modelId) {
     delete S().partFiles[modelId];
     renderModelTable();
   } catch (e) {
-    showToast("删除失败: " + e);
+    showToast(_t("删除失败: ") + e);
   }
 }
 
@@ -883,7 +884,7 @@ function handleTauriEvent(type, payload) {
           }
           st.downloadingMmproj[model_id] = true;
           const btn = document.querySelector('[data-model-id="' + model_id + '"]');
-          if (btn) { btn.textContent = "下载 mmproj..."; btn.disabled = true; }
+          if (btn) { btn.textContent = _t("下载 mmproj..."); btn.disabled = true; }
           updateProgressBar(model_id, 0);
         } else if (model && model.model_type === "文本生成图片") {
           if (local && mainFile) {
@@ -893,7 +894,7 @@ function handleTauriEvent(type, payload) {
           }
           delete st.partFiles[model_id];
           const btn = document.querySelector('[data-model-id="' + model_id + '"]');
-          if (btn) { btn.textContent = "下载 diffusion..."; btn.disabled = true; }
+          if (btn) { btn.textContent = _t("下载 diffusion..."); btn.disabled = true; }
           updateProgressBar(model_id, 0);
         } else {
           if (local && mainFile) {
@@ -909,7 +910,7 @@ function handleTauriEvent(type, payload) {
     }
     case "download-error": {
       delete st.downloadingModels[model_id];
-      showToast("下载失败 [" + model_id + "]: " + error);
+      showToast(_t("下载失败 [") + model_id + _t("]: ") + error);
       renderModelTable();
       break;
     }
@@ -929,7 +930,7 @@ case "model-started": {
       break;
     }
     case "model-error": {
-      showToast("模型错误 [" + model_id + "]: " + error);
+      showToast(_t("模型错误 [") + model_id + _t("]: ") + error);
       break;
     }
   }
@@ -989,7 +990,7 @@ if (status.running) {
   try {
     st.modelList = await invoke()("fetch_model_list");
   } catch (e) {
-    showToast("获取模型列表失败: " + e);
+    showToast(_t("获取模型列表失败: ") + e);
   }
 
   await populateTypeFilter();
