@@ -380,6 +380,11 @@ pub struct CloudProviderInput {
     /// 是否支持图片输入（视觉模型），默认 false
     #[serde(default)]
     pub supports_images: bool,
+    /// 是否开启思考模式（thinking mode）。为 true 时写入
+    /// models[0].can_reason / reasoning_levels / default_reasoning_effort，
+    /// 服务端会发送 reasoning_effort 并强制遵守 reasoning_content 回传规则；默认 false
+    #[serde(default)]
+    pub can_reason: bool,
 }
 
 /// 提取用户填写的模型ID：仅去首尾空白，不做任何大小写/字符转换（严格按用户填写写入）。
@@ -431,6 +436,18 @@ pub async fn add_cloud_provider(
     let key = slugify_provider_key(&input.name);
     let model_id = require_model_id(&input.model_id)?;
 
+    // 开启思考模式时补充推理档位元数据，服务端 effectiveReasoningEffort
+    // 才能解析出具体档位（与内置远程池模型保持一致）
+    let (can_reason, reasoning_levels, default_reasoning_effort) = if input.can_reason {
+        (
+            serde_json::json!(true),
+            serde_json::json!(["low", "medium", "high"]),
+            serde_json::json!("medium"),
+        )
+    } else {
+        (serde_json::json!(false), serde_json::Value::Null, serde_json::Value::Null)
+    };
+
     let provider = serde_json::json!({
         "name": input.name,
         "base_url": input.base_url,
@@ -441,7 +458,10 @@ pub async fn add_cloud_provider(
                 "id": model_id,
                 "name": input.name,
                 "context_window": input.context_window,
-                "supports_images": input.supports_images
+                "supports_images": input.supports_images,
+                "can_reason": can_reason,
+                "reasoning_levels": reasoning_levels,
+                "default_reasoning_effort": default_reasoning_effort
             }
         ]
     });
@@ -466,6 +486,8 @@ pub struct CloudProviderView {
     pub model_id: String,
     /// models[0].supports_images，是否支持图片输入
     pub supports_images: bool,
+    /// models[0].can_reason，是否开启思考模式
+    pub can_reason: bool,
 }
 
 /// 列出 admAgent.json 中已添加的全部云端模型 Provider（排除自动管理的 `local`）。
@@ -525,6 +547,12 @@ pub async fn list_cloud_providers(
                 .and_then(|m0| m0.get("supports_images"))
                 .and_then(|s| s.as_bool())
                 .unwrap_or(false);
+            let can_reason = prov
+                .get("models")
+                .and_then(|m| m.get(0))
+                .and_then(|m0| m0.get("can_reason"))
+                .and_then(|s| s.as_bool())
+                .unwrap_or(false);
             out.push(CloudProviderView {
                 key: key.clone(),
                 name,
@@ -533,6 +561,7 @@ pub async fn list_cloud_providers(
                 context_window,
                 model_id,
                 supports_images,
+                can_reason,
             });
         }
     }
@@ -599,6 +628,17 @@ pub async fn update_cloud_provider(
     }
 
     let model_id = require_model_id(&input.model_id)?;
+    // 开启思考模式时补充推理档位元数据，服务端 effectiveReasoningEffort
+    // 才能解析出具体档位（与内置远程池模型保持一致）
+    let (can_reason, reasoning_levels, default_reasoning_effort) = if input.can_reason {
+        (
+            serde_json::json!(true),
+            serde_json::json!(["low", "medium", "high"]),
+            serde_json::json!("medium"),
+        )
+    } else {
+        (serde_json::json!(false), serde_json::Value::Null, serde_json::Value::Null)
+    };
     let new_provider = serde_json::json!({
         "name": input.name,
         "base_url": input.base_url,
@@ -609,7 +649,10 @@ pub async fn update_cloud_provider(
                 "id": model_id,
                 "name": input.name,
                 "context_window": input.context_window,
-                "supports_images": input.supports_images
+                "supports_images": input.supports_images,
+                "can_reason": can_reason,
+                "reasoning_levels": reasoning_levels,
+                "default_reasoning_effort": default_reasoning_effort
             }
         ]
     });
