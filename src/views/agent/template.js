@@ -1429,6 +1429,9 @@ export const template = `
         <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--c-text-2);cursor:pointer;user-select:none;">
           <input type="checkbox" id="add-model-images" style="cursor:pointer;"> 支持图片输入（视觉模型）
         </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--c-text-2);cursor:pointer;user-select:none;">
+          <input type="checkbox" id="add-model-reasoning" style="cursor:pointer;"> 支持思考模式
+        </label>
         <div id="add-model-msg" style="font-size:12px;min-height:18px;line-height:18px;"></div>
         <button class="settings-btn settings-btn-primary" id="add-model-submit" style="align-self:flex-start;">添加</button>
       </div>
