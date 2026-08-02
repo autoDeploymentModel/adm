@@ -620,7 +620,6 @@
             return;
           }
         }
-        try { await invoke("prepare_adm_agent_config"); } catch (_) {}
         const running = await invoke("is_model_running");
         if (!running) {
           const ok = await showShellConfirm(t("当前未启动本地模型，进入 Agent 后可能无法使用本地模型对话。\n是否继续进入？"));

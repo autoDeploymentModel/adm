@@ -190,7 +190,6 @@ pub fn run() {
             // agent.rs - server mode
             agent::get_platform_os,
             agent::get_platform_arch,
-            agent::prepare_adm_agent_config,
             agent::check_adm_agent,
             agent::get_adm_agent_version,
             agent::get_agent_workdir,

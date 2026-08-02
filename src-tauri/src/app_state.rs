@@ -42,6 +42,8 @@ pub struct AppState {
     pub model_running: Mutex<bool>,
     /// 当前运行模型是否支持图片输入（启动时按 support_images + mmproj 文件实际加载判定）
     pub model_supports_images: Mutex<bool>,
+    /// 当前运行模型是否支持推理（启动时按 --reasoning 参数判定，on/auto 视为支持）
+    pub model_supports_reasoning: Mutex<bool>,
     /// 模型启动代次：每次成功启动模型 +1
     pub model_generation: Mutex<u64>,
 }
@@ -62,6 +64,7 @@ impl AppState {
             agent_start_lock: tokio::sync::Mutex::new(()),
             model_running: Mutex::new(false),
             model_supports_images: Mutex::new(false),
+            model_supports_reasoning: Mutex::new(false),
             model_generation: Mutex::new(0),
         }
     }
@@ -83,6 +86,7 @@ impl AppState {
         *self.running_port.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.model_running.lock().unwrap_or_else(|e| e.into_inner()) = false;
         *self.model_supports_images.lock().unwrap_or_else(|e| e.into_inner()) = false;
+        *self.model_supports_reasoning.lock().unwrap_or_else(|e| e.into_inner()) = false;
     }
 
     pub fn set_model_running(&self, running: bool) {
