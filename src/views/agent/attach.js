@@ -1,6 +1,6 @@
 // 附件处理：选择 / 压缩 / 预览
 import { S, invoke } from "./state.js";
-import { showError } from "./ui.js";
+import { showError, showInfo } from "./ui.js";
 import { getErrorMessage } from "./error.js";
 
 // ===== 附件处理 =====
@@ -234,6 +234,14 @@ export async function addPastedPaths(paths) {
     var mime = EXT_MIME[ext];
     // 先按扩展名拦截不支持格式，避免无谓读取（与选择器白名单一致）
     if (!(mime && isSupportedMime(mime)) && !IMAGE_EXT[ext]) {
+      // 目录：把路径作为文本插入输入框（复制文件夹后粘贴的常见场景），
+      // 方便直接告知模型文件所在目录；普通不支持的文件仍报错
+      var isDir = false;
+      try { isDir = !!(await invoke("is_directory", { path: path })); } catch (_) {}
+      if (isDir) {
+        insertPathText(path);
+        continue;
+      }
       showError("暂不支持该格式: " + path + "（支持文本/图片，如 txt、md、log、json、csv、代码等）");
       continue;
     }
@@ -288,6 +296,18 @@ export async function addPastedPaths(paths) {
       showError("暂不支持该格式: " + (res.name || path) + "（支持文本/图片，如 txt、md、log、json、csv、代码等）");
     }
   }
+}
+
+// 把目录路径作为文本插入输入框，让用户直接告诉模型文件所在目录
+function insertPathText(path) {
+  var input = /** @type {HTMLTextAreaElement} */ (document.getElementById("agent-input"));
+  if (!input) return;
+  var cur = input.value;
+  var sep = cur && !/\s$/.test(cur) ? " " : "";
+  input.value = cur + sep + path;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.focus();
+  showInfo("已把文件夹路径插入输入框: " + path);
 }
 
 // MIME 是否作为文本附件支持（与 isSupportedFile 对文本的判定一致）

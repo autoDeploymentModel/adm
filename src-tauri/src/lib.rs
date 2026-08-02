@@ -211,6 +211,7 @@ pub fn run() {
             agent::set_debug_logging,
             agent::open_debug_log_dir,
             agent::read_attachment_file,
+            agent::is_directory,
             agent::save_attachment_file,
             agent::read_clipboard_files,
             agent::read_project_memory,
