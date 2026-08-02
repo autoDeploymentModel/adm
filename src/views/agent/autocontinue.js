@@ -1,6 +1,7 @@
 // 自动续跑：本轮正常结束但 todos 未完成时，自动发送"继续"开新一轮。
 // 每轮新 prompt 会重置服务端所有 nudge 重试预算，等于把"推着模型干完"的
 // 预算按轮扩展；配进度守卫（连续无进展即停）与轮数上限防止无限烧 token。
+import { t as _t } from "../../i18n.js";
 import { S } from "./state.js";
 import { api } from "./api.js";
 import { generateRunId } from "./utils.js";
@@ -64,7 +65,7 @@ export async function maybeAutoContinue(data, runStats) {
   if (sid !== S.currentConvId) { resetAutoContinue(); return; }
 
   if (ac.rounds >= MAX_AUTO_ROUNDS) {
-    showError("自动续跑已达 " + MAX_AUTO_ROUNDS + " 轮上限，仍有 " + incomplete + " 项任务未完成，已停止。建议更换更强的模型后手动继续");
+    showError(_t("自动续跑已达 ") + MAX_AUTO_ROUNDS + _t(" 轮上限，仍有 ") + incomplete + _t(" 项任务未完成，已停止。建议更换更强的模型后手动继续"));
     resetAutoContinue();
     return;
   }
@@ -74,7 +75,7 @@ export async function maybeAutoContinue(data, runStats) {
   if (ac.lastIncomplete >= 0 && incomplete >= ac.lastIncomplete && !hasRealProgress) {
     ac.noProgress++;
     if (ac.noProgress >= MAX_NO_PROGRESS_ROUNDS) {
-      showError("自动续跑已停止：连续 " + MAX_NO_PROGRESS_ROUNDS + " 轮无进展（剩余 " + incomplete + " 项未完成）。建议更换模型或调整任务后手动继续");
+      showError(_t("自动续跑已停止：连续 ") + MAX_NO_PROGRESS_ROUNDS + _t(" 轮无进展（剩余 ") + incomplete + _t(" 项未完成）。建议更换模型或调整任务后手动继续"));
       resetAutoContinue();
       return;
     }
@@ -96,7 +97,7 @@ async function sendContinuePrompt(sessionId) {
   // 续跑轮也是新 run：重置运行统计，供本轮假完成检测与下一轮进度判定使用
   S.runStats = {
     sessionId: sessionId,
-    prompt: "任务清单还有未完成项，请继续完成剩余的 todos；每完成一项立即用 todos 工具标记，全部完成后再结束。",
+    prompt: _t("任务清单还有未完成项，请继续完成剩余的 todos；每完成一项立即用 todos 工具标记，全部完成后再结束。"),
     toolCalls: 0,
     sideEffectCalls: 0,
     sideEffectSuccess: 0,
@@ -108,7 +109,7 @@ async function sendContinuePrompt(sessionId) {
   try {
     await api("POST", "/v1/workspaces/" + workspaceId + "/agent", {
       session_id: sessionId,
-      prompt: "任务清单还有未完成项，请继续完成剩余的 todos；每完成一项立即用 todos 工具标记，全部完成后再结束。",
+      prompt: _t("任务清单还有未完成项，请继续完成剩余的 todos；每完成一项立即用 todos 工具标记，全部完成后再结束。"),
       run_id: runId,
     });
     startSendSafetyTimer();
@@ -119,7 +120,7 @@ async function sendContinuePrompt(sessionId) {
     updateSendButton();
     clearSendSafetyTimer();
     updateStatusBar("ready", null, S.contextUsage.used);
-    reportError(e, { prefix: "自动续跑发送失败: " });
+    reportError(e, { prefix: _t("自动续跑发送失败: ") });
     resetAutoContinue();
   }
 }

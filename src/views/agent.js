@@ -1,6 +1,7 @@
 // Agent SPA 视图入口 —— 会话列表 + 聊天界面 + 设置弹窗（HTTP API + SSE 驱动）
 // 模板 / 共享状态 / 各功能逻辑拆分在 ./agent/ 子模块（原生 ESM，无编译步骤）
 
+import { t as _t } from "../i18n.js";
 import { template } from "./agent/template.js";
 import { S, invoke, listen } from "./agent/state.js";
 import { api } from "./agent/api.js";
@@ -39,12 +40,12 @@ async function init() {
   try {
     var agentCheck = await invoke("check_adm_agent");
     if (!agentCheck || !agentCheck.exists) {
-      showError("未找到 admAgent 组件（应随安装包内置），请重新安装 ADM");
+      showError(_t("未找到 admAgent 组件（应随安装包内置），请重新安装 ADM"));
       updateStatusBar("error", null, 0);
       return;
     }
   } catch (e) {
-    reportError(e, { prefix: "检查 admAgent 失败: " });
+    reportError(e, { prefix: _t("检查 admAgent 失败: ") });
     updateStatusBar("error", null, 0);
     return;
   }
@@ -61,13 +62,13 @@ async function init() {
       console.log("[agent] Agent 服务已启动, port:", S.serverInfo?.port);
       } catch (e) {
         console.error("[agent] 启动 Agent 服务失败:", e);
-        reportError(e, { prefix: "启动 Agent 服务失败: " });
+        reportError(e, { prefix: _t("启动 Agent 服务失败: ") });
         updateStatusBar("error", null, 0);
         return;
       }
     }
   } catch (e) {
-    reportError(e, { prefix: "检查 Agent 服务状态失败: " });
+    reportError(e, { prefix: _t("检查 Agent 服务状态失败: ") });
     updateStatusBar("error", null, 0);
     return;
   }
@@ -104,12 +105,12 @@ async function init() {
         S.workspaceInfo = { path: workdir, name: workdir.split(/[\\/]/).pop() };
       }
     } else {
-      S.workspaceInfo = { path: "默认", name: "默认工作区" };
+      S.workspaceInfo = { path: "默认", name: _t("默认工作区") };
     }
     updateWorkspaceSelector();
     updateStatusBar("ready", workdir, 0);
   } catch (_) {
-    S.workspaceInfo = { path: "默认", name: "默认工作区" };
+    S.workspaceInfo = { path: "默认", name: _t("默认工作区") };
   }
   if (seq !== S.initSeq) return;
 
@@ -268,7 +269,7 @@ async function handleServerDied() {
   if (serverRestarting) return;
   serverRestarting = true;
   console.warn("[agent] admAgent server 意外退出，自动重启中...");
-  showError("admAgent 服务异常退出，正在自动重启...");
+  showError(_t("admAgent 服务异常退出，正在自动重启..."));
   S.isSending = false;
   S.activeRun = null;
   S.queuedRun = null;
@@ -279,7 +280,7 @@ async function handleServerDied() {
     await init();
   } catch (e) {
     console.error("[agent] admAgent 自动重启失败:", e);
-    reportError(e, { prefix: "admAgent 自动重启失败: " });
+    reportError(e, { prefix: _t("admAgent 自动重启失败: ") });
   } finally {
     serverRestarting = false;
   }
@@ -306,7 +307,7 @@ function bindEvents() {
         var st = null;
         try { st = await invoke("get_ilink_status"); } catch (_) {}
         if (!st || !st.bound || st.state !== "running") {
-          showConfirm("微信 Bot 服务未启动。请先到「设置 → 微信 Bot」扫码绑定并启动服务，再开启微信消息接收。", function() {});
+          showConfirm(_t("微信 Bot 服务未启动。请先到「设置 → 微信 Bot」扫码绑定并启动服务，再开启微信消息接收。"), function() {});
           return; // 不打开开关
         }
       }
@@ -315,7 +316,7 @@ function bindEvents() {
         await invoke("set_ilink_follow", { enabled: turningOn });
       } catch (e) {
         wxBtn.classList.toggle("on", !turningOn); // 失败回滚显示
-        reportError(e, { prefix: "切换微信消息开关失败: " });
+        reportError(e, { prefix: _t("切换微信消息开关失败: ") });
       }
     });
   })();
@@ -358,7 +359,7 @@ function bindEvents() {
     try {
       await invoke("open_debug_log_dir");
     } catch (e) {
-      reportError(e, { prefix: "打开日志目录失败: " });
+      reportError(e, { prefix: _t("打开日志目录失败: ") });
     }
   });
 
@@ -385,7 +386,7 @@ function bindEvents() {
       console.warn("[agent] 切换调试日志失败:", e);
       S.settings.debug_logging = false;
       $input("settings-debug-logging").checked = false;
-      reportError(e, { prefix: "开启调试日志失败: " });
+      reportError(e, { prefix: _t("开启调试日志失败: ") });
     }
     await saveSettings();
     await syncModeToServer();
@@ -393,7 +394,7 @@ function bindEvents() {
     updateModelBtn();
     var selectedKey = S.settings.agent_default_provider || "local";
     var resolved = resolveAgentModel(selectedKey);
-    var displayName = selectedKey === "local" ? "本地模型" : (S.providers.find(function(p) { return p.key === selectedKey; }) || {}).name || selectedKey;
+    var displayName = selectedKey === "local" ? _t("本地模型") : (S.providers.find(function(p) { return p.key === selectedKey; }) || {}).name || selectedKey;
     if (resolved && resolved.model) {
       await switchModel(selectedKey, displayName, resolved.context_window || 0);
     }
@@ -545,10 +546,10 @@ function bindEvents() {
   // 标题栏操作按钮
   document.getElementById("agent-undo-btn").addEventListener("click", function() {
     if (!S.currentConvId) return;
-    showConfirm("确定撤销上一轮对话？此操作会回退上一轮产生的消息与文件修改。", function() {
+    showConfirm(_t("确定撤销上一轮对话？此操作会回退上一轮产生的消息与文件修改。"), function() {
       api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent/sessions/" + S.currentConvId + "/undo")
         .then(function() { selectConversation(S.currentConvId); })
-        .catch(function(e) { reportError(e, { prefix: "撤销失败: " }); });
+        .catch(function(e) { reportError(e, { prefix: _t("撤销失败: ") }); });
     });
   });
 
@@ -657,7 +658,7 @@ function showProjectInitDialog() {
   // 显示初始化引导提示
   var initDiv = document.createElement("div");
   initDiv.style.cssText = "background:rgba(var(--c-accent-rgb),0.1);border:1px solid var(--c-accent);border-radius:8px;padding:12px;margin-bottom:16px;";
-  initDiv.innerHTML = "<strong>� 项目初始化</strong><p style='margin-top:4px;font-size:12px;color:var(--c-text-2);'>检测到项目需要初始化，建议运行初始化流程以启用完整功能。</p>";
+  initDiv.innerHTML = "<strong>⚙ " + _t("项目初始化") + "</strong><p style='margin-top:4px;font-size:12px;color:var(--c-text-2);'>" + _t("检测到项目需要初始化，建议运行初始化流程以启用完整功能。") + "</p>";
   body.insertBefore(initDiv, body.firstChild);
 }
 
@@ -686,7 +687,7 @@ export default {
     // init 是 fire-and-forget，必须兜底 catch，否则任何未捕获异常都是静默死亡（表现为页面空白无报错）
     init().catch(function(e) {
       console.error("[agent] init() 未捕获异常:", e);
-      reportError(e, { prefix: "Agent 页面初始化失败: " });
+      reportError(e, { prefix: _t("Agent 页面初始化失败: ") });
     });
   },
   unmount() {

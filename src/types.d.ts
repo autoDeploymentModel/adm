@@ -39,11 +39,19 @@ declare global {
       currentTypeFilter: string;
       [key: string]: any;
     };
-    /** index.html 暴露的更新弹窗控制 */
+    /** index.html 暴露的更新弹窗控制 + i18n */
     ADM: {
       showUpdateDialog: (html: string) => void;
       hideUpdateDialog: () => void;
       checkForUpdate: (silent?: boolean) => Promise<void>;
+      i18n?: {
+        t: (str: string) => string;
+        tV: (str: string, vars?: Record<string, string | number>) => string;
+        setLanguage: (l: string) => void;
+        getLanguage: () => string;
+        syncLanguageFromSettings: (settings: any) => void;
+        applyToDOM: (root: any) => void;
+      };
     };
     __TAURI__?: any;
     __TAURI_INTERNALS__?: any;

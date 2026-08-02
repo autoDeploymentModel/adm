@@ -1,4 +1,5 @@
 // 消息渲染（增量 DOM 对齐）与 Todo 列表
+import { t as _t } from "../../i18n.js";
 import { S } from "./state.js";
 import { renderMarkdown, formatTime } from "./utils.js";
 import { updateScrollBottomBtn } from "./ui.js";
@@ -82,7 +83,7 @@ export function renderMessages() {
     // syncWorkingIndicator 会按 isSending 负责创建/移动/移除，这里只需避免重复重建空态外壳。
     if (!area.querySelector(".empty-state")) {
       var indicator = document.getElementById("agent-working-indicator");
-      area.innerHTML = '<div class="empty-state"><span class="empty-state-icon">🤖</span><span class="empty-state-text">开始一个新的对话</span></div>';
+      area.innerHTML = '<div class="empty-state"><span class="empty-state-icon">🤖</span><span class="empty-state-text">' + _t("开始一个新的对话") + '</span></div>';
       if (indicator) area.appendChild(indicator); // innerHTML 会清掉旧指示器，运行中需保留
     }
     syncWorkingIndicator(area);
@@ -159,20 +160,20 @@ export function syncWorkingIndicator(area) {
       indicator.id = "agent-working-indicator";
       indicator.innerHTML =
         '<span class="working-indicator-dot"></span>' +
-        '<span class="working-indicator-text">正在工作' +
+        '<span class="working-indicator-text">' + _t("正在工作") + +
           '<span class="working-indicator-dots"><span></span><span></span><span></span>' +
         '</span></span>';
     }
     // 排队中（本会话消息已入队、尚未开始执行）时文案改为「排队中」，避免误读为正在产出
     if (S.queuedRun && S.queuedRun.sessionId === S.currentConvId) {
       var textEl = indicator.querySelector(".working-indicator-text");
-      if (textEl && textEl.firstChild && textEl.firstChild.nodeValue !== "排队中") {
-        textEl.firstChild.nodeValue = "排队中";
+      if (textEl && textEl.firstChild && textEl.firstChild.nodeValue !== _t("排队中")) {
+        textEl.firstChild.nodeValue = _t("排队中");
       }
     } else {
       var textEl2 = indicator.querySelector(".working-indicator-text");
-      if (textEl2 && textEl2.firstChild && textEl2.firstChild.nodeValue !== "正在工作") {
-        textEl2.firstChild.nodeValue = "正在工作";
+      if (textEl2 && textEl2.firstChild && textEl2.firstChild.nodeValue !== _t("正在工作")) {
+        textEl2.firstChild.nodeValue = _t("正在工作");
       }
     }
     if (area.lastElementChild !== indicator) area.appendChild(indicator);
@@ -241,30 +242,30 @@ function updateMessageNode(el, msg) {
         break;
       case "tool_call":
         var ts = pe.firstElementChild; // summary
-        if (ts) ts.textContent = "🔧 " + (d.name || "tool") + (d.finished !== false ? " (已完成)" : " (执行中)");
+        if (ts) ts.textContent = "🔧 " + (d.name || "tool") + (d.finished !== false ? _t(" (已完成)") : _t(" (执行中)"));
         var ti = pe.lastElementChild;
         if (ti && ti.tagName !== "SUMMARY") {
-          try { ti.textContent = "输入: " + JSON.stringify(JSON.parse(d.input || "{}"), null, 2); }
-          catch (_) { ti.textContent = "输入: " + (d.input || ""); }
+          try { ti.textContent = _t("输入: ") + JSON.stringify(JSON.parse(d.input || "{}"), null, 2); }
+          catch (_) { ti.textContent = _t("输入: ") + (d.input || ""); }
         }
         break;
       case "tool_result":
         var rs = pe.firstElementChild; // summary
         if (rs) {
-          rs.textContent = (d.is_error ? "❌ " : "✅ ") + (d.name || "tool") + " 结果";
+          rs.textContent = (d.is_error ? "❌ " : "✅ ") + (d.name || "tool") + " " + _t("结果");
           rs.style.color = d.is_error ? "#ff6b6b" : "#43a047";
         }
         var rc = pe.lastElementChild;
         if (rc && rc.tagName !== "SUMMARY") rc.textContent = d.content || d.data || "";
         break;
       case "finish":
-        pe.textContent = "── " + (d.reason || "完成") + " ──";
+        pe.textContent = "── " + (d.reason || _t("完成")) + " ──";
         break;
       case "image_url":
         if (pe.getAttribute("src") !== (d.url || "")) pe.setAttribute("src", d.url || "");
         break;
       case "binary":
-        pe.textContent = "📎 附件: " + (d.path || d.Path || "file") + " (" + (d.mime_type || d.MIMEType || "unknown") + ")";
+        pe.textContent = "📎 " + _t("附件: ") + (d.path || d.Path || "file") + " (" + (d.mime_type || d.MIMEType || "unknown") + ")";
         break;
       default:
         // shell_command / 未知类型：内部结构随数据变化，仅重建该 part 元素（无 details，不影响点击）
@@ -310,7 +311,7 @@ function buildPartElement(part, partIdx, role, msgKey) {
       details.className = "msg-reasoning";
       details.setAttribute("data-key", partKey);
       var summary = document.createElement("summary");
-      summary.textContent = "💭 推理过程";
+      summary.textContent = "💭 " + _t("推理过程");
       summary.style.cssText = "cursor:pointer;font-size:12px;color:var(--c-text-3);";
       details.appendChild(summary);
       var reasoningContent = document.createElement("div");
@@ -325,15 +326,15 @@ function buildPartElement(part, partIdx, role, msgKey) {
       toolDetails.setAttribute("data-key", partKey);
       var toolSummary = document.createElement("summary");
       var finished = partData.finished !== false;
-      toolSummary.textContent = "🔧 " + (partData.name || "tool") + (finished ? " (已完成)" : " (执行中)");
+      toolSummary.textContent = "🔧 " + (partData.name || "tool") + (finished ? _t(" (已完成)") : _t(" (执行中)"));
       toolSummary.style.cssText = "cursor:pointer;font-size:12px;color:var(--c-text-3);";
       toolDetails.appendChild(toolSummary);
       var toolInput = document.createElement("div");
       toolInput.style.cssText = "padding:8px;font-family:monospace;font-size:11px;color:var(--c-text-2);white-space:pre-wrap;background:var(--c-bg-deep);border-radius:4px;margin-top:4px;";
       try {
-        toolInput.textContent = "输入: " + JSON.stringify(JSON.parse(partData.input || "{}"), null, 2);
+        toolInput.textContent = _t("输入: ") + JSON.stringify(JSON.parse(partData.input || "{}"), null, 2);
       } catch (_) {
-        toolInput.textContent = "输入: " + (partData.input || "");
+        toolInput.textContent = _t("输入: ") + (partData.input || "");
       }
       toolDetails.appendChild(toolInput);
       return toolDetails;
@@ -344,7 +345,7 @@ function buildPartElement(part, partIdx, role, msgKey) {
       resultDetails.setAttribute("data-key", partKey);
       var resultSummary = document.createElement("summary");
       var isError = partData.is_error;
-      resultSummary.textContent = (isError ? "❌ " : "✅ ") + (partData.name || "tool") + " 结果";
+      resultSummary.textContent = (isError ? "❌ " : "✅ ") + (partData.name || "tool") + " " + _t("结果");
       resultSummary.style.cssText = "cursor:pointer;font-size:12px;color:" + (isError ? "#ff6b6b" : "#43a047") + ";";
       resultDetails.appendChild(resultSummary);
       var resultContent = document.createElement("div");
@@ -358,7 +359,7 @@ function buildPartElement(part, partIdx, role, msgKey) {
       var finishDiv = document.createElement("div");
       finishDiv.className = "msg-finish";
       finishDiv.style.cssText = "border-top:1px solid var(--c-border);padding-top:4px;margin-top:4px;font-size:11px;color:var(--c-text-4);";
-      var reason = partData.reason || "完成";
+      var reason = partData.reason || _t("完成");
       finishDiv.textContent = "── " + reason + " ──";
       return finishDiv;
 
@@ -379,7 +380,7 @@ function buildPartElement(part, partIdx, role, msgKey) {
       if (partData.exit_code !== undefined) {
         var exitDiv = document.createElement("div");
         exitDiv.style.cssText = "color:var(--c-text-4);margin-top:4px;";
-        exitDiv.textContent = "退出码: " + partData.exit_code;
+        exitDiv.textContent = _t("退出码: ") + partData.exit_code;
         shellDiv.appendChild(exitDiv);
       }
       return shellDiv;
@@ -393,7 +394,7 @@ function buildPartElement(part, partIdx, role, msgKey) {
     case "binary":
       var binDiv = document.createElement("div");
       binDiv.style.cssText = "font-size:12px;color:var(--c-text-3);padding:4px 0;";
-      binDiv.textContent = "📎 附件: " + (partData.path || partData.Path || "file") + " (" + (partData.mime_type || partData.MIMEType || "unknown") + ")";
+      binDiv.textContent = "📎 " + _t("附件: ") + (partData.path || partData.Path || "file") + " (" + (partData.mime_type || partData.MIMEType || "unknown") + ")";
       return binDiv;
 
     default:

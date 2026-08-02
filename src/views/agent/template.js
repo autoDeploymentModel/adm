@@ -1,4 +1,5 @@
 // Agent 视图模板（含 <style>，选择器统一 .agent-/agent- 前缀 + .agent-root 容器）
+import { t as _t } from "../../i18n.js";
 export const template = `
 <style>
   /* 全局 reset（*）由 index.html 壳层统一提供，视图内不重复定义；选择器统一 agent- 前缀 */
@@ -1186,12 +1187,12 @@ export const template = `
       <!-- ① session-block: 新建会话 + 会话列表 (内部滚动) -->
       <div class="session-block">
         <div class="sidebar-header">
-          <button class="new-chat-btn" id="agent-new-chat">＋ 新建会话</button>
+          <button class="new-chat-btn" id="agent-new-chat">＋ ${_t("新建会话")}</button>
         </div>
         <!-- 会话视图切换: ★当前对话 / ●全部对话 -->
         <div class="session-toggle" id="agent-session-toggle">
-          <span class="toggle-item active" data-mode="current">★ 当前对话</span>
-          <span class="toggle-item" data-mode="all">● 全部对话</span>
+          <span class="toggle-item active" data-mode="current">★ ${_t("当前对话")}</span>
+          <span class="toggle-item" data-mode="all">● ${_t("全部对话")}</span>
         </div>
         <!-- 会话列表 (内部滚动) -->
         <div class="conv-list-section" id="agent-conv-list">
@@ -1201,7 +1202,7 @@ export const template = `
       <!-- ② tools-block: Skills/MCP/LSP (固定高度, 内部滚动, tab 切换) -->
       <div class="tools-section" id="agent-tools-section">
         <div class="tools-header">
-          <span>工具</span>
+          <span>${_t("工具")}</span>
           <span class="tools-count" id="agent-tools-count">0</span>
         </div>
         <div class="tools-tabs" id="agent-tools-tabs">
@@ -1217,11 +1218,11 @@ export const template = `
       <div class="sidebar-footer">
         <div class="workspace-selector" id="agent-workspace-selector">
           <span class="workspace-icon">📁</span>
-          <span class="workspace-name" id="agent-workspace-name">默认工作区</span>
+          <span class="workspace-name" id="agent-workspace-name">${_t("默认工作区")}</span>
         </div>
         <button class="settings-btn-sidebar" id="agent-settings-btn">
           <span>⚙</span>
-          <span>设置</span>
+          <span>${_t("设置")}</span>
         </button>
       </div>
     </div>
@@ -1231,9 +1232,9 @@ export const template = `
       <!-- 会话标题栏 (状态 · 操作) -->
       <div class="chat-header">
         <span class="chat-header-status" id="agent-header-status"></span>
-        <span class="chat-header-title" id="agent-conv-title">选择或创建一个会话</span>
+        <span class="chat-header-title" id="agent-conv-title">${_t("选择或创建一个会话")}</span>
         <div class="chat-header-actions">
-          <button class="icon-btn" id="agent-undo-btn" title="撤销上一轮对话" disabled><span>↶</span><span>撤销上一轮对话</span></button>
+          <button class="icon-btn" id="agent-undo-btn" title="${_t("撤销上一轮对话")}" disabled><span>↶</span><span>${_t("撤销上一轮对话")}</span></button>
         </div>
       </div>
 
@@ -1242,17 +1243,17 @@ export const template = `
         <div class="msg-area" id="agent-msg-area">
           <div class="empty-state">
             <span class="empty-state-icon">🤖</span>
-            <span class="empty-state-text">开始一个新的对话</span>
+            <span class="empty-state-text">${_t("开始一个新的对话")}</span>
           </div>
         </div>
         <!-- 回到底部悬浮圆球 -->
-        <button class="scroll-bottom-btn" id="agent-scroll-bottom-btn" title="滚动到底部">↓</button>
+        <button class="scroll-bottom-btn" id="agent-scroll-bottom-btn" title="${_t("滚动到底部")}">↓</button>
       </div>
 
       <!-- Todo 固定面板（有 todos 时显示，实时反映完成状态） -->
       <div class="todos-panel" id="agent-todos-panel" style="display:none;">
         <div class="todos-panel-header" id="agent-todos-header">
-          <span>📋 任务清单<span class="todos-panel-progress" id="agent-todos-progress"></span></span>
+          <span>📋 ${_t("任务清单")}<span class="todos-panel-progress" id="agent-todos-progress"></span></span>
           <span class="todos-panel-toggle">▾</span>
         </div>
         <div class="todos-panel-list" id="agent-todos-list"></div>
@@ -1260,15 +1261,15 @@ export const template = `
 
       <!-- 输入框区域: textarea 在上, 工具栏在下 -->
       <div class="input-area">
-        <textarea class="input-textarea" id="agent-input" placeholder="输入消息... (Enter 发送, Shift+Enter 换行)" rows="1"></textarea>
+        <textarea class="input-textarea" id="agent-input" placeholder="${_t("输入消息... (Enter 发送, Shift+Enter 换行)")}" rows="1"></textarea>
         <!-- 附件预览区 -->
         <div class="attach-preview-area" id="agent-attach-preview"></div>
         <!-- 底部工具栏: ⚡Agent | 模型▾ | 上下文用量 | 📎 📤发送 -->
         <div class="agent-input-toolbar">
           <!-- ① 工作模式切换：执行 ↔ Plan（只读计划） -->
-          <button class="toolbar-mode-btn" id="agent-mode-toggle" title="点击切换 Plan 模式（只读调研并产出计划，不修改文件）">
+          <button class="toolbar-mode-btn" id="agent-mode-toggle" title="${_t("点击切换 Plan 模式（只读调研并产出计划，不修改文件）")}">
             <span class="mode-icon">⚡</span>
-            <span class="mode-text">执行</span>
+            <span class="mode-text">${_t("执行")}</span>
           </button>
           <!-- ② 模型选择下拉 -->
           <div class="toolbar-model-selector">
@@ -1280,9 +1281,9 @@ export const template = `
             </div>
           </div>
           <!-- ②b 微信消息开关：开 = 微信 Bot 消息进入当前打开的会话；关 = 不接收微信消息 -->
-          <button class="toolbar-wx-btn" id="agent-wx-follow-btn" title="微信消息开关：开启后微信 Bot 消息进入当前打开的会话；关闭后不再接收微信消息">
+          <button class="toolbar-wx-btn" id="agent-wx-follow-btn" title="${_t("微信消息开关：开启后微信 Bot 消息进入当前打开的会话；关闭后不再接收微信消息")}">
             <span class="wx-icon">💬</span>
-            <span class="wx-text">微信</span>
+            <span class="wx-text">${_t("微信")}</span>
           </button>
           <!-- ③ 上下文用量 -->
           <div class="toolbar-context-usage" id="agent-context-usage">
@@ -1292,8 +1293,8 @@ export const template = `
           </div>
           <!-- ④ 附件与发送 -->
           <div class="toolbar-actions">
-            <button class="toolbar-attach-btn" id="agent-attach-btn" title="添加附件">📎</button>
-            <button class="toolbar-send-btn" id="agent-send-btn">📤 发送</button>
+            <button class="toolbar-attach-btn" id="agent-attach-btn" title="${_t("添加附件")}">📎</button>
+            <button class="toolbar-send-btn" id="agent-send-btn">📤 ${_t("发送")}</button>
           </div>
         </div>
       </div>
@@ -1303,10 +1304,10 @@ export const template = `
   <!-- 底部状态栏: Agent 状态 · 工作区路径 · Token 统计 -->
   <div class="agent-status-bar">
     <span class="status-item" id="agent-status-state">
-      <span class="status-state-dot ready"></span>就绪
+      <span class="status-state-dot ready"></span>${_t("就绪")}
     </span>
     <span class="status-separator">·</span>
-    <span class="status-item" id="agent-status-workdir">工作区: --</span>
+    <span class="status-item" id="agent-status-workdir">${_t("工作区: --")}</span>
     <span class="status-separator">·</span>
     <span class="status-item" id="agent-status-tokens">Token: 0</span>
   </div>
@@ -1316,62 +1317,62 @@ export const template = `
 <div class="settings-overlay" id="agent-settings-overlay">
   <div class="settings-modal">
     <div class="settings-header">
-      <span class="settings-title">Agent 设置</span>
+      <span class="settings-title">${_t("Agent 设置")}</span>
       <button class="settings-close" id="agent-settings-close">✕</button>
     </div>
     <div class="settings-body">
 
       <!-- 基础设置 -->
       <div class="param-group">
-        <div class="param-group-title">基础设置</div>
+        <div class="param-group-title">${_t("基础设置")}</div>
         <div class="param-row">
-          <div class="param-label">工作目录</div>
+          <div class="param-label">${_t("工作目录")}</div>
           <div class="param-input">
             <div class="workdir-row">
-              <input type="text" class="settings-input" id="settings-workdir" placeholder="选择工作目录">
-              <button class="browse-btn" id="settings-browse-btn">浏览…</button>
+              <input type="text" class="settings-input" id="settings-workdir" placeholder="${_t("选择工作目录")}">
+              <button class="browse-btn" id="settings-browse-btn">${_t("浏览…")}</button>
             </div>
-            <div class="param-desc">Agent 操作文件的根目录</div>
+            <div class="param-desc">${_t("Agent 操作文件的根目录")}</div>
           </div>
         </div>
         <div class="param-row">
-          <div class="param-label">Plan 模式</div>
+          <div class="param-label">${_t("Plan 模式")}</div>
           <div class="param-input">
             <div class="checkbox-wrap">
               <input type="checkbox" id="settings-plan">
-              <span>只读计划模式</span>
+              <span>${_t("只读计划模式")}</span>
             </div>
-            <div class="param-desc">开启后 Agent 只能读取/检索代码并产出实施计划，不会修改任何文件；关闭则为执行模式（直接执行修改）</div>
+            <div class="param-desc">${_t("开启后 Agent 只能读取/检索代码并产出实施计划，不会修改任何文件；关闭则为执行模式（直接执行修改）")}</div>
           </div>
         </div>
         <div class="param-row">
-          <div class="param-label">自动续跑</div>
+          <div class="param-label">${_t("自动续跑")}</div>
           <div class="param-input">
             <div class="checkbox-wrap">
               <input type="checkbox" id="settings-auto-continue">
-              <span>任务未完成自动继续</span>
+              <span>${_t("任务未完成自动继续")}</span>
             </div>
-            <div class="param-desc">本轮结束时若任务清单仍有未完成项，自动发送“继续”推进（最多 10 轮，连续 2 轮无进展自动停止）</div>
+            <div class="param-desc">${_t("本轮结束时若任务清单仍有未完成项，自动发送“继续”推进（最多 10 轮，连续 2 轮无进展自动停止）")}</div>
           </div>
         </div>
         <div class="param-row">
-          <div class="param-label">调试模式</div>
+          <div class="param-label">${_t("调试模式")}</div>
           <div class="param-input">
             <div class="checkbox-wrap">
               <input type="checkbox" id="settings-debug-logging">
-              <span>记录调试日志</span>
-              <button type="button" class="browse-btn" id="settings-open-log-dir" style="margin-left:auto;">打开日志目录</button>
+              <span>${_t("记录调试日志")}</span>
+              <button type="button" class="browse-btn" id="settings-open-log-dir" style="margin-left:auto;">${_t("打开日志目录")}</button>
             </div>
-            <div class="param-desc">开启后在 app 数据目录写入 adm_api_debug.log（记录与 admAgent 的关键 API/事件交互，含你发送的消息正文，供排查对话中断）；关闭或重启软件会自动清空日志</div>
+            <div class="param-desc">${_t("开启后在 app 数据目录写入 adm_api_debug.log（记录与 admAgent 的关键 API/事件交互，含你发送的消息正文，供排查对话中断）；关闭或重启软件会自动清空日志")}</div>
           </div>
         </div>
       </div>
 
       <!-- 模型配置 -->
       <div class="param-group">
-        <div class="param-group-title">模型配置</div>
+        <div class="param-group-title">${_t("模型配置")}</div>
         <div class="param-row">
-          <div class="param-label">推理强度</div>
+          <div class="param-label">${_t("推理强度")}</div>
           <div class="param-input">
             <select class="settings-select" id="settings-reasoning-effort">
               <option value="low">low</option>
@@ -1381,21 +1382,21 @@ export const template = `
           </div>
         </div>
         <div class="param-row">
-          <div class="param-label">采样温度</div>
+          <div class="param-label">${_t("采样温度")}</div>
           <div class="param-input">
-            <input type="number" class="settings-input" id="settings-temperature" placeholder="留空使用默认" step="0.1" min="0" max="2">
+            <input type="number" class="settings-input" id="settings-temperature" placeholder="${_t("留空使用默认")}" step="0.1" min="0" max="2">
           </div>
         </div>
       </div>
 
       <!-- 项目记忆（跨会话持久记忆，只读展示） -->
       <div class="param-group">
-        <div class="param-group-title">项目记忆</div>
-        <div class="param-desc" style="margin-bottom:6px;">Agent 跨会话自动沉淀的持久约束与决策（保存在 workspace 的 project_memory.json，随上下文压缩自动更新，仅展示不可修改）</div>
+        <div class="param-group-title">${_t("项目记忆")}</div>
+        <div class="param-desc" style="margin-bottom:6px;">${_t("Agent 跨会话自动沉淀的持久约束与决策（保存在 workspace 的 project_memory.json，随上下文压缩自动更新，仅展示不可修改）")}</div>
         <div class="memory-collapse" id="agent-memory-collapse">
           <div class="memory-collapse-header" id="agent-memory-toggle">
             <span class="memory-collapse-arrow">▶</span>
-            <span>查看项目记忆</span>
+            <span>${_t("查看项目记忆")}</span>
             <span class="memory-count" id="agent-memory-count"></span>
           </div>
           <div class="memory-collapse-body" id="agent-memory-body"></div>
@@ -1404,9 +1405,9 @@ export const template = `
 
       <!-- 云端模型管理 -->
       <div class="param-group">
-        <div class="param-group-title">云端模型管理</div>
+        <div class="param-group-title">${_t("云端模型管理")}</div>
         <div class="provider-list" id="provider-list"></div>
-        <button class="btn-add-cloud" id="agent-add-cloud-btn">+ 添加云端模型</button>
+        <button class="btn-add-cloud" id="agent-add-cloud-btn">+ ${_t("添加云端模型")}</button>
       </div>
     </div>
   </div>
@@ -1416,24 +1417,24 @@ export const template = `
 <div class="add-model-overlay" id="agent-add-model-overlay">
   <div class="settings-modal" style="width:440px;">
     <div class="settings-header">
-      <span class="settings-title" id="add-model-title">添加云端模型</span>
+      <span class="settings-title" id="add-model-title">${_t("添加云端模型")}</span>
       <button class="settings-close" id="agent-add-model-close">✕</button>
     </div>
     <div class="settings-body">
       <div class="param-row" style="flex-direction:column;gap:6px;">
-        <input type="text" class="settings-input" id="add-model-modelid" placeholder="模型ID (如 Big Pickle)">
-        <input type="text" class="settings-input" id="add-model-name" placeholder="模型名称 (可选, 默认使用模型ID)">
-        <input type="text" class="settings-input" id="add-model-baseurl" placeholder="API Base URL (如 https://api.example.com/v1)">
+        <input type="text" class="settings-input" id="add-model-modelid" placeholder="${_t("模型ID (如 Big Pickle)")}">
+        <input type="text" class="settings-input" id="add-model-name" placeholder="${_t("模型名称 (可选, 默认使用模型ID)")}">
+        <input type="text" class="settings-input" id="add-model-baseurl" placeholder="${_t("API Base URL (如 https://api.example.com/v1)")}">
         <input type="text" class="settings-input" id="add-model-apikey" placeholder="API Key">
-        <input type="text" class="settings-input" id="add-model-ctx" placeholder="上下文大小 (如 256K, 1M)">
+        <input type="text" class="settings-input" id="add-model-ctx" placeholder="${_t("上下文大小 (如 256K, 1M)")}">
         <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--c-text-2);cursor:pointer;user-select:none;">
-          <input type="checkbox" id="add-model-images" style="cursor:pointer;"> 支持图片输入（视觉模型）
+          <input type="checkbox" id="add-model-images" style="cursor:pointer;"> ${_t("支持图片输入（视觉模型）")}
         </label>
         <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--c-text-2);cursor:pointer;user-select:none;">
-          <input type="checkbox" id="add-model-reasoning" style="cursor:pointer;"> 支持思考模式
+          <input type="checkbox" id="add-model-reasoning" style="cursor:pointer;"> ${_t("支持思考模式")}
         </label>
         <div id="add-model-msg" style="font-size:12px;min-height:18px;line-height:18px;"></div>
-        <button class="settings-btn settings-btn-primary" id="add-model-submit" style="align-self:flex-start;">添加</button>
+        <button class="settings-btn settings-btn-primary" id="add-model-submit" style="align-self:flex-start;">${_t("添加")}</button>
       </div>
     </div>
   </div>

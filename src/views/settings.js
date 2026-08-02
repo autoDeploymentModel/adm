@@ -1,4 +1,5 @@
 // @ts-nocheck -- 历史视图暂未类型化（jsconfig checkJs 全局开启，新代码请勿加此标记）
+import { t as _t, setLanguage, getLanguage } from "../i18n.js";
 const template = `
 <style>
   /* 样式隔离约定：选择器限定在本视图容器内（id/class 带 settings- 前缀），
@@ -237,90 +238,90 @@ const template = `
 </style>
 <div id="settings-app">
   <div id="settings-header">
-    <button class="back-btn" id="back-btn">&#8592; 返回</button>
-    <span class="title">设置</span>
+    <button class="back-btn" id="back-btn">&#8592; ${_t("返回")}</button>
+    <span class="title">${_t("设置")}</span>
   </div>
   <div id="settings-layout">
     <nav id="settings-nav">
-      <div class="nav-item active" data-panel="launch-params" id="nav-launch-params">模型启动参数</div>
-      <div class="nav-item" data-panel="appearance" id="nav-appearance">外观主题</div>
-      <div class="nav-item" data-panel="wxbot" id="nav-wxbot">微信 Bot</div>
-      <div class="nav-item" data-panel="version" id="nav-version">系统版本号</div>
-      <div class="nav-item" data-panel="about" id="nav-about">关于</div>
+      <div class="nav-item active" data-panel="launch-params" id="nav-launch-params">${_t("模型启动参数")}</div>
+      <div class="nav-item" data-panel="appearance" id="nav-appearance">${_t("外观主题")}</div>
+      <div class="nav-item" data-panel="wxbot" id="nav-wxbot">${_t("微信 Bot")}</div>
+      <div class="nav-item" data-panel="version" id="nav-version">${_t("系统版本号")}</div>
+      <div class="nav-item" data-panel="about" id="nav-about">${_t("关于")}</div>
     </nav>
     <div id="settings-content">
       <div id="panel-launch-params" class="panel active">
-        <div class="panel-title">模型启动参数</div>
+        <div class="panel-title">${_t("模型启动参数")}</div>
 
         <div class="param-group" style="margin-bottom: 28px;">
-          <div class="param-group-title">推荐模式</div>
+          <div class="param-group-title">${_t("推荐模式")}</div>
           <div class="param-row">
-            <div class="param-label">选择模式<div class="param-key">快速配置</div></div>
+            <div class="param-label">${_t("选择模式")}<div class="param-key">${_t("快速配置")}</div></div>
             <div class="param-input">
               <select id="preset_mode">
-                <option value="default">默认（日常聊天）</option>
-                <option value="creative">创意写作</option>
-                <option value="code">写代码 / 编程（推荐）</option>
+                <option value="default">${_t("默认（日常聊天）")}</option>
+                <option value="creative">${_t("创意写作")}</option>
+                <option value="code">${_t("写代码 / 编程（推荐）")}</option>
               </select>
-              <div class="param-desc">选择后自动填充并保存采样参数，可手动微调后自动保存</div>
+              <div class="param-desc">${_t("选择后自动填充并保存采样参数，可手动微调后自动保存")}</div>
             </div>
           </div>
         </div>
 
         <div class="param-group">
-          <div class="param-group-title">基础参数</div>
+          <div class="param-group-title">${_t("基础参数")}</div>
           <div class="param-row">
-            <div class="param-label">上下文大小<div class="param-key">-c, --ctx-size</div></div>
+            <div class="param-label">${_t("上下文大小")}<div class="param-key">-c, --ctx-size</div></div>
             <div class="param-input"><input type="number" id="ctx_size" value="25600" min="0"><div class="param-desc" id="ctx-floor-hint"></div></div>
           </div>
           <div class="param-row">
-            <div class="param-label">预测 token 数<div class="param-key">-n, --n-predict</div></div>
-            <div class="param-input"><input type="number" id="n_predict" value="-1"><div class="param-desc">-1 表示无限</div></div>
+            <div class="param-label">${_t("预测 token 数")}<div class="param-key">-n, --n-predict</div></div>
+            <div class="param-input"><input type="number" id="n_predict" value="-1"><div class="param-desc">${_t("-1 表示无限")}</div></div>
           </div>
           <div class="param-row">
-            <div class="param-label">批处理大小<div class="param-key">-b, --batch-size</div></div>
+            <div class="param-label">${_t("批处理大小")}<div class="param-key">-b, --batch-size</div></div>
             <div class="param-input"><input type="number" id="batch_size" value="2048" min="1"></div>
           </div>
           <div class="param-row">
-            <div class="param-label">微批次大小<div class="param-key">-ub, --ubatch-size</div></div>
+            <div class="param-label">${_t("微批次大小")}<div class="param-key">-ub, --ubatch-size</div></div>
             <div class="param-input"><input type="number" id="ubatch_size" value="512" min="1"></div>
           </div>
         </div>
 
         <div class="param-group">
-          <div class="param-group-title">GPU 参数</div>
+          <div class="param-group-title">${_t("GPU 参数")}</div>
           <div class="param-row">
-            <div class="param-label">GPU 层数<div class="param-key">-ngl, --n-gpu-layers</div></div>
+            <div class="param-label">${_t("GPU 层数")}<div class="param-key">-ngl, --n-gpu-layers</div></div>
             <div class="param-input">
               <select id="n_gpu_layers">
-                <option value="auto">auto (自动)</option>
-                <option value="all">all (全部)</option>
-                <option value="0">0 (仅 CPU)</option>
+                <option value="auto">${_t("auto (自动)")}</option>
+                <option value="all">${_t("all (全部)")}</option>
+                <option value="0">${_t("0 (仅 CPU)")}</option>
                 <option value="1">1</option>
                 <option value="10">10</option>
                 <option value="20">20</option>
                 <option value="30">30</option>
                 <option value="40">40</option>
                 <option value="50">50</option>
-                <option value="custom">自定义</option>
+                <option value="custom">${_t("自定义")}</option>
               </select>
             </div>
           </div>
           <div class="param-row" id="custom_ngl_row" style="display:none;">
-            <div class="param-label">自定义 GPU 层数</div>
+            <div class="param-label">${_t("自定义 GPU 层数")}</div>
             <div class="param-input"><input type="number" id="n_gpu_layers_custom" value="0" min="0"></div>
           </div>
         </div>
 
         <div class="param-group">
-          <div class="param-group-title">性能参数</div>
+          <div class="param-group-title">${_t("性能参数")}</div>
           <div class="param-row">
-            <div class="param-label">线程数<div class="param-key">-t, --threads</div></div>
-            <div class="param-input"><input type="number" id="threads" value="" placeholder="自动"><div class="param-desc">留空为自动</div></div>
+            <div class="param-label">${_t("线程数")}<div class="param-key">-t, --threads</div></div>
+            <div class="param-input"><input type="number" id="threads" value="" placeholder="${_t("自动")}"><div class="param-desc">${_t("留空为自动")}</div></div>
           </div>
           <div class="param-row">
-            <div class="param-label">批处理线程数<div class="param-key">-tb, --threads-batch</div></div>
-            <div class="param-input"><input type="number" id="threads_batch" value="" placeholder="同线程数"></div>
+            <div class="param-label">${_t("批处理线程数")}<div class="param-key">-tb, --threads-batch</div></div>
+            <div class="param-input"><input type="number" id="threads_batch" value="" placeholder="${_t("同线程数")}"></div>
           </div>
           <div class="param-row">
             <div class="param-label">Flash Attention<div class="param-key">-fa, --flash-attn</div></div>
@@ -329,141 +330,152 @@ const template = `
             </div>
           </div>
           <div class="param-row">
-            <div class="param-label">KV 缓存类型 K<div class="param-key">-ctk, --cache-type-k</div></div>
+            <div class="param-label">${_t("KV 缓存类型 K")}<div class="param-key">-ctk, --cache-type-k</div></div>
             <div class="param-input">
               <select id="cache_type_k"><option value="f16">f16</option><option value="f32">f32</option><option value="q8_0">q8_0</option><option value="q4_0">q4_0</option><option value="q4_1">q4_1</option><option value="q5_0">q5_0</option><option value="q5_1">q5_1</option></select>
             </div>
           </div>
           <div class="param-row">
-            <div class="param-label">KV 缓存类型 V<div class="param-key">-ctv, --cache-type-v</div></div>
+            <div class="param-label">${_t("KV 缓存类型 V")}<div class="param-key">-ctv, --cache-type-v</div></div>
             <div class="param-input">
               <select id="cache_type_v"><option value="f16">f16</option><option value="f32">f32</option><option value="q8_0">q8_0</option><option value="q4_0">q4_0</option><option value="q4_1">q4_1</option><option value="q5_0">q5_0</option><option value="q5_1">q5_1</option></select>
             </div>
           </div>
           <div class="param-row">
-            <div class="param-label">内存锁定<div class="param-key">--mlock</div></div>
-            <div class="param-input"><div class="checkbox-wrap"><input type="checkbox" id="mlock"><span>强制模型驻留 RAM</span></div></div>
+            <div class="param-label">${_t("内存锁定")}<div class="param-key">--mlock</div></div>
+            <div class="param-input"><div class="checkbox-wrap"><input type="checkbox" id="mlock"><span>${_t("强制模型驻留 RAM")}</span></div></div>
           </div>
           <div class="param-row">
-            <div class="param-label">内存映射<div class="param-key">--mmap</div></div>
-            <div class="param-input"><div class="checkbox-wrap"><input type="checkbox" id="mmap" checked><span>启用内存映射</span></div></div>
+            <div class="param-label">${_t("内存映射")}<div class="param-key">--mmap</div></div>
+            <div class="param-input"><div class="checkbox-wrap"><input type="checkbox" id="mmap" checked><span>${_t("启用内存映射")}</span></div></div>
           </div>
         </div>
 
         <div class="param-group">
-          <div class="param-group-title">采样参数</div>
-          <div class="param-row"><div class="param-label">温度<div class="param-key">--temp</div></div><div class="param-input"><input type="number" id="temperature" value="0.8" step="0.05" min="0"></div></div>
+          <div class="param-group-title">${_t("采样参数")}</div>
+          <div class="param-row"><div class="param-label">${_t("温度")}<div class="param-key">--temp</div></div><div class="param-input"><input type="number" id="temperature" value="0.8" step="0.05" min="0"></div></div>
           <div class="param-row"><div class="param-label">Top-K<div class="param-key">--top-k</div></div><div class="param-input"><input type="number" id="top_k" value="40" min="0"></div></div>
           <div class="param-row"><div class="param-label">Top-P<div class="param-key">--top-p</div></div><div class="param-input"><input type="number" id="top_p" value="0.95" step="0.01" min="0" max="1"></div></div>
           <div class="param-row"><div class="param-label">Min-P<div class="param-key">--min-p</div></div><div class="param-input"><input type="number" id="min_p" value="0.05" step="0.01" min="0" max="1"></div></div>
-          <div class="param-row"><div class="param-label">重复惩罚<div class="param-key">--repeat-penalty</div></div><div class="param-input"><input type="number" id="repeat_penalty" value="1.1" step="0.05" min="0"></div></div>
-          <div class="param-row"><div class="param-label">重复窗口<div class="param-key">--repeat-last-n</div></div><div class="param-input"><input type="number" id="repeat_last_n" value="-1" step="1"><div class="param-desc">重复惩罚的上下文窗口大小，-1 表示使用 ctx_size</div></div></div>
-          <div class="param-row"><div class="param-label">DRY 乘数<div class="param-key">--dry-multiplier</div></div><div class="param-input"><input type="number" id="dry_multiplier" value="0.8" step="0.05" min="0"><div class="param-desc">DRY 采样乘数，0.0 表示禁用</div></div></div>
-          <div class="param-row"><div class="param-label">DRY 允许长度<div class="param-key">--dry-allowed-length</div></div><div class="param-input"><input type="number" id="dry_allowed_length" value="2" step="1" min="1"><div class="param-desc">DRY 采样允许的重复长度，代码模式建议设为 1</div></div></div>
-          <div class="param-row"><div class="param-label">DRY 惩罚窗口<div class="param-key">--dry-penalty-last-n</div></div><div class="param-input"><input type="number" id="dry_penalty_last_n" value="-1" step="1"><div class="param-desc">DRY 惩罚的最后 n 个 token，-1 表示使用上下文大小</div></div></div>
-          <div class="param-row"><div class="param-label">存在惩罚<div class="param-key">--presence-penalty</div></div><div class="param-input"><input type="number" id="presence_penalty" value="0.0" step="0.05" min="0"><div class="param-desc">重复 alpha 存在惩罚，0.0 表示禁用</div></div></div>
-          <div class="param-row"><div class="param-label">频率惩罚<div class="param-key">--frequency-penalty</div></div><div class="param-input"><input type="number" id="frequency_penalty" value="0.0" step="0.05" min="0"><div class="param-desc">重复 alpha 频率惩罚，0.0 表示禁用</div></div></div>
-          <div class="param-row"><div class="param-label">推理/思考<div class="param-key">--reasoning</div></div><div class="param-input"><select id="reasoning"><option value="auto">auto (自动检测)</option><option value="on">on (开启)</option><option value="off">off (关闭)</option></select><div class="param-desc">控制模型是否启用推理/思考模式</div></div></div>
+          <div class="param-row"><div class="param-label">${_t("重复惩罚")}<div class="param-key">--repeat-penalty</div></div><div class="param-input"><input type="number" id="repeat_penalty" value="1.1" step="0.05" min="0"></div></div>
+          <div class="param-row"><div class="param-label">${_t("重复窗口")}<div class="param-key">--repeat-last-n</div></div><div class="param-input"><input type="number" id="repeat_last_n" value="-1" step="1"><div class="param-desc">${_t("重复惩罚的上下文窗口大小，-1 表示使用 ctx_size")}</div></div></div>
+          <div class="param-row"><div class="param-label">${_t("DRY 乘数")}<div class="param-key">--dry-multiplier</div></div><div class="param-input"><input type="number" id="dry_multiplier" value="0.8" step="0.05" min="0"><div class="param-desc">${_t("DRY 采样乘数，0.0 表示禁用")}</div></div></div>
+          <div class="param-row"><div class="param-label">${_t("DRY 允许长度")}<div class="param-key">--dry-allowed-length</div></div><div class="param-input"><input type="number" id="dry_allowed_length" value="2" step="1" min="1"><div class="param-desc">${_t("DRY 采样允许的重复长度，代码模式建议设为 1")}</div></div></div>
+          <div class="param-row"><div class="param-label">${_t("DRY 惩罚窗口")}<div class="param-key">--dry-penalty-last-n</div></div><div class="param-input"><input type="number" id="dry_penalty_last_n" value="-1" step="1"><div class="param-desc">${_t("DRY 惩罚的最后 n 个 token，-1 表示使用上下文大小")}</div></div></div>
+          <div class="param-row"><div class="param-label">${_t("存在惩罚")}<div class="param-key">--presence-penalty</div></div><div class="param-input"><input type="number" id="presence_penalty" value="0.0" step="0.05" min="0"><div class="param-desc">${_t("重复 alpha 存在惩罚，0.0 表示禁用")}</div></div></div>
+          <div class="param-row"><div class="param-label">${_t("频率惩罚")}<div class="param-key">--frequency-penalty</div></div><div class="param-input"><input type="number" id="frequency_penalty" value="0.0" step="0.05" min="0"><div class="param-desc">${_t("重复 alpha 频率惩罚，0.0 表示禁用")}</div></div></div>
+          <div class="param-row"><div class="param-label">${_t("推理/思考")}<div class="param-key">--reasoning</div></div><div class="param-input"><select id="reasoning"><option value="auto">${_t("auto (自动检测)")}</option><option value="on">${_t("on (开启)")}</option><option value="off">${_t("off (关闭)")}</option></select><div class="param-desc">${_t("控制模型是否启用推理/思考模式")}</div></div></div>
         </div>
 
         <div class="param-group">
-          <div class="param-group-title">服务参数</div>
-          <div class="param-row"><div class="param-label">监听端口<div class="param-key">--port</div></div><div class="param-input"><input type="number" id="port" value="5678" min="1" max="65535"></div></div>
-          <div class="param-row"><div class="param-label">监听地址<div class="param-key">--host</div></div><div class="param-input"><select id="host"><option value="127.0.0.1">127.0.0.1 (本地)</option><option value="0.0.0.0">0.0.0.0 (所有接口)</option></select></div></div>
+          <div class="param-group-title">${_t("服务参数")}</div>
+          <div class="param-row"><div class="param-label">${_t("监听端口")}<div class="param-key">--port</div></div><div class="param-input"><input type="number" id="port" value="5678" min="1" max="65535"></div></div>
+          <div class="param-row"><div class="param-label">${_t("监听地址")}<div class="param-key">--host</div></div><div class="param-input"><select id="host"><option value="127.0.0.1">${_t("127.0.0.1 (本地)")}</option><option value="0.0.0.0">${_t("0.0.0.0 (所有接口)")}</option></select></div></div>
         </div>
 
-        <button class="btn-reset" id="reset-btn">恢复默认</button>
+        <button class="btn-reset" id="reset-btn">${_t("恢复默认")}</button>
       </div>
 
       <div id="panel-appearance" class="panel">
-        <div class="panel-title">外观主题</div>
+        <div class="panel-title">${_t("外观主题")}</div>
         <div class="param-group">
-          <div class="param-group-title">主题配色</div>
-          <div class="param-desc" style="margin-bottom:14px;">选择界面配色，风格参考主流 VS Code 主题，点击即可一键切换（立即生效）</div>
+          <div class="param-group-title">${_t("语言 / Language")}</div>
+          <div class="param-row">
+            <div class="param-label">${_t("界面语言")}<div class="param-key">language</div></div>
+            <div class="param-input">
+              <select id="ui-lang-select">
+                <option value="zh">中文</option>
+                <option value="en">English</option>
+              </select>
+              <div class="param-desc">${_t("切换后立即生效")}</div>
+            </div>
+          </div>
+          <div class="param-group-title">${_t("主题配色")}</div>
+          <div class="param-desc" style="margin-bottom:14px;">${_t("选择界面配色，风格参考主流 VS Code 主题，点击即可一键切换（立即生效）")}</div>
           <div id="theme-grid" class="theme-grid"></div>
         </div>
       </div>
 
       <div id="panel-wxbot" class="panel">
-        <div class="panel-title">微信 Bot（iLink）</div>
+        <div class="panel-title">${_t("微信 Bot（iLink）")}</div>
 
         <div class="param-group">
-          <div class="param-group-title">绑定状态</div>
+          <div class="param-group-title">${_t("绑定状态")}</div>
           <div class="param-row">
-            <div class="param-label">状态</div>
-            <div class="param-input"><span id="wxbot-state" style="font-size:13px;color:var(--c-text-2);">加载中…</span></div>
+            <div class="param-label">${_t("状态")}</div>
+            <div class="param-input"><span id="wxbot-state" style="font-size:13px;color:var(--c-text-2);">${_t("加载中…")}</span></div>
           </div>
           <div class="param-row">
             <div class="param-label">Bot ID</div>
             <div class="param-input"><span id="wxbot-botid" style="font-size:13px;color:var(--c-text-2);">-</span></div>
           </div>
           <div class="param-row">
-            <div class="param-label">主人微信</div>
+            <div class="param-label">${_t("主人微信")}</div>
             <div class="param-input">
               <span id="wxbot-owner" style="font-size:13px;color:var(--c-text-2);">-</span>
-              <div class="param-desc">首个给 Bot 发消息的微信号自动成为主人，其余人消息忽略</div>
+              <div class="param-desc">${_t("首个给 Bot 发消息的微信号自动成为主人，其余人消息忽略")}</div>
             </div>
           </div>
           <div class="param-row">
-            <div class="param-label">消息统计</div>
-            <div class="param-input"><span id="wxbot-stats" style="font-size:13px;color:var(--c-text-2);">收 0 / 发 0</span></div>
+            <div class="param-label">${_t("消息统计")}</div>
+            <div class="param-input"><span id="wxbot-stats" style="font-size:13px;color:var(--c-text-2);">${_t("收 ")}0 ${_t(" / 发 ")}0</span></div>
           </div>
           <div class="param-row">
             <div class="param-label"></div>
             <div class="param-input" style="display:flex;gap:10px;max-width:none;">
-              <button id="wxbot-bind-btn" style="background:var(--c-accent);color:#fff;border:none;padding:8px 20px;border-radius:8px;font-size:13px;cursor:pointer;">绑定微信</button>
-              <button id="wxbot-toggle-btn" style="display:none;background:var(--c-overlay);color:var(--c-text);border:none;padding:8px 20px;border-radius:8px;font-size:13px;cursor:pointer;">暂停</button>
-              <button id="wxbot-unbind-btn" class="btn-delete-llamacpp" style="display:none;padding:8px 20px;border-radius:8px;font-size:13px;">解绑</button>
+              <button id="wxbot-bind-btn" style="background:var(--c-accent);color:#fff;border:none;padding:8px 20px;border-radius:8px;font-size:13px;cursor:pointer;">${_t("绑定微信")}</button>
+              <button id="wxbot-toggle-btn" style="display:none;background:var(--c-overlay);color:var(--c-text);border:none;padding:8px 20px;border-radius:8px;font-size:13px;cursor:pointer;">${_t("暂停")}</button>
+              <button id="wxbot-unbind-btn" class="btn-delete-llamacpp" style="display:none;padding:8px 20px;border-radius:8px;font-size:13px;">${_t("解绑")}</button>
             </div>
           </div>
         </div>
 
         <div class="param-group">
-          <div class="param-group-title">Bot 行为</div>
+          <div class="param-group-title">${_t("Bot 行为")}</div>
           <div class="param-row">
-            <div class="param-label">工作目录</div>
-            <div class="param-input"><span style="font-size:13px;color:var(--c-text-2);">跟随 Agent 页工作目录</span><div class="param-desc">微信 Bot 与 Agent 页使用同一工作目录，在 Agent 页修改</div></div>
+            <div class="param-label">${_t("工作目录")}</div>
+            <div class="param-input"><span style="font-size:13px;color:var(--c-text-2);">${_t("跟随 Agent 页工作目录")}</span><div class="param-desc">${_t("微信 Bot 与 Agent 页使用同一工作目录，在 Agent 页修改")}</div></div>
           </div>
           <div class="param-row">
-            <div class="param-label">模式</div>
-            <div class="param-input"><span style="font-size:13px;color:var(--c-text-2);">跟随 Agent 页模式设置</span><div class="param-desc">执行模式直接执行修改；Plan 模式只读调研并产出计划，不修改任何文件</div></div>
+            <div class="param-label">${_t("模式")}</div>
+            <div class="param-input"><span style="font-size:13px;color:var(--c-text-2);">${_t("跟随 Agent 页模式设置")}</span><div class="param-desc">${_t("执行模式直接执行修改；Plan 模式只读调研并产出计划，不修改任何文件")}</div></div>
           </div>
         </div>
 
         <div class="param-group">
-          <div class="param-group-title">最近活动</div>
-          <div id="wxbot-activity" style="font-size:12px;color:var(--c-text-3);line-height:1.8;max-height:200px;overflow-y:auto;background:var(--c-panel-2);border:1px solid var(--c-border);border-radius:6px;padding:10px 12px;">暂无活动</div>
+          <div class="param-group-title">${_t("最近活动")}</div>
+          <div id="wxbot-activity" style="font-size:12px;color:var(--c-text-3);line-height:1.8;max-height:200px;overflow-y:auto;background:var(--c-panel-2);border:1px solid var(--c-border);border-radius:6px;padding:10px 12px;">${_t("暂无活动")}</div>
         </div>
       </div>
 
       <div id="panel-version" class="panel">
-        <div class="panel-title">系统版本号</div>
+        <div class="panel-title">${_t("系统版本号")}</div>
         <table class="version-table">
-          <tr><td>ADM 版本</td><td id="v-adm">检测中... <span id="update-badge" style="display:none;color:#4caf50;font-size:12px;margin-left:6px;">✓ 最新</span></td></tr>
+          <tr><td>${_t("ADM 版本")}</td><td id="v-adm">${_t("检测中...")} <span id="update-badge" style="display:none;color:#4caf50;font-size:12px;margin-left:6px;">${_t("✓ 最新")}</span></td></tr>
           <tr>
             <td style="padding-top:20px;" colspan="2">
-              <button class="btn-save" id="check-update-btn" style="margin-top:0;font-size:13px;padding:8px 20px;">检查新版本</button>
+              <button class="btn-save" id="check-update-btn" style="margin-top:0;font-size:13px;padding:8px 20px;">${_t("检查新版本")}</button>
               <span id="update-status" style="font-size:12px;color:var(--c-text-3);margin-left:12px;"></span>
             </td>
           </tr>
-          <tr><td>Tauri 版本</td><td>2.11.2</td></tr>
+          <tr><td>${_t("Tauri 版本")}</td><td>2.11.2</td></tr>
           <tr>
-            <td>llama.cpp 版本</td>
-            <td><span id="v-llamacpp" style="margin-right:8px;">检测中...</span><button class="btn-delete-llamacpp" id="delete-llamacpp-btn">删除</button></td>
+            <td>${_t("llama.cpp 版本")}</td>
+            <td><span id="v-llamacpp" style="margin-right:8px;">${_t("检测中...")}</span><button class="btn-delete-llamacpp" id="delete-llamacpp-btn">${_t("删除")}</button></td>
           </tr>
-          <tr><td>admAgent 版本</td><td id="v-admagent">检测中...</td></tr>
-          <tr><td>操作系统</td><td id="v-os">检测中...</td></tr>
+          <tr><td>${_t("admAgent 版本")}</td><td id="v-admagent">${_t("检测中...")}</td></tr>
+          <tr><td>${_t("操作系统")}</td><td id="v-os">${_t("检测中...")}</td></tr>
         </table>
       </div>
 
       <div id="panel-about" class="panel">
-        <div class="panel-title">关于</div>
+        <div class="panel-title">${_t("关于")}</div>
         <div class="about-content">
           <h3>ADM</h3>
           <div class="about-subtitle">Automatic Deployment Model</div>
-          <p>ADM 是一个大模型部署图形化管理工具，让用户能够便捷地在本地部署和运行大语言模型。</p>
-          <p>如需定制服务 联系方式：微信: litai686</p>
-          <p>项目官网：<a href="https://adm.tuduoduo.top/" target="_blank">https://adm.tuduoduo.top/</a></p>
+          <p>${_t("ADM 是一个大模型部署图形化管理工具，让用户能够便捷地在本地部署和运行大语言模型。")}</p>
+          <p>${_t("如需定制服务 联系方式：微信: litai686")}</p>
+          <p>${_t("项目官网：")}<a href="https://adm.tuduoduo.top/" target="_blank">https://adm.tuduoduo.top/</a></p>
         </div>
       </div>
     </div>
@@ -472,36 +484,36 @@ const template = `
 
 <div class="confirm-overlay" id="confirm-overlay">
   <div class="confirm-dialog">
-    <div class="confirm-title" id="confirm-title">删除提示</div>
+    <div class="confirm-title" id="confirm-title">${_t("删除提示")}</div>
     <div class="confirm-message" id="confirm-message"></div>
     <div class="confirm-buttons">
-      <button class="btn-cancel" id="confirm-cancel-btn">取消</button>
-      <button class="btn-confirm" id="confirm-ok-btn">确定</button>
+      <button class="btn-cancel" id="confirm-cancel-btn">${_t("取消")}</button>
+      <button class="btn-confirm" id="confirm-ok-btn">${_t("确定")}</button>
     </div>
   </div>
 </div>
 
 <div class="confirm-overlay" id="wxbot-qr-overlay">
   <div class="confirm-dialog">
-    <div class="confirm-title">微信扫码绑定</div>
+    <div class="confirm-title">${_t("微信扫码绑定")}</div>
     <div id="wxbot-qr-box" style="display:flex;justify-content:center;align-items:center;min-height:220px;width:220px;background:#fff;border-radius:8px;margin:0 auto 16px;">
-      <span style="color:#333;font-size:13px;">二维码加载中…</span>
+      <span style="color:#333;font-size:13px;">${_t("二维码加载中…")}</span>
     </div>
-    <div class="confirm-message">使用微信「扫一扫」确认开启 Bot 功能</div>
+    <div class="confirm-message">${_t("使用微信「扫一扫」确认开启 Bot 功能")}</div>
     <div class="confirm-buttons">
-      <button class="btn-cancel" id="wxbot-qr-cancel-btn">取消</button>
+      <button class="btn-cancel" id="wxbot-qr-cancel-btn">${_t("取消")}</button>
     </div>
   </div>
 </div>
 
 <div class="confirm-overlay" id="wxbot-code-overlay">
   <div class="confirm-dialog">
-    <div class="confirm-title">输入配对码</div>
-    <div class="confirm-message" id="wxbot-code-hint">请输入微信手机端显示的配对数字：</div>
+    <div class="confirm-title">${_t("输入配对码")}</div>
+    <div class="confirm-message" id="wxbot-code-hint">${_t("请输入微信手机端显示的配对数字：")}</div>
     <input id="wxbot-code-input" type="text" inputmode="numeric" autocomplete="off" style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid var(--c-overlay-strong);background:rgba(255,255,255,0.06);color:#fff;font-size:16px;letter-spacing:2px;text-align:center;margin-bottom:16px;">
     <div class="confirm-buttons">
-      <button class="btn-cancel" id="wxbot-code-cancel-btn">取消</button>
-      <button class="btn-confirm" id="wxbot-code-ok-btn">确定</button>
+      <button class="btn-cancel" id="wxbot-code-cancel-btn">${_t("取消")}</button>
+      <button class="btn-confirm" id="wxbot-code-ok-btn">${_t("确定")}</button>
     </div>
   </div>
 </div>
@@ -566,10 +578,10 @@ function applyCtxFloor() {
   const v = parseInt(ctxEl.value) || 0;
   if (v < floor) {
     ctxEl.value = floor;
-    showToast("当前模式上下文大小不能低于 " + floor, false);
+    showToast(_t("当前模式上下文大小不能低于 ") + floor, false);
   }
   const hint = document.getElementById("ctx-floor-hint");
-  if (hint) hint.textContent = floor > 1 ? ("当前模式最小 " + floor) : "";
+  if (hint) hint.textContent = floor > 1 ? (_t("当前模式最小 ") + floor) : "";
 }
 
 async function onPresetModeChange() {
@@ -667,19 +679,21 @@ async function saveParams() {
   const params = getParamsFromForm();
   console.log("[settings] 保存参数:", JSON.stringify(params).substring(0, 200));
   try {
-    // 加载当前设置以保留其他字段（如 agent_workdir）
+    // 加载当前设置以保留其他字段（如 agent_workdir / language）
     let current = {};
     try { current = await invoke()("load_settings"); } catch (_) {}
     const settings = {
       launch_params: params,
       agent_workdir: current.agent_workdir || current.agentWorkdir || "",
+      // 保留原值（可为空 = 跟随系统语言检测）；用户显式切换时由语言选择器写入
+      language: current.language || "",
     };
     await invoke()("save_settings", { settings: settings });
     console.log("[settings] 保存成功");
-    showToast("设置已保存，重启模型后生效");
+    showToast(_t("设置已保存，重启模型后生效"));
   } catch (e) {
     console.error("[settings] 保存失败:", e);
-    showToast("保存失败: " + e, true);
+    showToast(_t("保存失败: ") + e, true);
   }
 }
 
@@ -721,24 +735,24 @@ function setupAutoSave() {
 async function loadVersionInfo() {
   try {
     const admVersion = await invoke()("get_app_version");
-    document.getElementById("v-adm").innerHTML = admVersion + ' <span id="update-badge" style="display:none;color:#4caf50;font-size:12px;margin-left:6px;">✓ 最新</span>';
+    document.getElementById("v-adm").innerHTML = admVersion + ' <span id="update-badge" style="display:none;color:#4caf50;font-size:12px;margin-left:6px;">' + _t("✓ 最新") + '</span>';
   } catch (e) {
-    document.getElementById("v-adm").textContent = "未知";
+    document.getElementById("v-adm").textContent = _t("未知");
   }
   try {
     const version = await invoke()("get_llamacpp_version");
-    document.getElementById("v-llamacpp").textContent = version || "未知";
+    document.getElementById("v-llamacpp").textContent = version || _t("未知");
   } catch (e) {
-    document.getElementById("v-llamacpp").textContent = "未安装或无法检测";
+    document.getElementById("v-llamacpp").textContent = _t("未安装或无法检测");
   }
   try {
     const agentVersion = await invoke()("get_adm_agent_version");
-    document.getElementById("v-admagent").textContent = agentVersion || "未知";
+    document.getElementById("v-admagent").textContent = agentVersion || _t("未知");
   } catch (e) {
-    document.getElementById("v-admagent").textContent = "未知";
+    document.getElementById("v-admagent").textContent = _t("未知");
   }
   const platform = navigator.platform || navigator.userAgent;
-  let osName = "未知";
+  let osName = _t("未知");
   if (platform.includes("Win")) osName = "Windows";
   else if (platform.includes("Mac")) osName = "macOS";
   else if (platform.includes("Linux")) osName = "Linux";
@@ -760,47 +774,47 @@ function closeConfirmDialog(result) {
 }
 
 async function deleteLlamacpp() {
-  const confirmed = await showConfirmDialog("确定要删除 llamacpp 文件夹吗？\n删除后需要重新下载才能使用 llama.cpp 相关功能。");
+  const confirmed = await showConfirmDialog(_t("确定要删除 llamacpp 文件夹吗？\n删除后需要重新下载才能使用 llama.cpp 相关功能。"));
   if (!confirmed) return;
   try {
     await invoke()("delete_llamacpp");
-    document.getElementById("v-llamacpp").textContent = "未安装";
-    showToast("llamacpp 文件夹已删除", false);
+    document.getElementById("v-llamacpp").textContent = _t("未安装");
+    showToast(_t("llamacpp 文件夹已删除"), false);
   } catch (e) {
-    showToast("删除失败: " + e, true);
+    showToast(_t("删除失败: ") + e, true);
   }
 }
 
 async function checkUpdateNow() {
   const statusEl = document.getElementById("update-status");
   const badgeEl = document.getElementById("update-badge");
-  statusEl.textContent = "检查中...";
+  statusEl.textContent = _t("检查中...");
   badgeEl.style.display = "none";
   try {
     const result = await invoke()("check_update");
     if (result.has_update) {
-      statusEl.textContent = `发现新版本 v${result.remote_version}`;
+      statusEl.textContent = _t("发现新版本 v") + result.remote_version;
       statusEl.style.color = "#ff9800";
       const html = `
         <div class="update-icon" style="font-size:40px;text-align:center;margin-bottom:12px;">📥</div>
-        <div class="update-title" style="font-size:20px;font-weight:600;color:#fff;text-align:center;margin-bottom:8px;">发现新版本</div>
-        <div class="update-desc" style="font-size:14px;color:var(--c-text-2);text-align:center;margin-bottom:20px;line-height:1.6;">有新版本可用，是否前往下载？</div>
+        <div class="update-title" style="font-size:20px;font-weight:600;color:#fff;text-align:center;margin-bottom:8px;">${_t("发现新版本")}</div>
+        <div class="update-desc" style="font-size:14px;color:var(--c-text-2);text-align:center;margin-bottom:20px;line-height:1.6;">${_t("有新版本可用，是否前往下载？")}</div>
         <div class="update-info-row" style="display:flex;justify-content:center;gap:24px;margin-bottom:20px;font-size:13px;">
-          <div class="info-item" style="text-align:center;"><div class="info-label" style="color:var(--c-text-3);font-size:11px;">当前版本</div><div class="info-value" style="color:var(--c-text);font-weight:500;margin-top:2px;">v${escHtml(result.current_version)}</div></div>
-          <div class="info-item" style="text-align:center;"><div class="info-label" style="color:var(--c-text-3);font-size:11px;">最新版本</div><div class="info-value" style="color:var(--c-text);font-weight:500;margin-top:2px;">v${escHtml(result.remote_version)}</div></div>
+          <div class="info-item" style="text-align:center;"><div class="info-label" style="color:var(--c-text-3);font-size:11px;">${_t("当前版本")}</div><div class="info-value" style="color:var(--c-text);font-weight:500;margin-top:2px;">v${escHtml(result.current_version)}</div></div>
+          <div class="info-item" style="text-align:center;"><div class="info-label" style="color:var(--c-text-3);font-size:11px;">${_t("最新版本")}</div><div class="info-value" style="color:var(--c-text);font-weight:500;margin-top:2px;">v${escHtml(result.remote_version)}</div></div>
         </div>
         <div class="update-buttons" style="display:flex;gap:12px;justify-content:center;">
-          <button class="update-btn-primary" style="background:var(--c-accent);color:#fff;border:none;padding:10px 28px;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer;" onclick="window.ADM.hideUpdateDialog();window.openUrl('${escHtml(result.download_url)}')">下载更新</button>
-          <button class="update-btn-secondary" style="background:var(--c-overlay);color:var(--c-text);border:none;padding:10px 28px;border-radius:8px;font-size:14px;cursor:pointer;" onclick="window.ADM.hideUpdateDialog()">稍后再说</button>
+          <button class="update-btn-primary" style="background:var(--c-accent);color:#fff;border:none;padding:10px 28px;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer;" onclick="window.ADM.hideUpdateDialog();window.openUrl('${escHtml(result.download_url)}')">${_t("下载更新")}</button>
+          <button class="update-btn-secondary" style="background:var(--c-overlay);color:var(--c-text);border:none;padding:10px 28px;border-radius:8px;font-size:14px;cursor:pointer;" onclick="window.ADM.hideUpdateDialog()">${_t("稍后再说")}</button>
         </div>`;
       window.ADM.showUpdateDialog(html);
     } else {
-      statusEl.textContent = "已是最新版本";
+      statusEl.textContent = _t("已是最新版本");
       statusEl.style.color = "#4caf50";
       badgeEl.style.display = "inline";
     }
   } catch (e) {
-    statusEl.textContent = "检查失败: " + e;
+    statusEl.textContent = _t("检查失败: ") + e;
     statusEl.style.color = "#f44336";
   }
   setTimeout(() => { statusEl.textContent = ""; statusEl.style.color = "var(--c-text-3)"; }, 5000);
@@ -822,7 +836,7 @@ function renderThemeGrid() {
     }).join("");
     return '<div class="theme-card' + active + '" data-theme-id="' + escHtml(t.id) + '">' +
              '<div class="theme-preview">' + sw + '</div>' +
-             '<div class="theme-name"><span class="theme-check">\u2714</span>' + escHtml(t.name) + '</div>' +
+             '<div class="theme-name"><span class="theme-check">\u2714</span>' + escHtml(_t(t.name)) + '</div>' +
            '</div>';
   }).join("");
   grid.querySelectorAll(".theme-card").forEach(function (card) {
@@ -831,7 +845,7 @@ function renderThemeGrid() {
       if (typeof window.applyTheme === "function") window.applyTheme(id);
       grid.querySelectorAll(".theme-card").forEach(function (c) { c.classList.remove("active"); });
       card.classList.add("active");
-      showToast("已切换主题");
+      showToast(_t("已切换主题"));
     });
   });
 }
@@ -845,22 +859,22 @@ function renderWxbotStatus(s) {
   const stateEl = document.getElementById("wxbot-state");
   if (!stateEl) return;
   const map = {
-    stopped: s.bound ? "已暂停" : "未绑定",
-    waiting_scan: "等待扫码…",
-    running: "运行中",
-    error: "错误",
+    stopped: s.bound ? _t("已暂停") : _t("未绑定"),
+    waiting_scan: _t("等待扫码…"),
+    running: _t("运行中"),
+    error: _t("错误"),
   };
   stateEl.textContent = (map[s.state] || s.state) + (s.error ? "：" + s.error : "");
   stateEl.style.color = s.state === "running" ? "#4caf50" : (s.state === "error" ? "#f44336" : "var(--c-text-2)");
   document.getElementById("wxbot-botid").textContent = s.bot_id || "-";
   document.getElementById("wxbot-owner").textContent = s.owner || "-";
-  document.getElementById("wxbot-stats").textContent = "收 " + (s.msg_in || 0) + " / 发 " + (s.msg_out || 0);
+  document.getElementById("wxbot-stats").textContent = _t("收 ") + (s.msg_in || 0) + _t(" / 发 ") + (s.msg_out || 0);
   const bindBtn = document.getElementById("wxbot-bind-btn");
   const toggleBtn = document.getElementById("wxbot-toggle-btn");
   const unbindBtn = document.getElementById("wxbot-unbind-btn");
-  bindBtn.textContent = s.bound ? "重新扫码" : "绑定微信";
+  bindBtn.textContent = s.bound ? _t("重新扫码") : _t("绑定微信");
   toggleBtn.style.display = s.bound ? "" : "none";
-  toggleBtn.textContent = s.state === "running" ? "暂停" : "启动";
+  toggleBtn.textContent = s.state === "running" ? _t("暂停") : _t("启动");
   toggleBtn.dataset.running = s.state === "running" ? "1" : "0";
   unbindBtn.style.display = s.bound ? "" : "none";
 }
@@ -887,7 +901,7 @@ function showWxbotQr(payload) {
   } else if (url) {
     box.innerHTML = '<span style="color:#333;font-size:12px;word-break:break-all;padding:8px;">' + escHtml(url) + "</span>";
   } else {
-    box.innerHTML = '<span style="color:#333;font-size:13px;">二维码加载中…</span>';
+    box.innerHTML = '<span style="color:#333;font-size:13px;">' + _t("二维码加载中…") + '</span>';
   }
 }
 
@@ -901,7 +915,7 @@ function showWxbotCode(retry) {
   const overlay = document.getElementById("wxbot-code-overlay");
   if (!overlay) return;
   const hint = document.getElementById("wxbot-code-hint");
-  if (hint) hint.textContent = retry ? "配对码错误，请重新输入微信手机端显示的数字：" : "请输入微信手机端显示的配对数字：";
+  if (hint) hint.textContent = retry ? _t("配对码错误，请重新输入微信手机端显示的数字：") : _t("请输入微信手机端显示的配对数字：");
   const input = document.getElementById("wxbot-code-input");
   if (input) input.value = "";
   overlay.classList.add("show");
@@ -917,14 +931,14 @@ async function submitWxbotCode() {
   const input = document.getElementById("wxbot-code-input");
   const code = input ? String(input.value || "").trim() : "";
   if (!code) {
-    showToast("请先输入配对码", true);
+    showToast(_t("请先输入配对码"), true);
     return;
   }
   try {
     await invoke()("submit_ilink_verify_code", { code: code });
     hideWxbotCode();
   } catch (e) {
-    showToast("提交配对码失败: " + e, true);
+    showToast(_t("提交配对码失败: ") + e, true);
   }
 }
 
@@ -936,7 +950,7 @@ function pushWxbotActivity(p) {
   el.innerHTML = wxbotActivities.map(function (a) {
     const t = new Date(a.ts || Date.now());
     const hh = ("0" + t.getHours()).slice(-2) + ":" + ("0" + t.getMinutes()).slice(-2) + ":" + ("0" + t.getSeconds()).slice(-2);
-    const dir = a.direction === "in" ? "⬅️ 收" : (a.direction === "out" ? "➡️ 发" : "⚠️");
+    const dir = a.direction === "in" ? _t("⬅️ 收") : (a.direction === "out" ? _t("➡️ 发") : "⚠️");
     return "<div>[" + hh + "] " + dir + " " + escHtml(a.summary || "") + "</div>";
   }).join("");
 }
@@ -948,7 +962,7 @@ async function setupWxbotPanel() {
       await invoke()("start_ilink_login");
     } catch (e) {
       hideWxbotQr();
-      showToast("启动绑定失败: " + e, true);
+      showToast(_t("启动绑定失败: ") + e, true);
     }
   });
   document.getElementById("wxbot-qr-cancel-btn").addEventListener("click", async function () {
@@ -968,24 +982,24 @@ async function setupWxbotPanel() {
     try {
       if (running) {
         await invoke()("stop_ilink_bridge");
-        showToast("微信 Bot 已暂停");
+        showToast(_t("微信 Bot 已暂停"));
       } else {
         await invoke()("start_ilink_bridge");
-        showToast("微信 Bot 已启动");
+        showToast(_t("微信 Bot 已启动"));
       }
     } catch (e) {
-      showToast("操作失败: " + e, true);
+      showToast(_t("操作失败: ") + e, true);
     }
     refreshWxbotStatus();
   });
   document.getElementById("wxbot-unbind-btn").addEventListener("click", async function () {
-    const ok = await showConfirmDialog("确定要解绑微信 Bot 吗？\n解绑将删除登录凭据与会话映射，需重新扫码才能使用。");
+    const ok = await showConfirmDialog(_t("确定要解绑微信 Bot 吗？\n解绑将删除登录凭据与会话映射，需重新扫码才能使用。"));
     if (!ok) return;
     try {
       await invoke()("unbind_ilink");
-      showToast("已解绑微信 Bot");
+      showToast(_t("已解绑微信 Bot"));
     } catch (e) {
-      showToast("解绑失败: " + e, true);
+      showToast(_t("解绑失败: ") + e, true);
     }
     refreshWxbotStatus();
   });
@@ -1001,8 +1015,8 @@ async function setupWxbotPanel() {
       } else {
         hideWxbotQr();
         hideWxbotCode();
-        if (p.state === "running") showToast("微信 Bot 已连接");
-        if (p.state === "error" && p.error) showToast("微信 Bot: " + p.error, true);
+        if (p.state === "running") showToast(_t("微信 Bot 已连接"));
+        if (p.state === "error" && p.error) showToast(_t("微信 Bot: ") + p.error, true);
       }
       refreshWxbotStatus();
     });
@@ -1046,6 +1060,22 @@ export default {
     document.getElementById("delete-llamacpp-btn").addEventListener("click", deleteLlamacpp);
     document.getElementById("confirm-cancel-btn").addEventListener("click", function() { closeConfirmDialog(false); });
     document.getElementById("confirm-ok-btn").addEventListener("click", function() { closeConfirmDialog(true); });
+
+    // 语言切换：保存到 Settings.language + localStorage，并立即重建当前视图生效
+    const langSelect = document.getElementById("ui-lang-select");
+    if (langSelect) {
+      langSelect.value = getLanguage();
+      langSelect.addEventListener("change", async function () {
+        const lang = this.value;
+        try {
+          let current = {};
+          try { current = await invoke()("load_settings"); } catch (_) {}
+          await invoke()("save_settings", Object.assign({}, current, { language: lang }));
+        } catch (_) {}
+        setLanguage(lang);
+        location.reload();
+      });
+    }
 
     setupAutoSave();
     setupWxbotPanel();

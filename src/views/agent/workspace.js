@@ -1,4 +1,5 @@
 // 工作区切换 / 选择器 / 自动压缩配置
+import { t as _t } from "../../i18n.js";
 import { S } from "./state.js";
 import { api } from "./api.js";
 import { updateContextUsage, exitManualScrollMode, clearErrorNotices } from "./ui.js";
@@ -32,7 +33,7 @@ export async function switchToWorkspace(wsId, wsPath) {
   if (!wsId) return;
   console.log("[agent] 切换到工作区:", wsId, wsPath);
   S.serverInfo.workspace_id = wsId;
-  S.workspaceInfo = { id: wsId, path: wsPath || "", name: wsPath ? wsPath.split(/[\\/]/).pop() : "默认工作区" };
+  S.workspaceInfo = { id: wsId, path: wsPath || "", name: wsPath ? wsPath.split(/[\\/]/).pop() : _t("默认工作区") };
 
   // 重新初始化 Agent
   try { await api("POST", "/v1/workspaces/" + wsId + "/agent/init"); } catch (_) {}
@@ -58,7 +59,7 @@ export async function switchToWorkspace(wsId, wsPath) {
   S.currentConv = null;
   renderMessages();
   renderTodos([]);
-  document.getElementById("agent-conv-title").textContent = "选择或创建一个会话";
+  document.getElementById("agent-conv-title").textContent = _t("选择或创建一个会话");
   // 刷新对话列表（会自动选中第一个会话或创建新会话）
   await loadConversations();
   // 刷新工具列表（Skill/LSP/MCP 按工作区隔离）
@@ -72,6 +73,6 @@ export function updateWorkspaceSelector() {
   var nameEl = document.getElementById("agent-workspace-name");
   if (!nameEl) return;
 
-  nameEl.textContent = S.workspaceInfo ? S.workspaceInfo.name || "默认工作区" : "默认工作区";
+  nameEl.textContent = S.workspaceInfo ? S.workspaceInfo.name || _t("默认工作区") : _t("默认工作区");
   nameEl.title = S.workspaceInfo ? S.workspaceInfo.path || "" : "";
 }
