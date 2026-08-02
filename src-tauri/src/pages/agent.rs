@@ -1656,6 +1656,13 @@ pub async fn read_attachment_file(path: String) -> Result<serde_json::Value, App
     Ok(serde_json::json!({ "name": name, "base64": b64 }))
 }
 
+/// 判断路径是否为目录。粘贴"复制的文件夹"时前端据此把目录路径作为文本插入
+/// 输入框（而不是报"暂不支持该格式"），方便告知模型文件所在目录。
+#[tauri::command]
+pub fn is_directory(path: String) -> bool {
+    std::fs::metadata(&path).map(|m| m.is_dir()).unwrap_or(false)
+}
+
 /// 把前端传入的 base64 附件内容写入临时目录，返回磁盘绝对路径。
 /// 用于"超长文本附件走路径模式"：内容不再内联进 prompt（避免触发
 /// 70% 上下文守卫的死循环），而是落盘后让 Agent 用 view 工具分段读取。
