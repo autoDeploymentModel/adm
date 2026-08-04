@@ -2,7 +2,7 @@
 import { t as _t } from "../../i18n.js";
 import { S, invoke, listen } from "./state.js";
 import { api } from "./api.js";
-import { getTextFromParts } from "./utils.js";
+import { getTextFromParts, stripSystemInfoText } from "./utils.js";
 import { getErrorMessage } from "./error.js";
 import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, reportError, updateContextUsage } from "./ui.js";
 import { renderMessages, renderTodos } from "./render.js";
@@ -223,7 +223,9 @@ function handleMessageSSEEvent(action, msgData) {
     if (!existing) {
       // 对于用户消息，尝试按内容匹配临时消息并替换（避免重复）
       if (msgData.role === "user") {
-        var tempIdx = S.messages.findIndex(function(m) { return m._temp && m.role === "user" && m.content === (msgData.content || getTextFromParts(msgData.parts)); });
+        // 服务端用户消息附带 <system_info> 附件引导块，与临时消息（纯正文）匹配前先剥离
+        var serverText = (msgData.content || getTextFromParts(msgData.parts)) || "";
+        var tempIdx = S.messages.findIndex(function(m) { return m._temp && m.role === "user" && m.content === stripSystemInfoText(serverText); });
         if (tempIdx >= 0) {
           // 用正式消息替换临时消息
           S.messages[tempIdx] = msgData;

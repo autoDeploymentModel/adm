@@ -1,7 +1,7 @@
 // 消息渲染（增量 DOM 对齐）与 Todo 列表
 import { t as _t } from "../../i18n.js";
 import { S } from "./state.js";
-import { renderMarkdown, formatTime } from "./utils.js";
+import { renderMarkdown, formatTime, splitSystemInfo } from "./utils.js";
 import { updateScrollBottomBtn } from "./ui.js";
 
 // ===== 消息渲染 =====
@@ -233,6 +233,21 @@ function updateMessageNode(el, msg) {
     var d = part.data || {};
     switch (part.type) {
       case "text":
+        if (role === "user" && splitSystemInfo(d.text || "")) {
+          // 含 <system_info> 引导块：结构特殊（正文 + 折叠附件信息），整体重建该 part；
+          // 重建前记录已展开的折叠块并在重建后恢复
+          var wasOpen = pe.querySelector("details[data-key][open]");
+          var np = buildPartElement(part, i, role, el.getAttribute("data-msgid"));
+          if (!np) return false;
+          np.setAttribute("data-pk", String(i));
+          np.setAttribute("data-ptype", part.type);
+          pe.replaceWith(np);
+          if (wasOpen) {
+            var nd = np.querySelector("details[data-key]");
+            if (nd) /** @type {HTMLDetailsElement} */ (nd).open = true;
+          }
+          break;
+        }
         pe.innerHTML = renderMarkdown(d.text || "");
         break;
       case "reasoning":
@@ -292,6 +307,22 @@ function renderMessageParts(container, parts, role, msgKey) {
   });
 }
 
+// 用户消息中的 <system_info> 附件引导块 → 可折叠附件信息块（默认收起，展开可见完整引导文本）
+function buildSystemInfoEl(info, partKey) {
+  var details = document.createElement("details");
+  details.className = "msg-attach-info";
+  details.setAttribute("data-key", partKey);
+  var summary = document.createElement("summary");
+  summary.textContent = "📎 " + _t("附件: ") + (info.names.length > 0 ? info.names.join(", ") : "?");
+  summary.style.cssText = "cursor:pointer;font-size:12px;color:var(--c-text-3);";
+  details.appendChild(summary);
+  var body = document.createElement("div");
+  body.style.cssText = "padding:8px;font-size:12px;color:var(--c-text-2);white-space:pre-wrap;background:var(--c-bg-deep);border-radius:4px;margin-top:4px;";
+  body.textContent = info.hints.join("\n");
+  details.appendChild(body);
+  return details;
+}
+
 // 构建单个 part 的根元素（供全量渲染与就地更新时局部重建共用）
 function buildPartElement(part, partIdx, role, msgKey) {
   var partType = part.type;
@@ -302,6 +333,18 @@ function buildPartElement(part, partIdx, role, msgKey) {
     case "text":
       var textDiv = document.createElement("div");
       textDiv.className = "msg-text";
+      if (role === "user") {
+        // 服务端在用户消息末尾注入 <system_info> 附件读取引导：不直接展示原始标签文本，
+        // 折叠为「📎 附件: 文件名」的可展开块（展开可见完整引导，便于核对附件处理方式）。
+        var info = splitSystemInfo(partData.text || "");
+        if (info) {
+          var mdDiv = document.createElement("div");
+          mdDiv.innerHTML = renderMarkdown(info.text || "");
+          textDiv.appendChild(mdDiv);
+          textDiv.appendChild(buildSystemInfoEl(info, partKey + ":sys"));
+          return textDiv;
+        }
+      }
       // 使用 Markdown 渲染
       textDiv.innerHTML = renderMarkdown(partData.text || "");
       return textDiv;
