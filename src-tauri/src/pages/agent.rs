@@ -106,17 +106,118 @@ const DEFAULT_CONTEXT_WINDOW: u32 = 25600;
 /// 默认端口（配置文件未显式配置 port 时使用）
 const DEFAULT_PORT: u16 = 5678;
 
-/// admAgent.json 的存放目录：`$HOME/.config/admAgent`
-/// Windows 下 $HOME 即 C:\Users\{username}，最终路径为 C:\Users\{username}\.config\admAgent
+/// admAgent.json 的存放目录。
+/// Windows：`%LOCALAPPDATA%\admAgent`（与 admAgent server 的 GlobalConfigData 同目录，
+/// 合并优先级高于 `~/.config/admAgent/admAgent.json`，避免低优先级旧值覆盖 UI 写入）；
+/// 其它平台：保持 `$HOME/.config/admAgent`（无 LOCALAPPDATA 概念）。
+/// 首次切换到新目录时会自动把旧 `~/.config/admAgent/admAgent.json` 一次性迁移过来并改名备份。
 fn adm_agent_config_dir() -> Result<PathBuf, AppError> {
-    let home = if let Ok(p) = std::env::var("USERPROFILE") {
-        PathBuf::from(p)
-    } else if let Ok(p) = std::env::var("HOME") {
-        PathBuf::from(p)
+    let dir = if cfg!(target_os = "windows") {
+        let local_app_data = std::env::var("LOCALAPPDATA")
+            .ok()
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var("USERPROFILE")
+                    .ok()
+                    .map(|p| PathBuf::from(p).join("AppData").join("Local"))
+            });
+        match local_app_data {
+            Some(p) => p.join("admAgent"),
+            None => {
+                return Err(AppError::msg("无法确定本地应用数据目录（LOCALAPPDATA），无法创建 admAgent 配置目录"));
+            }
+        }
     } else {
-        return Err(AppError::msg("无法确定用户主目录，无法创建 admAgent 配置目录"));
+        let home = if let Ok(p) = std::env::var("HOME") {
+            PathBuf::from(p)
+        } else {
+            return Err(AppError::msg("无法确定用户主目录，无法创建 admAgent 配置目录"));
+        };
+        home.join(".config").join("admAgent")
     };
-    Ok(home.join(".config").join("admAgent"))
+    // 迁移只针对 Windows 的目录切换；其它平台新旧路径相同，迁移会把自己改名，必须跳过。
+    #[cfg(target_os = "windows")]
+    migrate_legacy_config(&dir);
+    Ok(dir)
+}
+
+/// 把 overlay 中 base 缺失的键合并进 base（对象递归合并；标量/数组以 base 为准）。
+/// 语义对齐 admAgent server 的 JSON 深合并：新位置（高优先级）内容优先。
+fn merge_json(base: &mut serde_json::Value, overlay: &serde_json::Value) {
+    if let (serde_json::Value::Object(b), serde_json::Value::Object(o)) = (base, overlay) {
+        for (k, v) in o {
+            match b.get_mut(k) {
+                Some(bv) => merge_json(bv, v),
+                None => {
+                    b.insert(k.clone(), v.clone());
+                }
+            }
+        }
+    }
+}
+
+/// 一次性迁移：把旧 `$HOME/.config/admAgent/admAgent.json` 的内容合并进新目录下的
+/// admAgent.json（新文件内容优先，旧文件缺失的键补入，如历史云端 provider），
+/// 随后把旧文件改名 `admAgent.json.migrated.bak` 保留备份，避免运行时双份加载
+/// 造成旧值覆盖 UI 写入 / 删除不生效。
+/// 幂等：旧文件不存在或已改名则直接返回；失败只打日志，不影响主流程（下次调用会重试）。
+fn migrate_legacy_config(new_dir: &std::path::Path) {
+    let home = match std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
+        Ok(h) => PathBuf::from(h),
+        Err(_) => return,
+    };
+    let legacy_path = home.join(".config").join("admAgent").join("admAgent.json");
+    if !legacy_path.exists() {
+        return;
+    }
+    let new_path = new_dir.join("admAgent.json");
+    if new_path == legacy_path {
+        // 新旧同路径（非 Windows 或 HOME 恰好等于数据目录的异常场景）：无需迁移
+        return;
+    }
+    let legacy = match std::fs::read_to_string(&legacy_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[admAgent] 迁移旧配置：读取 {} 失败: {}", legacy_path.display(), e);
+            return;
+        }
+    };
+    let legacy_value: serde_json::Value = match serde_json::from_str(&legacy) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[admAgent] 迁移旧配置：解析 {} 失败: {}", legacy_path.display(), e);
+            return;
+        }
+    };
+    let result = (|| -> Result<(), AppError> {
+        if new_path.exists() {
+            let s = std::fs::read_to_string(&new_path)
+                .map_err(|e| format!("读取 {} 失败: {}", new_path.display(), e))?;
+            let mut new_value: serde_json::Value = serde_json::from_str(&s)
+                .map_err(|e| format!("解析 {} 失败: {}", new_path.display(), e))?;
+            merge_json(&mut new_value, &legacy_value);
+            write_json_atomic(&new_path, &new_value)?;
+        } else {
+            if let Some(parent) = new_path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("创建 {} 失败: {}", parent.display(), e))?;
+            }
+            std::fs::write(&new_path, &legacy)
+                .map_err(|e| format!("写入 {} 失败: {}", new_path.display(), e))?;
+        }
+        let backup = legacy_path.with_file_name("admAgent.json.migrated.bak");
+        // 上次 rename 已成功但本次又见到旧文件的异常状态：先清掉占位备份再改名
+        if backup.exists() {
+            let _ = std::fs::remove_file(&backup);
+        }
+        std::fs::rename(&legacy_path, &backup)
+            .map_err(|e| format!("备份旧配置 {} 失败: {}", legacy_path.display(), e))?;
+        eprintln!("[admAgent] 已迁移旧配置 {} → {}", legacy_path.display(), new_path.display());
+        Ok(())
+    })();
+    if let Err(e) = result {
+        eprintln!("[admAgent] 迁移旧配置失败: {}", e);
+    }
 }
 
 /// 从 ADM 配置文件（config.json）读取上下文大小 ctx_size。
@@ -347,6 +448,98 @@ pub fn sync_local_model_capabilities(app: tauri::AppHandle) {
             Err(e) => eprintln!("[admAgent] 同步本地模型能力：/agent/update 失败: {}", e),
         }
     });
+}
+
+/// 把「多模态模型（图片识别）」选择同步到 admAgent.json 顶层 agent_vision_model 并触发服务端重载。
+///
+/// 值格式为 "provider/model" 复合键（如 "admAgent/admImage-model"）；空值或缺省回退内置
+/// admAgent/admImage-model。写入 Windows 的 %LOCALAPPDATA%\admAgent\admAgent.json
+/// （与云端 provider 同一文件；其它平台仍为 ~/.config/admAgent/admAgent.json），
+/// vision 子命令启动时 config.Load 读取该字段。server 运行时通过写无害标量触发 SetConfigFields
+/// 的全量重载（从磁盘重读所有配置路径并合并，任意顶层字段随之生效——已验证 reloadFromDiskLocked
+/// 会重读 GlobalConfig，不限于 providers 分支）。
+///
+/// 失败静默：vision 缺省回退内置 admImage-model，不影响主流程。
+pub fn sync_agent_vision_model(app: &tauri::AppHandle, value: &str) {
+    let value = value.to_string();
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let changed = match write_agent_vision_model(&value) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("[admAgent] 同步多模态模型：写 admAgent.json 失败: {}", e);
+                return;
+            }
+        };
+        if !changed {
+            return; // 值未变化：跳过服务端重载，避免不必要的配置抖动
+        }
+        let (port, ws) = {
+            let state = app.state::<AppState>();
+            let mut guard = match state.agent_session.lock() {
+                Ok(g) => g,
+                Err(_) => return,
+            };
+            match guard.as_mut() {
+                Some(s) => {
+                    if matches!(s.child.try_wait(), Ok(None)) {
+                        (s.port, s.workspace_id.clone())
+                    } else {
+                        return; // 进程已退出：下次启动会读新配置
+                    }
+                }
+                _ => return, // server 未运行：启动时会读新配置，无需热同步
+            }
+        };
+        let client = match reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(3))
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+        {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        // 写无害标量触发服务端重载（合并进刚更新的 admAgent.json 顶层 agent_vision_model）
+        let set_url = format!("http://127.0.0.1:{}/v1/workspaces/{}/config/set", port, ws);
+        let body = serde_json::json!({ "scope": 0, "key": "providers.local.name", "value": "Local" });
+        match client.post(&set_url).json(&body).send().await {
+            Ok(r) if r.status().is_success() => {
+                eprintln!("[admAgent] 同步多模态模型：/config/set 触发重载完成");
+            }
+            Ok(r) => {
+                eprintln!("[admAgent] 同步多模态模型：/config/set HTTP {}", r.status());
+            }
+            Err(e) => {
+                eprintln!("[admAgent] 同步多模态模型：/config/set 失败: {}", e);
+            }
+        }
+    });
+}
+
+/// 把 agent_vision_model 写入 admAgent.json 顶层（缺省回退内置 admImage-model）。
+/// 返回是否真的发生了变更（供调用方决定是否触发服务端重载）。
+fn write_agent_vision_model(value: &str) -> Result<bool, AppError> {
+    let (provider, model) = match value.split_once('/') {
+        Some((p, m)) if !p.is_empty() && !m.is_empty() => (p.to_string(), m.to_string()),
+        _ => ("admAgent".to_string(), "admImage-model".to_string()),
+    };
+    let dir = adm_agent_config_dir()?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建 admAgent 配置目录失败: {}", e))?;
+    let path = dir.join("admAgent.json");
+    let mut config: serde_json::Value = if path.exists() {
+        let s = std::fs::read_to_string(&path)
+            .map_err(|e| format!("读取 admAgent.json 失败: {}", e))?;
+        serde_json::from_str(&s).map_err(|e| format!("解析 admAgent.json 失败: {}", e))?
+    } else {
+        build_adm_agent_config(DEFAULT_CONTEXT_WINDOW, DEFAULT_PORT, false, false)
+    };
+    let target = serde_json::json!({ "provider": provider, "model": model });
+    if config.get("agent_vision_model") == Some(&target) {
+        return Ok(false);
+    }
+    config["agent_vision_model"] = target;
+    write_json_atomic(&path, &config)?;
+    Ok(true)
 }
 
 // ===== 添加云端模型 Provider =====
@@ -1695,13 +1888,18 @@ pub fn is_directory(path: String) -> bool {
     std::fs::metadata(&path).map(|m| m.is_dir()).unwrap_or(false)
 }
 
-/// 把前端传入的 base64 附件内容写入临时目录，返回磁盘绝对路径。
-/// 用于"超长文本附件走路径模式"：内容不再内联进 prompt（避免触发
-/// 70% 上下文守卫的死循环），而是落盘后让 Agent 用 view 工具分段读取。
-/// 浏览器选择/拖拽的 File 对象没有磁盘路径，需在此落盘；粘贴路径场景
-/// 前端直接持有真实路径，无需调用本命令。
-#[tauri::command]
+/// 把前端传入的 base64 附件内容写入持久附件目录，返回磁盘绝对路径。
+/// 所有附件（文本/图片，不再区分大小）统一落盘传路径，由 coordinator 收集路径
+/// 注入 <system_info> 读取引导（文本→view、图片→vision），避免内联 base64 触发
+/// 70% 上下文守卫死循环。落盘目录为 ADM 数据目录下的 attachments/（持久，不随
+/// 系统清理临时目录而失效；与 coordinator 的 session 级附件目录共用清理策略）。
+/// 浏览器选择/拖拽的 File 对象没有磁盘路径，需在此落盘；粘贴路径场景前端直接
+/// 持有真实路径，无需调用本命令。
+/// 注意：rename_all = "snake_case" 使前端沿用 file_name / base64_content 参数名
+/// （Tauri 默认按 camelCase 收参，会要求 fileName / base64Content）。
+#[tauri::command(rename_all = "snake_case")]
 pub async fn save_attachment_file(
+    app: tauri::AppHandle,
     file_name: String,
     base64_content: String,
 ) -> Result<String, AppError> {
@@ -1728,14 +1926,15 @@ pub async fn save_attachment_file(
     } else {
         safe_name
     };
-    let dir = std::env::temp_dir().join("adm_attachments");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("创建附件临时目录失败: {}", e))?;
+    let data_dir = config::get_data_dir(Some(&app))?;
+    let dir = data_dir.join("attachments");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建附件目录失败: {}", e))?;
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
     let path = dir.join(format!("{}_{}", ts, safe_name));
-    std::fs::write(&path, &data).map_err(|e| format!("写入附件临时文件失败: {}", e))?;
+    std::fs::write(&path, &data).map_err(|e| format!("写入附件文件失败: {}", e))?;
     Ok(path.to_string_lossy().to_string())
 }
 

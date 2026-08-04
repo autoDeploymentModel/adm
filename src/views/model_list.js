@@ -524,7 +524,7 @@ function showToast(message) {
   toast.className = "error-toast";
   toast.textContent = message;
   document.body.appendChild(toast);
-  setTimeout(() => toast.remove(), 4000);
+  setTimeout(() => toast.remove(), 3000);
 }
 
 function updateModelDesc() {

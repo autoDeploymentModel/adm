@@ -13,11 +13,6 @@ import { armAutoContinue, resetAutoContinue } from "./autocontinue.js";
 
 // ===== 发送消息 =====
 
-// 文本附件解码后超过该字节数时走"路径模式"（不内联内容，引导 Agent 用 view 分段读）。
-// 依据：本地模型 70% 上下文守卫下，基础开销（系统提示+工具 schema+项目块）约 15K tokens，
-// 附件内容超过 ~25K tokens（≈100KB）即可能触发守卫死循环；取 60KB 留足余量。
-var LARGE_TEXT_ATTACH_BYTES = 60 * 1024;
-
 export async function sendMessage() {
   console.log("[agent] sendMessage() isSending:", S.isSending, "convId:", S.currentConvId, "activeRun:", S.activeRun ? S.activeRun.sessionId : null, "queuedRun:", S.queuedRun ? S.queuedRun.sessionId : null);
   // 仅当「当前 UI 会话就是正在运行的会话」时，点击发送 = 取消该运行；
@@ -85,19 +80,6 @@ export async function sendMessage() {
   var text = input.value.trim();
   if (!text && S.pendingFiles.length === 0) return;
 
-  // 检查模型是否支持图片
-  var hasImages = S.pendingFiles.some(function(f) { return f.type && f.type.indexOf("image/") === 0; });
-  if (hasImages && (!S.agentInfo || !S.agentInfo.model)) {
-    try {
-      S.agentInfo = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent");
-    } catch (_) {}
-  }
-  console.log("[agent] 图片检查:", { hasImages, agentInfo: S.agentInfo ? S.agentInfo.model : null, supports_images: S.agentInfo && S.agentInfo.model ? S.agentInfo.model.supports_images : "N/A" });
-  if (hasImages && S.agentInfo && S.agentInfo.model && S.agentInfo.model.supports_images !== true) {
-    showError(_t("当前模型 (") + (S.agentInfo.model.id || _t("未知")) + _t(") 不支持图片，请仅发送文本或切换到支持图片的模型"));
-    return;
-  }
-
   // 若此前切换模型时 /agent/update 未生效（会话繁忙），发送前补一次重载，确保本轮用新模型
   if (S.pendingModelReload && S.serverInfo && S.serverInfo.workspace_id) {
     try {
@@ -106,6 +88,30 @@ export async function sendMessage() {
       refreshAgentInfo();
     } catch (e) {
       console.warn("[agent] 发送前重载 Agent 配置失败:", e);
+    }
+  }
+
+  // 发送前先把全部附件落盘为真实磁盘路径（统一"路径模式"，不再区分大小/类型）：
+  // 内容一律不内联进 prompt（避免内联 base64 触发 70% 上下文守卫死循环），
+  // 路径统一由 coordinator 收集并注入 <system_info> 读取引导（文本→view、图片→vision）。
+  // 粘贴路径场景前端已持有 path；浏览器选择/拖拽的 File 无路径则先落盘到持久附件目录。
+  // 落盘失败：明确报错并中止发送（不静默降级内联，避免模型看不到附件内容）。
+  var filesToSend = S.pendingFiles.slice();
+  var attachments = [];
+  if (filesToSend.length > 0) {
+    for (var i = 0; i < filesToSend.length; i++) {
+      var f = filesToSend[i];
+      var realPath = f.path || null;
+      if (!realPath) {
+        try {
+          realPath = await invoke("save_attachment_file", { file_name: f.name, base64_content: f.base64 });
+        } catch (e) {
+          console.warn("[agent] 附件落盘失败:", e);
+          showError(_t("附件保存失败，已取消发送: ") + f.name + " (" + getErrorMessage(e) + ")");
+          return;
+        }
+      }
+      attachments.push({ file_path: realPath, file_name: f.name, mime_type: f.type || "application/octet-stream", content: "" });
     }
   }
 
@@ -129,11 +135,10 @@ export async function sendMessage() {
 
   // 立即显示用户消息（使用临时 ID，以便 SSE 到来时去重替换）
   var tempId = "temp-user-" + Date.now();
-  S.messages.push({ id: tempId, role: "user", content: text, _temp: true, _attachments: S.pendingFiles.length > 0 ? S.pendingFiles.map(function(f) { return f.name; }) : null });
+  S.messages.push({ id: tempId, role: "user", content: text, _temp: true, _attachments: filesToSend.length > 0 ? filesToSend.map(function(f) { return f.name; }) : null });
   renderMessages();
   input.value = "";
   autoResize(input);
-  var filesToSend = S.pendingFiles.slice();
   clearPendingFiles();
 
   // 更新状态栏
@@ -149,47 +154,7 @@ export async function sendMessage() {
       prompt: text || _t("（用户发来附件，请查看并处理）"),
       run_id: runId,
     };
-    if (filesToSend.length > 0) {
-      // 超长文本附件走"路径模式"：内容不内联进 prompt（避免触发 admAgent 的
-      // 70% 上下文守卫 → Summarize 无可压缩 → summarize-resume 死循环 → 静默结束），
-      // 而是传真实磁盘路径，prompt 引导 Agent 用 view 工具分段读取。
-      // 粘贴路径场景前端已持有 path；浏览器选择/拖拽的 File 无路径则先落盘到临时目录。
-      var pathModeHints = [];
-      var attachments = [];
-      for (var i = 0; i < filesToSend.length; i++) {
-        var f = filesToSend[i];
-        var isImage = f.type && f.type.indexOf("image/") === 0;
-        var isText = f.type && (f.type.indexOf("text/") === 0 ||
-          ["application/json", "application/xml", "application/yaml", "application/x-yaml", "application/javascript"].indexOf(f.type) >= 0);
-        var decodedSize = f.size || (f.base64 ? Math.round(f.base64.length * 3 / 4) : 0);
-        var usePathMode = isText && decodedSize > LARGE_TEXT_ATTACH_BYTES;
-        if (usePathMode) {
-          var realPath = f.path || null;
-          if (!realPath) {
-            try {
-              realPath = await invoke("save_attachment_file", { file_name: f.name, base64_content: f.base64 });
-            } catch (e) {
-              console.warn("[agent] 附件落盘失败，退回内联:", e);
-              realPath = null;
-            }
-          }
-          if (realPath) {
-            pathModeHints.push({ name: f.name, path: realPath, size: decodedSize });
-            attachments.push({ file_path: realPath, file_name: f.name, mime_type: f.type || "text/plain", content: "" });
-            continue;
-          }
-        }
-        attachments.push({ file_path: f.name, file_name: f.name, mime_type: f.type || "application/octet-stream", content: f.base64 });
-      }
-      if (attachments.length > 0) body.attachments = attachments;
-      if (pathModeHints.length > 0) {
-        var hint = "\n\n<system_info>" + _t("以下附件文件较大，内容未内联（已保存到磁盘路径）。请用 view 工具分段读取后分析：每次读取一部分（可用 offset/limit 参数控制行范围），不要尝试一次读完整个文件。如需汇总，可先浏览开头与关键片段。") + "</system_info>\n";
-        pathModeHints.forEach(function(h) {
-          hint += "- " + _t("附件 '") + h.name + "'（" + _t("约 ") + (h.size / 1024).toFixed(0) + "KB）" + _t("路径: ") + h.path + "\n";
-        });
-        body.prompt = (body.prompt || "") + hint;
-      }
-    }
+    if (attachments.length > 0) body.attachments = attachments;
     try {
       await api("POST", "/v1/workspaces/" + workspaceId + "/agent", body);
     } catch (sendErr) {
