@@ -41,6 +41,32 @@ export function getTextFromParts(parts) {
   return textParts.map(function(p) { return (p.data && p.data.text) || ""; }).join("");
 }
 
+// 从用户消息文本中提取 <system_info> 附件引导块（服务端注入的附件读取引导）。
+// 返回 { text: 去除引导块后的正文（首尾空白已清理）, hints: 各引导块全文, names: 解析出的附件文件名 }；
+// 无引导块时返回 null。正则要求引导块闭合，避免误伤正文中零散的 "<system_info>" 字样。
+export function splitSystemInfo(text) {
+  if (!text || text.indexOf("<system_info>") === -1) return null;
+  var hints = [];
+  var rest = text.replace(/<system_info>([\s\S]*?)<\/system_info>/g, function(_, inner) {
+    if (inner != null) hints.push(inner);
+    return "";
+  });
+  if (hints.length === 0) return null;
+  var names = [];
+  hints.forEach(function(h) {
+    var re = /附件 '([^']+)'/g;
+    var m;
+    while ((m = re.exec(h))) names.push(m[1]);
+  });
+  return { text: rest.trim(), hints: hints, names: names };
+}
+
+// 去除文本中的 <system_info> 引导块（用于临时消息与服务端消息的内容匹配）
+export function stripSystemInfoText(text) {
+  var info = splitSystemInfo(text);
+  return info ? info.text : text;
+}
+
 // 与 src-tauri agent.rs 的 slugify_model_id 保持一致：转小写，
 // 空格/下划线/连字符→'-'，保留点号，其它字符忽略，去尾部 '-'/'.'
 export function slugifyModelId(name) {
