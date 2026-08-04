@@ -66,12 +66,14 @@ export function addPendingFiles(fileList) {
       return;
     }
     if (!isSupportedFile(file)) {
-      showError(_t("暂不支持该格式: ") + file.name + _t("（支持文本/图片，如 txt、md、log、json、csv、代码等）"));
+      showError(_t("该格式无法分析（工具仅支持文本与图片）: ") + file.name);
       return;
     }
     var mime = inferMime(file);
     if (mime && mime.indexOf("image/") === 0) {
-      compressImage(file).then(function(result) {
+      // WebView2 可能给 File 注入 .path：有真实路径时压缩结果保留，发送时直接走路径模式
+      var realPath = (typeof file["path"] === "string" && file["path"]) ? file["path"] : null;
+      compressImage(file, realPath).then(function(result) {
         S.pendingFiles.push(result);
         renderAttachPreview();
       }).catch(function() {
@@ -99,7 +101,7 @@ export function addPendingFiles(fileList) {
   });
 }
 
-function compressImage(file) {
+function compressImage(file, keepPath) {
   return new Promise(function(resolve, reject) {
     var reader = new FileReader();
     reader.onload = function(e) {
@@ -110,7 +112,7 @@ function compressImage(file) {
         var h = img.naturalHeight;
         if (w <= ATTACH_MAX_DIMENSION && h <= ATTACH_MAX_DIMENSION && file.size <= ATTACH_MAX_SIZE) {
           var base64 = dataUrl.split(",")[1] || "";
-          resolve({ name: file.name, type: file.type, size: file.size, base64: base64, dataUrl: dataUrl });
+          resolve({ name: file.name, type: file.type, size: file.size, base64: base64, dataUrl: dataUrl, path: keepPath || null });
           return;
         }
         var scale = Math.min(ATTACH_MAX_DIMENSION / w, ATTACH_MAX_DIMENSION / h, 1);
@@ -126,7 +128,7 @@ function compressImage(file) {
         var base64 = compressedDataUrl.split(",")[1] || "";
         var compressedSize = Math.round(base64.length * 3 / 4);
         console.log("[agent] 图片压缩: " + file.name + " " + w + "x" + h + " -> " + tw + "x" + th + ", " + (file.size / 1024).toFixed(0) + "KB -> " + (compressedSize / 1024).toFixed(0) + "KB");
-        resolve({ name: file.name, type: file.type || "image/jpeg", size: compressedSize, base64: base64, dataUrl: compressedDataUrl });
+        resolve({ name: file.name, type: file.type || "image/jpeg", size: compressedSize, base64: base64, dataUrl: compressedDataUrl, path: keepPath || null });
       };
       img.onerror = function() { reject(new Error(_t("图片加载失败"))); };
       img.src = dataUrl;
@@ -243,7 +245,7 @@ export async function addPastedPaths(paths) {
         insertPathText(path);
         continue;
       }
-      showError(_t("暂不支持该格式: ") + path + _t("（支持文本/图片，如 txt、md、log、json、csv、代码等）"));
+      showError(_t("该格式无法分析（工具仅支持文本与图片）: ") + path);
       continue;
     }
     var res;
@@ -283,18 +285,19 @@ export async function addPastedPaths(paths) {
       }
       if (blob) {
         var f = new File([blob], res.name || path, { type: dataUrl2.split(";")[0].slice(5) });
-        compressImage(f).then(function(result) {
+        // 粘贴路径场景持有真实磁盘路径：压缩结果保留 path，发送时直接走路径模式（不再重复落盘）
+        compressImage(f, path).then(function(result) {
           S.pendingFiles.push(result);
           renderAttachPreview();
         }).catch(function() {
           showError(_t("图片处理失败: ") + (res.name || path));
         });
       } else {
-        S.pendingFiles.push({ name: res.name || path, type: dataUrl2.split(";")[0].slice(5), size: size, base64: base64, dataUrl: dataUrl2 });
+        S.pendingFiles.push({ name: res.name || path, type: dataUrl2.split(";")[0].slice(5), size: size, base64: base64, dataUrl: dataUrl2, path: path });
         renderAttachPreview();
       }
     } else {
-      showError(_t("暂不支持该格式: ") + (res.name || path) + _t("（支持文本/图片，如 txt、md、log、json、csv、代码等）"));
+      showError(_t("该格式无法分析（工具仅支持文本与图片）: ") + (res.name || path));
     }
   }
 }

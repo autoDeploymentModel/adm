@@ -252,7 +252,7 @@ export function updateStatusBar(state, workdir, tokens) {
 
 // ===== 统一错误/提示展示 =====
 // 所有提示（错误/警告/信息）统一走 showNotice 渲染为消息区节点：
-//   error 红 / warn 黄 / info 灰，60 秒后自动消失；render.js 增量渲染时保留 error/warn/info 节点。
+//   error 红 / warn 黄 / info 灰，3 秒后自动消失；render.js 增量渲染时保留 error/warn/info 节点。
 /**
  * 统一提示入口。
  * @param {string} msg 提示文本
@@ -268,8 +268,8 @@ export function showNotice(msg, level) {
   area.appendChild(div);
   if (!S.manualScrollMode) area.scrollTop = area.scrollHeight;
   updateScrollBottomBtn();
-  // 60 秒后自动消失（增量渲染会保留提示节点，需自行清理避免堆积）
-  setTimeout(function() { if (div.parentNode) div.remove(); }, 60000);
+  // 3 秒后自动消失（增量渲染会保留提示节点，需自行清理避免堆积）
+  setTimeout(function() { if (div.parentNode) div.remove(); }, 3000);
 }
 
 // 统一错误展示入口：传入原始错误（字符串 / Error / 结构化对象均可），

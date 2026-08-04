@@ -15,7 +15,7 @@ import { syncModeToServer } from "./agent/permission.js";
 import { loadTools, renderToolsList } from "./agent/tools.js";
 import { switchModel, refreshServerProviders, resolveAgentModel, updateModelDropdown, updateModelBtn } from "./agent/model.js";
 import { enableAutoCompact, updateWorkspaceSelector } from "./agent/workspace.js";
-import { showSettings, hideSettings, updateSettingsUI, saveSettings, showAddModelDialog, hideAddModelDialog, addModel, initProjectMemoryUI } from "./agent/settings_dialog.js";
+import { showSettings, hideSettings, updateSettingsUI, saveSettings, showAddModelDialog, hideAddModelDialog, addModel, initProjectMemoryUI, renderVisionModelSelect } from "./agent/settings_dialog.js";
 import { addPendingFiles, parseUriListPaths, addPastedPaths, looksLikeFilePath } from "./agent/attach.js";
 import { setAutoContinueEnabled } from "./agent/autocontinue.js";
 
@@ -338,7 +338,7 @@ function bindEvents() {
   initProjectMemoryUI();
 
   // 设置项即时生效：任一字段变更立即应用并持久化（无保存/取消按钮）
-  ["settings-plan", "settings-auto-continue", "settings-debug-logging", "settings-reasoning-effort", "settings-temperature"].forEach(function(id) {
+  ["settings-plan", "settings-auto-continue", "settings-debug-logging", "settings-reasoning-effort", "settings-temperature", "settings-vision-model"].forEach(function(id) {
     $input(id).addEventListener("change", applySettings);
   });
 
@@ -374,6 +374,7 @@ function bindEvents() {
     var tempVal = $input("settings-temperature").value;
     S.settings.agent_temperature = tempVal ? parseFloat(tempVal) : null;
     S.settings.agent_plan_mode = $input("settings-plan").checked;
+    S.settings.agent_vision_model = $input("settings-vision-model").value || "admAgent/admImage-model";
     setAutoContinueEnabled($input("settings-auto-continue").checked);
     // 调试模式：先同步后端开关（实时生效 + 开启时首次截断日志），再随 settings 持久化。
     // 后端切换失败（如日志文件创建失败）时必须回滚状态，否则会把 debug_logging=true
@@ -417,10 +418,12 @@ function bindEvents() {
     e.stopPropagation();
     updateModelDropdown();
     // 异步刷新服务端 provider 列表（含内置模型），完成后重渲染
-    refreshServerProviders().then(function() { updateModelDropdown(); });
+    refreshServerProviders().then(function() {
+      updateModelDropdown();
+      renderVisionModelSelect();
+    });
     document.getElementById("agent-model-dropdown").classList.toggle("show");
-  });
-  document.addEventListener("click", function() {
+  });  document.addEventListener("click", function() {
     var dd = document.getElementById("agent-model-dropdown");
     if (dd) dd.classList.remove("show");
   });

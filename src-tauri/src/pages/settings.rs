@@ -24,7 +24,11 @@ pub async fn save_settings(app: tauri::AppHandle, settings: Settings) -> Result<
     if let Ok(file) = std::fs::File::open(&config_path) {
         let _ = file.sync_all();
     }
-    
+
+    // 同步「多模态模型」到 admAgent.json 顶层 agent_vision_model（vision 子命令读取），
+    // 值变化时触发服务端重载；失败静默（vision 缺省回退内置 admImage-model）
+    crate::pages::agent::sync_agent_vision_model(&app, &settings.agent_vision_model);
+
     dbg_log!("[DEBUG] Config saved successfully to: {:?}", config_path);
     Ok(())
 }

@@ -136,6 +136,10 @@ pub debug_logging: bool,
 /// 界面语言（"zh" 中文 / "en" English，空或未知回退中文）
 #[serde(default)]
 pub language: String,
+/// Agent 多模态模型（图片识别）："provider/model" 复合键，如 "admAgent/admImage-model"（默认）。
+/// 空或缺失 = 内置 admImage-model；同步写入 admAgent.json 顶层 agent_vision_model 供 vision 子命令读取
+#[serde(default)]
+pub agent_vision_model: String,
 }
 
 impl Default for Settings {
@@ -149,6 +153,7 @@ agent_reasoning_effort: String::new(),
 agent_temperature: None,
 debug_logging: false,
 language: String::new(),
+agent_vision_model: String::new(),
 }
 }
 }

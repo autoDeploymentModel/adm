@@ -1387,6 +1387,13 @@ export const template = `
             <input type="number" class="settings-input" id="settings-temperature" placeholder="${_t("留空使用默认")}" step="0.1" min="0" max="2">
           </div>
         </div>
+        <div class="param-row">
+          <div class="param-label">${_t("多模态模型")}</div>
+          <div class="param-input">
+            <select class="settings-select" id="settings-vision-model"></select>
+            <div class="param-desc">${_t("用于识别会话中的图片；默认为内置 admImage-model（自动轮询可用图片后端）")}</div>
+          </div>
+        </div>
       </div>
 
       <!-- 项目记忆（跨会话持久记忆，只读展示） -->

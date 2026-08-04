@@ -57,8 +57,52 @@ export function updateSettingsUI() {
   // 温度
   tempInput.value = S.settings.agent_temperature || "";
 
+  // 多模态模型（图片识别）：默认内置 admImage-model，自动轮询远程图片后端
+  renderVisionModelSelect();
+
   // 云端模型列表
   renderProviderList();
+}
+
+// 渲染「多模态模型」下拉：固定首项内置 admImage-model（默认）+ 所有 supports_images=true
+// 的已配置模型（云端 provider + 本地多模态，复用服务端 /providers 快照；离线回退磁盘列表）
+export function renderVisionModelSelect() {
+  var sel = $input("settings-vision-model");
+  if (!sel) return;
+  var current = S.settings.agent_vision_model || "admAgent/admImage-model";
+  sel.innerHTML = "";
+  var first = document.createElement("option");
+  first.value = "admAgent/admImage-model";
+  first.textContent = _t("admImage-model（内置 · 自动轮询）");
+  sel.appendChild(first);
+  var seen = { "admAgent/admImage-model": true };
+  var entries = [];
+  if (S.serverProvidersLoaded) {
+    S.serverProviders.forEach(function(sp) {
+      if (!sp || !Array.isArray(sp.models)) return;
+      sp.models.forEach(function(m) {
+        if (!m || m.supports_images !== true) return;
+        entries.push({ key: sp.id + "/" + m.id, name: m.name || m.id });
+      });
+    });
+  } else if (!S.serverInfo) {
+    // 无运行中服务：回退磁盘配置（仅列出已确认的云端 provider）
+    S.providers.forEach(function(p) {
+      if (S.pendingProviderKeys[p.key]) return;
+      if (p.supports_images === true && p.model_id) {
+        entries.push({ key: p.key + "/" + p.model_id, name: p.name || p.model_id });
+      }
+    });
+  }
+  entries.forEach(function(e) {
+    if (seen[e.key]) return;
+    seen[e.key] = true;
+    var opt = document.createElement("option");
+    opt.value = e.key;
+    opt.textContent = e.name;
+    sel.appendChild(opt);
+  });
+  sel.value = seen[current] ? current : "admAgent/admImage-model";
 }
 
 export async function saveSettings() {
@@ -76,6 +120,7 @@ export async function saveSettings() {
     s.agent_reasoning_effort = normalizeReasoningEffort(S.settings.agent_reasoning_effort);
     s.agent_temperature = S.settings.agent_temperature || null;
     s.debug_logging = S.settings.debug_logging || false;
+    s.agent_vision_model = S.settings.agent_vision_model || "admAgent/admImage-model";
     await invoke("save_settings", { settings: s });
 
     // 如果工作目录发生了变化，切换 workspace

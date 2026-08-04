@@ -329,7 +329,7 @@ function showToast(message) {
   toast.className = "toast";
   toast.textContent = message;
   document.body.appendChild(toast);
-  setTimeout(function () { toast.remove(); }, 4000);
+  setTimeout(function () { toast.remove(); }, 3000);
 }
 
 function addLogLine(line, source) {
