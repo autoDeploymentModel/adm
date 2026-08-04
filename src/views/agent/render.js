@@ -160,7 +160,7 @@ export function syncWorkingIndicator(area) {
       indicator.id = "agent-working-indicator";
       indicator.innerHTML =
         '<span class="working-indicator-dot"></span>' +
-        '<span class="working-indicator-text">' + _t("正在工作") + +
+        '<span class="working-indicator-text">' + _t("正在工作") +
           '<span class="working-indicator-dots"><span></span><span></span><span></span>' +
         '</span></span>';
     }
