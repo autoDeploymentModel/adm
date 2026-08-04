@@ -252,7 +252,13 @@ export function updateModelBtn() {
 
   // 优先使用 agentInfo（服务端实际运行的模型），保持与消息元信息一致
   if (S.agentInfo && S.agentInfo.model && S.agentInfo.model.id) {
-    nameEl.textContent = S.agentInfo.model.id;
+    // 本地模型内部 id 为 localModel，统一显示可读名称（与 switchModel 保持一致）
+    if (S.agentInfo.model.id === "localModel") {
+      nameEl.textContent = "Local Model";
+    } else {
+      // 优先用可读名称，无名称时回退 id
+      nameEl.textContent = S.agentInfo.model.name || S.agentInfo.model.id;
+    }
     return;
   }
 

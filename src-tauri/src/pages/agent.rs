@@ -110,7 +110,8 @@ const DEFAULT_PORT: u16 = 5678;
 /// Windows：`%LOCALAPPDATA%\admAgent`（与 admAgent server 的 GlobalConfigData 同目录，
 /// 合并优先级高于 `~/.config/admAgent/admAgent.json`，避免低优先级旧值覆盖 UI 写入）；
 /// 其它平台：保持 `$HOME/.config/admAgent`（无 LOCALAPPDATA 概念）。
-/// 首次切换到新目录时会自动把旧 `~/.config/admAgent/admAgent.json` 一次性迁移过来并改名备份。
+/// 首次切换到新目录时会自动把旧 `~/.config/admAgent/admAgent.json` 一次性迁移
+/// （内容合并进新位置、备份到 .migrated.bak、旧位置写占位标记）。
 fn adm_agent_config_dir() -> Result<PathBuf, AppError> {
     let dir = if cfg!(target_os = "windows") {
         let local_app_data = std::env::var("LOCALAPPDATA")
@@ -158,10 +159,17 @@ fn merge_json(base: &mut serde_json::Value, overlay: &serde_json::Value) {
 
 /// 一次性迁移：把旧 `$HOME/.config/admAgent/admAgent.json` 的内容合并进新目录下的
 /// admAgent.json（新文件内容优先，旧文件缺失的键补入，如历史云端 provider），
-/// 随后把旧文件改名 `admAgent.json.migrated.bak` 保留备份，避免运行时双份加载
-/// 造成旧值覆盖 UI 写入 / 删除不生效。
-/// 幂等：旧文件不存在或已改名则直接返回；失败只打日志，不影响主流程（下次调用会重试）。
+/// 原内容先备份到 `admAgent.json.migrated.bak`（仅当尚无备份时），随后在旧位置
+/// **覆盖写入占位标记** `{"migrated_to_localappdata":true}`（不再改名）。
+///
+/// 占位而非改名是必须的：admAgent server 的 EnsureDefaultConfig 每次启动都检查
+/// `~/.config/admAgent/admAgent.json`，文件不存在就重建默认 local 配置——若迁移把
+/// 它改名，server 会重建默认、迁移又改名，形成循环（升级后首次启动即因此出现
+/// "Created default local-model config" 日志与配置短暂退化）。占位文件使该检查永远
+/// 通过，且占位是未知字段，JSON 合并时对生效配置零影响。
+/// 幂等：旧文件不存在或已是占位则直接返回；失败只打日志，不影响主流程（下次调用会重试）。
 fn migrate_legacy_config(new_dir: &std::path::Path) {
+    const MIGRATED_MARKER: &str = "migrated_to_localappdata";
     let home = match std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
         Ok(h) => PathBuf::from(h),
         Err(_) => return,
@@ -189,6 +197,10 @@ fn migrate_legacy_config(new_dir: &std::path::Path) {
             return;
         }
     };
+    // 已是占位：迁移已完成，跳过
+    if legacy_value.get(MIGRATED_MARKER).and_then(|v| v.as_bool()) == Some(true) {
+        return;
+    }
     let result = (|| -> Result<(), AppError> {
         if new_path.exists() {
             let s = std::fs::read_to_string(&new_path)
@@ -205,14 +217,16 @@ fn migrate_legacy_config(new_dir: &std::path::Path) {
             std::fs::write(&new_path, &legacy)
                 .map_err(|e| format!("写入 {} 失败: {}", new_path.display(), e))?;
         }
+        // 备份原配置（仅当尚无备份；避免覆盖更早的真实备份）
         let backup = legacy_path.with_file_name("admAgent.json.migrated.bak");
-        // 上次 rename 已成功但本次又见到旧文件的异常状态：先清掉占位备份再改名
-        if backup.exists() {
-            let _ = std::fs::remove_file(&backup);
+        if !backup.exists() {
+            std::fs::write(&backup, &legacy)
+                .map_err(|e| format!("备份旧配置 {} 失败: {}", legacy_path.display(), e))?;
         }
-        std::fs::rename(&legacy_path, &backup)
-            .map_err(|e| format!("备份旧配置 {} 失败: {}", legacy_path.display(), e))?;
-        eprintln!("[admAgent] 已迁移旧配置 {} → {}", legacy_path.display(), new_path.display());
+        // 覆盖写占位，保证 EnsureDefaultConfig 不再重建默认配置
+        std::fs::write(&legacy_path, format!("{{\"{}\": true}}\n", MIGRATED_MARKER))
+            .map_err(|e| format!("写入占位 {} 失败: {}", legacy_path.display(), e))?;
+        eprintln!("[admAgent] 已迁移旧配置 {} → {}（旧位置写入占位）", legacy_path.display(), new_path.display());
         Ok(())
     })();
     if let Err(e) = result {
@@ -393,8 +407,9 @@ fn write_json_atomic(path: &std::path::Path, value: &serde_json::Value) -> Resul
 ///    （服务端只在启动时读配置，SetConfigField 是唯一的热重载入口；
 ///    不能直接写 models 数组元素：/config/set 落盘到服务端数据配置文件，
 ///    与 Rust 写的 admAgent.json 合并时数组按拼接处理，会造成模型重复）；
-/// 3) POST /agent/update 重建 coordinator 内的 agent，使新 ModelInfo 即时生效
-///    （否则 GET /agent 仍报旧 supports_images，图片附件会被 coordinator 静默丢弃）。
+/// 3) POST /agent/update 重建 coordinator 内的 agent，使新 ModelInfo 即时生效。
+/// 统一视觉链路下 supports_images 不再决定图片处理（图片一律走 vision bridge），
+/// 仅用于前端 UI 展示与「多模态模型」下拉（agent_vision_model）筛选。
 /// 失败静默：server 未运行时下次启动自然读到新配置。
 pub fn sync_local_model_capabilities(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {

@@ -1002,26 +1002,8 @@ async fn forward_to_agent(rt: &Arc<IlinkRuntime>, from: &str, text: &str, attach
             return;
         }
     };
-    // 带图时校验当前模型是否支持图片（对齐桌面端 send.js 的 supports_images 检查），
-    // 否则图片会被模型静默忽略，用户以为 Agent 看到了图
-    if !attachments.is_empty() {
-        if let Ok((200, info)) = agent_get(rt, port, &format!("/v1/workspaces/{}/agent", ws)).await {
-            let supports = info
-                .get("model")
-                .and_then(|m| m.get("supports_images"))
-                .and_then(|b| b.as_bool())
-                .unwrap_or(false);
-            if !supports {
-                let model = info
-                    .get("model")
-                    .and_then(|m| m.get("id"))
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("未知");
-                send_wx_text(rt, from, &format!("❌ 当前模型（{}）不支持图片，请在电脑端切换到支持图片的模型后重发。", model)).await;
-                return;
-            }
-        }
-    }
+    // 统一视觉链路：图片识别统一走 admAgent vision bridge，与主模型是否支持
+    // 图片无关，不再校验 supports_images、不再拦截带图发送。
     // 目标会话 = 桌面当前打开的会话（从 slots 读，跨 Bridge 重启存活）；未打开时提示用户
     let sid = match current_follow_session(&rt.app) {
         Some(s) if !s.is_empty() => s,
@@ -1033,7 +1015,7 @@ async fn forward_to_agent(rt: &Arc<IlinkRuntime>, from: &str, text: &str, attach
     let run_id = format!("wx-{:016x}", rand::random::<u64>());
     rt.shared.lock().await.runs.insert(
         run_id.clone(),
-        RunRoute { wx_user: from.to_string(), session_id: sid.clone() },
+        RunRoute { wx_user: from.to_string(), session_id: sid.to_string() },
     );
     flow_log(&rt.app, "forward", &format!("run_id={} session={} port={} atts={} prompt={}", run_id, sid, port, attachments.len(), text));
     // 前置来源标注，让 Agent 上下文可区分远程消息；纯图无文字时给默认提示词

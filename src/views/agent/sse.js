@@ -54,6 +54,17 @@ function reconnectSSE() {
   S.sseReconnectTimer = setTimeout(async function() {
     S.sseReconnectTimer = null;
     try {
+      // 重连前必须确保 server/workspace 身份仍有效（断线期间 server 状态可能丢失），
+      // 否则后续直接用 S.serverInfo.workspace_id 拼 URL 会抛错被吞、重连假死
+      if (!S.serverInfo || !S.serverInfo.workspace_id) {
+        console.warn("[agent] 重连中止：serverInfo/workspace_id 缺失，状态退回就绪");
+        S.isSending = false;
+        S.activeRun = null;
+        S.queuedRun = null;
+        clearSendSafetyTimer();
+        updateStatusBar("ready", null, S.contextUsage.used);
+        return;
+      }
       // 重新订阅 SSE
       await setupSSEListener();
       // 刷新会话列表
