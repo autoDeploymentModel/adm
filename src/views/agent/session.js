@@ -221,8 +221,9 @@ export async function selectConversation(convId) {
 
   try {
     // 设置当前会话
-    api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/current-session?client_id=" + S.clientId, {
-      session_id: convId
+    api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/current-session", {
+      session_id: convId,
+      client_id: S.clientId
     }).catch(function() {});
 
     // 获取会话信息
