@@ -53,13 +53,13 @@ async function init() {
   // 检查 admAgent server 状态
   try {
     const status = await invoke("get_agent_server_status");
-    if (status.running && status.port) {
-      S.serverInfo = { port: status.port, workspace_id: status.workspace_id || "" };
+    if (status.running && status.host) {
+      S.serverInfo = { host: status.host, workspace_id: status.workspace_id || "" };
     } else {
       // 启动 server
       try {
         S.serverInfo = await invoke("start_agent_server");
-      console.log("[agent] Agent 服务已启动, port:", S.serverInfo?.port);
+      console.log("[agent] Agent 服务已启动, host:", S.serverInfo?.host);
       } catch (e) {
         console.error("[agent] 启动 Agent 服务失败:", e);
         reportError(e, { prefix: _t("启动 Agent 服务失败: ") });
