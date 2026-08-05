@@ -145,6 +145,7 @@ fn adm_agent_config_dir() -> Result<PathBuf, AppError> {
 
 /// 把 overlay 中 base 缺失的键合并进 base（对象递归合并；标量/数组以 base 为准）。
 /// 语义对齐 admAgent server 的 JSON 深合并：新位置（高优先级）内容优先。
+#[cfg(target_os = "windows")]
 fn merge_json(base: &mut serde_json::Value, overlay: &serde_json::Value) {
     if let (serde_json::Value::Object(b), serde_json::Value::Object(o)) = (base, overlay) {
         for (k, v) in o {
@@ -169,6 +170,7 @@ fn merge_json(base: &mut serde_json::Value, overlay: &serde_json::Value) {
 /// "Created default local-model config" 日志与配置短暂退化）。占位文件使该检查永远
 /// 通过，且占位是未知字段，JSON 合并时对生效配置零影响。
 /// 幂等：旧文件不存在或已是占位则直接返回；失败只打日志，不影响主流程（下次调用会重试）。
+#[cfg(target_os = "windows")]
 fn migrate_legacy_config(new_dir: &std::path::Path) {
     const MIGRATED_MARKER: &str = "migrated_to_localappdata";
     let home = match std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
