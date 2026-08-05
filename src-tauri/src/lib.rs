@@ -55,14 +55,9 @@ fn cleanup_processes(app: &tauri::AppHandle) {
         crate::common::utils::platform::kill_process_by_name("sd-cli");
     }
 
-    // 关闭 Agent 会话
+    // 关闭 Agent 会话（只杀本进程拉起的 admAgent server 子进程；复用的共享
+    // server 不杀，由服务端在最后一个工作区被 teardown 时自行退出）
     agent::kill_agent_session(&state);
-
-    // Windows 平台：关闭 admAgent 进程
-    #[cfg(target_os = "windows")]
-    {
-        crate::common::utils::platform::kill_process_by_name("admAgent.exe");
-    }
 }
 
 

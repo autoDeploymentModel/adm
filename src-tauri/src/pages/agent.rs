@@ -1,6 +1,7 @@
 // Agent 页面后端逻辑：admAgent server 模式管理 + HTTP API 代理
 
 use crate::app_state::{AppState, AgentServerSession};
+use crate::common::agent_http::{self, AgentTransport, build_client, health_check};
 use crate::common::config;
 use crate::common::types::Settings;
 use crate::common::utils::platform;
@@ -417,7 +418,7 @@ pub fn sync_local_model_capabilities(app: tauri::AppHandle) {
             eprintln!("[admAgent] 同步本地模型能力：写 admAgent.json 失败: {}", e);
             return;
         }
-        let (port, ws) = {
+        let ws = {
             let state = app.state::<AppState>();
             let mut guard = match state.agent_session.lock() {
                 Ok(g) => g,
@@ -425,8 +426,8 @@ pub fn sync_local_model_capabilities(app: tauri::AppHandle) {
             };
             match guard.as_mut() {
                 Some(s) => {
-                    if matches!(s.child.try_wait(), Ok(None)) {
-                        (s.port, s.workspace_id.clone())
+                    if session_usable(s) {
+                        s.workspace_id.clone()
                     } else {
                         return; // 进程已退出：下次启动会读新配置
                     }
@@ -434,33 +435,39 @@ pub fn sync_local_model_capabilities(app: tauri::AppHandle) {
                 _ => return, // server 未运行：启动时会读新配置，无需热同步
             }
         };
-        let client = match reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(3))
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-        {
+        let client = match build_client(&AgentTransport::default_host(), Duration::from_secs(3)) {
             Ok(c) => c,
             Err(_) => return,
         };
         // 写无害标量触发服务端重载（合并进刚更新的 admAgent.json）
-        let set_url = format!("http://127.0.0.1:{}/v1/workspaces/{}/config/set", port, ws);
-        let body = serde_json::json!({ "scope": 0, "key": "providers.local.name", "value": "Local" });
-        match client.post(&set_url).json(&body).send().await {
-            Ok(r) if r.status().is_success() => {}
-            Ok(r) => {
-                eprintln!("[admAgent] 同步本地模型能力：/config/set HTTP {}", r.status());
+        let set_body = serde_json::json!({ "scope": 0, "key": "providers.local.name", "value": "Local" });
+        match tokio::time::timeout(
+            Duration::from_secs(10),
+            agent_http::send(&client, "POST", &format!("/v1/workspaces/{}/config/set", ws), Some(set_body)),
+        ).await {
+            Ok(Ok((st, _))) if (200..300).contains(&st) => {}
+            Ok(Ok((st, _))) => {
+                eprintln!("[admAgent] 同步本地模型能力：/config/set HTTP {}", st);
                 return;
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 eprintln!("[admAgent] 同步本地模型能力：/config/set 失败: {}", e);
+                return;
+            }
+            Err(_) => {
+                eprintln!("[admAgent] 同步本地模型能力：/config/set 超时");
                 return;
             }
         }
         // 重建 agent 使新 ModelInfo 生效；agent 未 init 时此接口报错属正常（init 时自然用新配置）
-        let update_url = format!("http://127.0.0.1:{}/v1/workspaces/{}/agent/update", port, ws);
-        match client.post(&update_url).json(&serde_json::json!({})).send().await {
-            Ok(r) => eprintln!("[admAgent] 同步本地模型能力：/agent/update HTTP {}", r.status()),
-            Err(e) => eprintln!("[admAgent] 同步本地模型能力：/agent/update 失败: {}", e),
+        let update_url = format!("/v1/workspaces/{}/agent/update", ws);
+        match tokio::time::timeout(
+            Duration::from_secs(10),
+            agent_http::send(&client, "POST", &update_url, Some(serde_json::json!({}))),
+        ).await {
+            Ok(Ok((st, _))) => eprintln!("[admAgent] 同步本地模型能力：/agent/update HTTP {}", st),
+            Ok(Err(e)) => eprintln!("[admAgent] 同步本地模型能力：/agent/update 失败: {}", e),
+            Err(_) => eprintln!("[admAgent] 同步本地模型能力：/agent/update 超时"),
         }
     });
 }
@@ -489,7 +496,7 @@ pub fn sync_agent_vision_model(app: &tauri::AppHandle, value: &str) {
         if !changed {
             return; // 值未变化：跳过服务端重载，避免不必要的配置抖动
         }
-        let (port, ws) = {
+        let ws = {
             let state = app.state::<AppState>();
             let mut guard = match state.agent_session.lock() {
                 Ok(g) => g,
@@ -497,8 +504,8 @@ pub fn sync_agent_vision_model(app: &tauri::AppHandle, value: &str) {
             };
             match guard.as_mut() {
                 Some(s) => {
-                    if matches!(s.child.try_wait(), Ok(None)) {
-                        (s.port, s.workspace_id.clone())
+                    if session_usable(s) {
+                        s.workspace_id.clone()
                     } else {
                         return; // 进程已退出：下次启动会读新配置
                     }
@@ -506,26 +513,27 @@ pub fn sync_agent_vision_model(app: &tauri::AppHandle, value: &str) {
                 _ => return, // server 未运行：启动时会读新配置，无需热同步
             }
         };
-        let client = match reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(3))
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-        {
+        let client = match build_client(&AgentTransport::default_host(), Duration::from_secs(3)) {
             Ok(c) => c,
             Err(_) => return,
         };
         // 写无害标量触发服务端重载（合并进刚更新的 admAgent.json 顶层 agent_vision_model）
-        let set_url = format!("http://127.0.0.1:{}/v1/workspaces/{}/config/set", port, ws);
-        let body = serde_json::json!({ "scope": 0, "key": "providers.local.name", "value": "Local" });
-        match client.post(&set_url).json(&body).send().await {
-            Ok(r) if r.status().is_success() => {
+        let set_body = serde_json::json!({ "scope": 0, "key": "providers.local.name", "value": "Local" });
+        match tokio::time::timeout(
+            Duration::from_secs(10),
+            agent_http::send(&client, "POST", &format!("/v1/workspaces/{}/config/set", ws), Some(set_body)),
+        ).await {
+            Ok(Ok((st, _))) if (200..300).contains(&st) => {
                 eprintln!("[admAgent] 同步多模态模型：/config/set 触发重载完成");
             }
-            Ok(r) => {
-                eprintln!("[admAgent] 同步多模态模型：/config/set HTTP {}", r.status());
+            Ok(Ok((st, _))) => {
+                eprintln!("[admAgent] 同步多模态模型：/config/set HTTP {}", st);
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 eprintln!("[admAgent] 同步多模态模型：/config/set 失败: {}", e);
+            }
+            Err(_) => {
+                eprintln!("[admAgent] 同步多模态模型：/config/set 超时");
             }
         }
     });
@@ -1005,7 +1013,8 @@ pub async fn set_agent_workdir(app: tauri::AppHandle, workdir: String) -> Result
 /// admAgent server 启动信息
 #[derive(Serialize)]
 pub struct AgentServerInfo {
-    pub port: u16,
+    /// 本地传输地址展示串（unix://… / npipe://…），多客户端共用同一默认地址
+    pub host: String,
     pub workspace_id: String,
     pub client_id: String,
 }
@@ -1014,8 +1023,33 @@ pub struct AgentServerInfo {
 #[derive(Serialize)]
 pub struct AgentServerStatus {
     pub running: bool,
-    pub port: Option<u16>,
+    pub host: Option<String>,
     pub workspace_id: Option<String>,
+}
+
+/// 会话可用判定：会话存在，且（共享 server 无子进程 或 自有子进程存活）
+fn session_usable(sess: &mut AgentServerSession) -> bool {
+    match sess.child.as_mut() {
+        Some(c) => matches!(c.try_wait(), Ok(None)),
+        None => true,
+    }
+}
+
+/// 供 ilink 桥读取当前 admAgent server 会话的工作区 ID（会话可用才算就绪）。
+/// 传输地址固定为平台默认（Unix socket / Windows named pipe），无需再传。
+pub fn current_agent_workspace(app: &tauri::AppHandle) -> Option<String> {
+    let state = app.state::<AppState>();
+    let mut s = state.agent_session.lock().ok()?;
+    match s.as_mut() {
+        Some(sess) => {
+            if session_usable(sess) && !sess.workspace_id.is_empty() {
+                Some(sess.workspace_id.clone())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
 }
 
 /// 内部函数：停止 admAgent server 并清理会话
@@ -1029,21 +1063,29 @@ fn stop_agent_server_internal(state: &tauri::State<'_, AppState>) -> Result<(), 
     };
     if let Some(mut sess) = old {
         sess.sse_stop.store(true, Ordering::Relaxed);
-        #[cfg(target_os = "windows")]
-        {
-            if let Some(pid) = sess.child.id() {
-                let pid_str = pid.to_string();
-                let _ = platform::create_hidden_command("taskkill")
-                    .args(["/PID", &pid_str, "/T", "/F"])
-                    .spawn();
+        // 只终止本进程拉起的子进程；复用的共享 server 不杀（其它客户端/实例还在用），
+        // 由服务端在最后一个工作区被 teardown 时自行退出。
+        if let Some(child) = sess.child.as_mut() {
+            #[cfg(target_os = "windows")]
+            {
+                if let Some(pid) = child.id() {
+                    let pid_str = pid.to_string();
+                    let _ = platform::create_hidden_command("taskkill")
+                        .args(["/PID", &pid_str, "/T", "/F"])
+                        .spawn();
+                }
             }
+            let _ = child.start_kill();
         }
-        let _ = sess.child.start_kill();
     }
     Ok(())
 }
 
-/// 启动 admAgent server 模式
+/// 启动 admAgent server 模式（默认本地传输：Unix socket / Windows named pipe）。
+///
+/// 多客户端共享：先探测默认传输地址上是否已有 server 在跑（本进程或其它客户端/
+/// 实例），有则直接复用（不 spawn、不占端口）；没有才拉起子进程。共享 server
+/// 的生命周期由服务端管理——最后一个工作区被 teardown 时自行退出。
 #[tauri::command]
 pub async fn start_agent_server(
     app: tauri::AppHandle,
@@ -1055,9 +1097,9 @@ pub async fn start_agent_server(
     {
         let mut session = state.agent_session.lock().map_err(|e| e.to_string())?;
         if let Some(existing) = session.as_mut() {
-            if matches!(existing.child.try_wait(), Ok(None)) {
+            if session_usable(existing) {
                 return Ok(AgentServerInfo {
-                    port: existing.port,
+                    host: AgentTransport::default_host().display(),
                     workspace_id: existing.workspace_id.clone(),
                     client_id: existing.client_id.clone(),
                 });
@@ -1068,6 +1110,7 @@ pub async fn start_agent_server(
     // 注：admAgent.json 由本地模型启动成功后统一写入（sync_local_model_capabilities），
     // 此处不再生成/更新，避免未运行模型时用空能力覆盖已写入的 can_reason / supports_images。
 
+    let transport = AgentTransport::default_host();
     let agent_path = adm_agent_path(&app)?;
     if !agent_path.exists() {
         bail!("未找到 admAgent 工具: {}", agent_path.display());
@@ -1075,134 +1118,124 @@ pub async fn start_agent_server(
 
     let workdir = load_agent_workdir(&app);
 
-    // 预分配一个可用端口：绑定 127.0.0.1:0 让 OS 分配，读取后立即关闭。
-    // 存在极小竞争窗口，但对于本地进程而言可接受，远比从 stdout 解析端口可靠。
-    let port = {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0")
-            .map_err(|e| format!("寻找可用端口失败: {}", e))?;
-        let p = listener
-            .local_addr()
-            .map_err(|e| format!("获取端口信息失败: {}", e))?
-            .port();
-        drop(listener);
-        p
+    eprintln!("[admAgent] 使用本地传输 {} 启动 server 模式", transport.display());
+
+    // 探测默认传输：已有 server 在跑则直接复用（多客户端共享同一 server）
+    let probe_client = build_client(&transport, Duration::from_secs(2))
+        .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+    let mut child: Option<tokio::process::Child> = if health_check(&probe_client).await {
+        eprintln!("[admAgent] 检测到已运行的 admAgent server，直接复用");
+        None
+    } else {
+        // 没有运行中的 server：拉起子进程（不传 --host，服务端绑定平台默认传输）
+        let mut cmd = tokio::process::Command::new(&agent_path);
+        cmd.arg("server");
+        if !workdir.is_empty() {
+            cmd.arg("--cwd").arg(&workdir);
+        }
+        // 启动流程在健康检查/工作区创建阶段失败时自动终止子进程，避免错误路径留下孤儿。
+        cmd.kill_on_drop(true);
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+        // 子进程工作目录：Windows 用二进制所在目录（exe 根目录，可写）；
+        // macOS 二进制在只读性质的 ADM.app/Contents/MacOS 内，改用 app_data_dir，
+        // 避免任何潜在的「在 bundle 内写文件」行为（配置在 ~/.config/admAgent、工作区靠 --cwd，均不依赖 cwd）。
+        #[cfg(target_os = "macos")]
+        {
+            if let Ok(data_dir) = config::get_data_dir(Some(&app)) {
+                cmd.current_dir(data_dir);
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            if let Some(parent) = agent_path.parent() {
+                cmd.current_dir(parent);
+            }
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            #[allow(unused_imports)]
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("启动 admAgent server 失败: {}", e))?;
+
+        // 后台读取 stdout/stderr 用于日志记录，同时 emit "model-log" 事件到全局启动日志
+        let app_for_stdout = app.clone();
+        if let Some(stdout) = child.stdout.take() {
+            tokio::spawn(async move {
+                use tokio::io::AsyncReadExt;
+                let mut stdout = stdout;
+                let mut buf = [0u8; 4096];
+                loop {
+                    match stdout.read(&mut buf).await {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            let text = String::from_utf8_lossy(&buf[..n]);
+                            for line in text.lines() {
+                                if line.is_empty() { continue; }
+                                eprintln!("[admAgent server] {}", line);
+                                app_for_stdout.emit("model-log",
+                                    serde_json::json!({ "line": format!("[Agent] {}", line), "source": "stdout" })).ok();
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
+        let app_for_stderr = app.clone();
+        if let Some(stderr) = child.stderr.take() {
+            tokio::spawn(async move {
+                use tokio::io::AsyncReadExt;
+                let mut stderr = stderr;
+                let mut buf = [0u8; 4096];
+                loop {
+                    match stderr.read(&mut buf).await {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            let text = String::from_utf8_lossy(&buf[..n]);
+                            for line in text.lines() {
+                                if line.is_empty() { continue; }
+                                eprintln!("[admAgent server ERROR] {}", line);
+                                app_for_stderr.emit("model-log",
+                                    serde_json::json!({ "line": format!("[Agent] {}", line), "source": "stderr" })).ok();
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
+        Some(child)
     };
-    eprintln!("[admAgent] 使用端口 {} 启动 server 模式", port);
 
-    let mut cmd = tokio::process::Command::new(&agent_path);
-    cmd.arg("server");
-    cmd.arg("--host").arg(format!("tcp://127.0.0.1:{}", port));
-    if !workdir.is_empty() {
-        cmd.arg("--cwd").arg(&workdir);
-    }
-    // 启动流程在健康检查/工作区创建阶段失败时自动终止子进程，避免错误路径留下孤儿。
-    cmd.kill_on_drop(true);
-    cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::piped());
-    // 子进程工作目录：Windows 用二进制所在目录（exe 根目录，可写）；
-    // macOS 二进制在只读性质的 ADM.app/Contents/MacOS 内，改用 app_data_dir，
-    // 避免任何潜在的「在 bundle 内写文件」行为（配置在 ~/.config/admAgent、工作区靠 --cwd，均不依赖 cwd）。
-    #[cfg(target_os = "macos")]
+    // 轮询健康检查端点，等待 server 就绪（15 秒）。若 spawn 后检测到 server 已可连
+    // （并发启动的其它实例抢先 bind 成功、本进程子进程随即退出），视为复用成功。
     {
-        if let Ok(data_dir) = config::get_data_dir(Some(&app)) {
-            cmd.current_dir(data_dir);
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        if let Some(parent) = agent_path.parent() {
-            cmd.current_dir(parent);
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        #[allow(unused_imports)]
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000);
-    }
-
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("启动 admAgent server 失败: {}", e))?;
-
-    // 后台读取 stdout/stderr 用于日志记录，同时 emit "model-log" 事件到全局启动日志
-    let app_for_stdout = app.clone();
-    if let Some(stdout) = child.stdout.take() {
-        tokio::spawn(async move {
-            use tokio::io::AsyncReadExt;
-            let mut stdout = stdout;
-            let mut buf = [0u8; 4096];
-            loop {
-                match stdout.read(&mut buf).await {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        let text = String::from_utf8_lossy(&buf[..n]);
-                        for line in text.lines() {
-                            if line.is_empty() { continue; }
-                            eprintln!("[admAgent server] {}", line);
-                            app_for_stdout.emit("model-log",
-                                serde_json::json!({ "line": format!("[Agent] {}", line), "source": "stdout" })).ok();
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-    }
-    let app_for_stderr = app.clone();
-    if let Some(stderr) = child.stderr.take() {
-        tokio::spawn(async move {
-            use tokio::io::AsyncReadExt;
-            let mut stderr = stderr;
-            let mut buf = [0u8; 4096];
-            loop {
-                match stderr.read(&mut buf).await {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        let text = String::from_utf8_lossy(&buf[..n]);
-                        for line in text.lines() {
-                            if line.is_empty() { continue; }
-                            eprintln!("[admAgent server ERROR] {}", line);
-                            app_for_stderr.emit("model-log",
-                                serde_json::json!({ "line": format!("[Agent] {}", line), "source": "stderr" })).ok();
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-    }
-
-    // 轮询健康检查端点，等待 server 就绪（同时检测子进程是否已崩溃退出）
-    {
-        let health_url = format!("http://127.0.0.1:{}/v1/health", port);
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(2))
-            .build()
-            .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
         loop {
+            if health_check(&probe_client).await {
+                break;
+            }
+            if let Some(c) = child.as_mut() {
+                if let Ok(Some(_)) = c.try_wait() {
+                    // 子进程已退出：再探一次，可连 = 并发复用；不可连 = 启动失败
+                    if health_check(&probe_client).await {
+                        child = None;
+                        break;
+                    }
+                    bail!("admAgent server 进程已意外退出，退出码: 见上方日志");
+                }
+            }
             if tokio::time::Instant::now() > deadline {
                 bail!("等待 admAgent server 启动超时（15秒），请检查 admAgent 是否正常");
             }
-            // 检查子进程是否已退出
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    bail!("admAgent server 进程已意外退出，退出码: {:?}", status);
-                }
-                Ok(None) => {} // 仍在运行
-                Err(_) => {
-                    bail!("无法检查 admAgent server 进程状态");
-                }
-            }
-            // 尝试健康检查
-            match client.get(&health_url).send().await {
-                Ok(resp) if resp.status().is_success() => break,
-                _ => {
-                    tokio::time::sleep(Duration::from_millis(300)).await;
-                }
-            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
         }
     }
 
@@ -1216,9 +1249,7 @@ pub async fn start_agent_server(
     );
 
     let workspace_id = {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(5))
-            .build()
+        let client = build_client(&transport, Duration::from_secs(5))
             .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
 
         let workdir_for_api = if workdir.is_empty() {
@@ -1229,17 +1260,27 @@ pub async fn start_agent_server(
             workdir.clone()
         };
 
-        let resp = client
-            .post(format!("http://127.0.0.1:{}/v1/workspaces", port))
-            .json(&serde_json::json!({ "path": workdir_for_api, "client_id": &client_id }))
-            .send().await
-            .map_err(|e| format!("创建工作区失败: {}", e))?;
-
-        let body: serde_json::Value = resp.json().await
-            .map_err(|e| format!("解析工作区响应失败: {}", e))?;
-
-        body.get("id").and_then(|v| v.as_str())
-            .map(|s| s.to_string()).unwrap_or_else(|| "default".to_string())
+        let (status, bytes) = tokio::time::timeout(
+            Duration::from_secs(10),
+            agent_http::send(
+                &client,
+                "POST",
+                "/v1/workspaces",
+                Some(serde_json::json!({ "path": workdir_for_api, "client_id": &client_id })),
+            ),
+        )
+        .await
+        .map_err(|_| "创建工作区超时".to_string())?
+        .map_err(|e| format!("创建工作区失败: {}", e))?;
+        if !(200..300).contains(&status) {
+            bail!("创建工作区失败: HTTP {}", status);
+        }
+        let body: serde_json::Value =
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::json!({}));
+        body.get("id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "default".to_string())
     };
 
     let sse_stop = Arc::new(AtomicBool::new(false));
@@ -1248,46 +1289,43 @@ pub async fn start_agent_server(
     let ws_id = workspace_id.clone();
     let cid = client_id.clone();
     let sse_stop2 = sse_stop.clone();
+    let t2 = transport.clone();
     let sse_task = tokio::spawn(async move {
-        let _ = forward_sse_events(&app2, port, &ws_id, &cid, sse_stop2).await;
+        let _ = forward_sse_events(&app2, &t2, &ws_id, &cid, sse_stop2).await;
     });
 
     {
         let mut s = state.agent_session.lock().map_err(|e| e.to_string())?;
         *s = Some(AgentServerSession {
-            child, port, sse_stop: sse_stop.clone(),
+            child,
+            sse_stop: sse_stop.clone(),
             sse_task: Some(sse_task),
             workspace_id: workspace_id.clone(),
             client_id: client_id.clone(),
         });
     }
 
+    let host = transport.display();
     app.emit("agent-server-ready",
-        serde_json::json!({ "port": port, "workspace_id": &workspace_id })).ok();
+        serde_json::json!({ "host": host, "workspace_id": &workspace_id })).ok();
 
-    Ok(AgentServerInfo { port, workspace_id, client_id })
+    Ok(AgentServerInfo { host, workspace_id, client_id })
 }
 
 async fn forward_sse_events(
-    app: &tauri::AppHandle, port: u16, workspace_id: &str, client_id: &str, stop: Arc<AtomicBool>,
+    app: &tauri::AppHandle, transport: &AgentTransport, workspace_id: &str, client_id: &str, stop: Arc<AtomicBool>,
 ) -> Result<(), AppError> {
-    let url = format!(
-        "http://127.0.0.1:{}/v1/workspaces/{}/events?client_id={}",
-        port, workspace_id, client_id
-    );
-    println!("[agent] forward_sse_events URL: {}", url);
-    // SSE 是无限期长连接：reqwest 的 timeout() 是整个请求（含响应体流）的总时限，
-    // 到期会强制掐断连接。而 admAgent 的 workspace 靠 SSE 流引用计数存活，
-    // 最后一条流断开会立即 teardown workspace 并触发 server 自身退出（"连接一断，服务即死"）。
-    // 因此这里只限制建连耗时，绝不能给流本身设总超时。
-    let client = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(5))
-        .build()
+    let path = format!("/v1/workspaces/{}/events?client_id={}", workspace_id, client_id);
+    println!("[agent] forward_sse_events URL: {}", path);
+    // SSE 是无限期长连接：只能限制建连耗时，绝不能给流本身设总超时（同原注释：
+    // workspace 靠 SSE 流引用计数存活，最后一条流断开会立即 teardown workspace，
+    // 触发 server 自身退出 —— "连接一断，服务即死"）。
+    let client = build_client(transport, Duration::from_secs(5))
         .map_err(|e| format!("创建 SSE 客户端失败: {}", e))?;
 
     loop {
         if stop.load(Ordering::Relaxed) { return Ok(()); }
-        let resp = match client.get(&url).send().await {
+        let (status, body) = match agent_http::stream_get(&client, &path).await {
             Ok(r) => r,
             Err(e) => {
                 if stop.load(Ordering::Relaxed) { return Ok(()); }
@@ -1304,15 +1342,16 @@ async fn forward_sse_events(
                 tokio::time::sleep(Duration::from_secs(3)).await; continue;
             }
         };
-        if !resp.status().is_success() {
-            println!("[agent] forward_sse_events HTTP {}", resp.status());
+        if !(200..300).contains(&status) {
+            println!("[agent] forward_sse_events HTTP {}", status);
             tokio::time::sleep(Duration::from_secs(3)).await; continue;
         }
         println!("[agent] forward_sse_events SSE 已连接 workspace: {}", workspace_id);
         api_debug_log(|| format!("SSE = 已连接 workspace={} client={}", workspace_id, client_id));
 
         use futures_util::StreamExt;
-        let mut stream = resp.bytes_stream();
+        use http_body_util::BodyExt;
+        let mut stream = body.into_data_stream();
         let mut buffer = String::new();
 
         while let Some(chunk_result) = stream.next().await {
@@ -1348,11 +1387,16 @@ async fn forward_sse_events(
 
 /// 检查 admAgent server 子进程是否已退出（供 SSE 转发循环的自愈判断）。
 /// 会话已被清理（正常 stop 流程）时返回 false，由 sse_stop 标志让循环自行退出。
+/// 复用的共享 server（无子进程）无法探测进程状态，返回 true 让前端尝试重启：
+/// start_agent_server 会先探活，真死才重新拉起，活着的共享 server 不受影响。
 fn agent_process_exited(app: &tauri::AppHandle) -> bool {
     let state = app.state::<AppState>();
     let mut s = match state.agent_session.lock() { Ok(g) => g, Err(_) => return false };
     match s.as_mut() {
-        Some(sess) => matches!(sess.child.try_wait(), Ok(Some(_))),
+        Some(sess) => match sess.child.as_mut() {
+            Some(c) => matches!(c.try_wait(), Ok(Some(_))),
+            None => true,
+        },
         None => false,
     }
 }
@@ -1513,10 +1557,14 @@ pub async fn get_agent_server_status(state: tauri::State<'_, AppState>) -> Resul
     let mut s = state.agent_session.lock().map_err(|e| e.to_string())?;
     match s.as_mut() {
         Some(sess) => {
-            let running = match sess.child.try_wait() { Ok(None) => true, _ => false };
-            Ok(AgentServerStatus { running, port: Some(sess.port), workspace_id: Some(sess.workspace_id.clone()) })
+            let running = session_usable(sess);
+            Ok(AgentServerStatus {
+                running,
+                host: Some(AgentTransport::default_host().display()),
+                workspace_id: Some(sess.workspace_id.clone()),
+            })
         }
-        None => Ok(AgentServerStatus { running: false, port: None, workspace_id: None }),
+        None => Ok(AgentServerStatus { running: false, host: None, workspace_id: None }),
     }
 }
 
@@ -1524,17 +1572,17 @@ pub async fn get_agent_server_status(state: tauri::State<'_, AppState>) -> Resul
 pub async fn agent_http_request(
     state: tauri::State<'_, AppState>, method: String, path: String, body: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, AppError> {
-    let port = {
+    {
         let mut s = state.agent_session.lock().map_err(|e| e.to_string())?;
         match s.as_mut() {
             Some(sess) => {
-                let running = sess.child.try_wait().ok().flatten().is_none();
-                if running { sess.port } else { bail!("admAgent server 未运行"); }
+                if !session_usable(sess) {
+                    bail!("admAgent server 未运行");
+                }
             }
             None => bail!("admAgent server 未运行"),
         }
-    };
-    let url = format!("http://127.0.0.1:{}{}", port, path);
+    }
     let started = std::time::Instant::now();
     // 只读 GET 多为高频轮询（每轮 run 后刷 /agent /sessions /messages），是主噪音：
     // 成功时不记，只在出错时留痕；改状态的操作（发消息/切模式/权限）才记请求行。
@@ -1546,37 +1594,33 @@ pub async fn agent_http_request(
             body.as_ref().map(|b| format!(" body={}", api_log_snippet(&b.to_string(), 800))).unwrap_or_default()
         ));
     }
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(120)).build()
+    let client = build_client(&AgentTransport::default_host(), Duration::from_secs(5))
         .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
-    let req = match method.to_uppercase().as_str() {
-        "GET" => client.get(&url), "POST" => client.post(&url),
-        "PUT" => client.put(&url), "DELETE" => client.delete(&url),
-        "PATCH" => client.patch(&url), _ => bail!("不支持的 HTTP 方法: {}", method),
-    };
-    let req = if let Some(b) = body { req.json(&b) } else { req };
-    let resp = match req.send().await {
-        Ok(r) => r,
-        Err(e) => {
-            // 网络失败一律留痕（含 GET）：连不上 server 是中断的关键线索。
-            api_debug_log(|| format!("HTTP ! {} {} 请求失败({}ms): {}", method.to_uppercase(), path, started.elapsed().as_millis(), e));
-            bail!("HTTP 请求失败: {}", e);
-        }
-    };
-    let status = resp.status();
+    let (status, bytes) = tokio::time::timeout(
+        Duration::from_secs(120),
+        agent_http::send(&client, &method, &path, body),
+    )
+    .await
+    .map_err(|_| "HTTP 请求超时".to_string())?
+    .map_err(|e| {
+        // 网络失败一律留痕（含 GET）：连不上 server 是中断的关键线索。
+        api_debug_log(|| format!("HTTP ! {} {} 请求失败({}ms): {}", method.to_uppercase(), path, started.elapsed().as_millis(), e));
+        format!("HTTP 请求失败: {}", e)
+    })?;
 
     // 无响应体的状态码直接返回空 JSON 对象
     // 202 Accepted: /agent 发送消息（fire-and-forget）
     // 204 No Content: 删除等操作
-    if status.as_u16() == 202 || status.as_u16() == 204 {
-        api_debug_log(|| format!("HTTP < {} {} {} ({}ms)", status.as_u16(), method.to_uppercase(), path, started.elapsed().as_millis()));
+    if status == 202 || status == 204 {
+        api_debug_log(|| format!("HTTP < {} {} {} ({}ms)", status, method.to_uppercase(), path, started.elapsed().as_millis()));
         return Ok(serde_json::json!({}));
     }
 
     // 对于 200 OK，尝试解析 JSON；如果解析失败（空 body），返回空对象
     // 这适用于 /agent/update 等成功但无 body 的接口
-    if status.as_u16() == 200 {
+    if status == 200 {
         // 成功响应不 dump body（GET /messages 等会打一大坡）；只记非 GET 的一行状态+耗时。
-        let result = resp.json::<serde_json::Value>().await.unwrap_or(serde_json::json!({}));
+        let result = serde_json::from_slice(&bytes).unwrap_or(serde_json::json!({}));
         if !is_get {
             api_debug_log(|| format!("HTTP < 200 {} {} ({}ms)", method.to_uppercase(), path, started.elapsed().as_millis()));
         }
@@ -1586,14 +1630,14 @@ pub async fn agent_http_request(
     // 其它状态码（4xx/5xx）：读取响应体作为错误抛出。
     // 此前会把错误 JSON 当成功结果返回，前端 Array.isArray 判定失败后静默降级为
     // 空列表/空聊天（表现为“列表加载不出来”且控制台无任何报错）
-    let text = resp.text().await.unwrap_or_default();
+    let text = String::from_utf8_lossy(&bytes).to_string();
     let snippet: String = text.chars().take(300).collect();
     api_debug_log(|| format!(
         "HTTP ! {} {} {} ({}ms) err={}",
-        status.as_u16(), method.to_uppercase(), path, started.elapsed().as_millis(),
+        status, method.to_uppercase(), path, started.elapsed().as_millis(),
         api_log_snippet(&snippet, 300)
     ));
-    bail!("HTTP {} {} {}: {}", status.as_u16(), method.to_uppercase(), path, snippet);
+    bail!("HTTP {} {} {}: {}", status, method.to_uppercase(), path, snippet);
 }
 
 /// 读取 workspace 的跨会话项目记忆（project_memory.json）。
@@ -1606,27 +1650,32 @@ pub async fn read_project_memory(
     state: tauri::State<'_, AppState>,
     workspace_id: String,
 ) -> Result<serde_json::Value, AppError> {
-    let port = {
+    {
         let mut s = state.agent_session.lock().map_err(|e| e.to_string())?;
         match s.as_mut() {
             Some(sess) => {
-                let running = sess.child.try_wait().ok().flatten().is_none();
-                if running { sess.port } else { bail!("admAgent server 未运行"); }
+                if !session_usable(sess) {
+                    bail!("admAgent server 未运行");
+                }
             }
             None => bail!("admAgent server 未运行"),
         }
-    };
+    }
 
     // GET /v1/workspaces/{id} → { id, path, data_dir, ... }
-    let url = format!("http://127.0.0.1:{}/v1/workspaces/{}", port, workspace_id);
-    let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build()
+    let client = build_client(&AgentTransport::default_host(), Duration::from_secs(5))
         .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
-    let resp = client.get(&url).send().await
-        .map_err(|e| format!("HTTP 请求失败: {}", e))?;
-    if !resp.status().is_success() {
-        bail!("HTTP {} 获取 workspace 信息失败", resp.status().as_u16());
+    let (status, bytes) = tokio::time::timeout(
+        Duration::from_secs(30),
+        agent_http::send(&client, "GET", &format!("/v1/workspaces/{}", workspace_id), None),
+    )
+    .await
+    .map_err(|_| "获取 workspace 信息超时".to_string())?
+    .map_err(|e| format!("HTTP 请求失败: {}", e))?;
+    if !(200..300).contains(&status) {
+        bail!("HTTP {} 获取 workspace 信息失败", status);
     }
-    let ws: serde_json::Value = resp.json().await
+    let ws: serde_json::Value = serde_json::from_slice(&bytes)
         .map_err(|e| format!("解析 workspace 响应失败: {}", e))?;
     let data_dir = ws.get("data_dir").and_then(|v| v.as_str()).unwrap_or("");
     if data_dir.is_empty() {
@@ -1673,12 +1722,12 @@ pub async fn agent_subscribe_events(
     sess.sse_stop = new_sse_stop.clone();
     sess.workspace_id = workspace_id.clone();
 
-    let port = sess.port;
+    let transport = AgentTransport::default_host();
 
     // 启动新的 SSE 转发任务
     let app2 = app.clone();
     sess.sse_task = Some(tokio::spawn(async move {
-        let _ = forward_sse_events(&app2, port, &workspace_id, &client_id, new_sse_stop).await;
+        let _ = forward_sse_events(&app2, &transport, &workspace_id, &client_id, new_sse_stop).await;
     }));
 
     Ok(())
@@ -1698,14 +1747,18 @@ pub fn kill_agent_session(state: &AppState) {
     let old = if let Ok(mut s) = state.agent_session.lock() { s.take() } else { None };
     if let Some(mut sess) = old {
         sess.sse_stop.store(true, Ordering::Relaxed);
-        #[cfg(target_os = "windows")]
-        {
-            if let Some(pid) = sess.child.id() {
-                let pid_str = pid.to_string();
-                let _ = platform::create_hidden_command("taskkill").args(["/PID", &pid_str, "/T", "/F"]).spawn();
+        // 只终止本进程拉起的子进程；复用的共享 server 不杀（服务端在最后一个
+        // 工作区被 teardown 时自行退出，其它客户端/实例不受影响）。
+        if let Some(child) = sess.child.as_mut() {
+            #[cfg(target_os = "windows")]
+            {
+                if let Some(pid) = child.id() {
+                    let pid_str = pid.to_string();
+                    let _ = platform::create_hidden_command("taskkill").args(["/PID", &pid_str, "/T", "/F"]).spawn();
+                }
             }
+            let _ = child.start_kill();
         }
-        let _ = sess.child.start_kill();
     }
 }
 

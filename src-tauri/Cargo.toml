@@ -23,13 +23,21 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-hwinfo = "0.2.3"
 tauri-plugin-single-instance = "2"
-windows = { version = "0.58", features = ["Win32_UI_HiDpi", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Ole", "Win32_Storage_FileSystem", "Win32_UI_Shell"] }
+windows = { version = "0.58", features = ["Win32_UI_HiDpi", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Ole", "Win32_Storage_FileSystem", "Win32_UI_Shell", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Threading"] }
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sysinfo = "0.33"
 reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls", "json"] }
 tokio = { version = "1", features = ["full"] }
+# admAgent server 本地传输（Unix socket / Windows named pipe）：reqwest 不支持，
+# 用 hyper 直接对 socket/pipe 发 HTTP/1.1 请求与 SSE 流
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+http-body-util = "0.1"
+libc = "0.2"
+# hyper-util legacy client 的 Connect 基于 tower-service（hyper 1.9 不再 re-export）
+tower-service = "0.3"
 dirs = "6"
 futures-util = "0.3"
 zip = "0.6"

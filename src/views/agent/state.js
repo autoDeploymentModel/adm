@@ -8,7 +8,7 @@ export const listen = window.__adm_listen;
  * @typedef {Object} AgentState
  * @property {Array<() => void>} unlisteners
  * @property {string | null} clientId UUID，客户端标识
- * @property {{ port?: number, workspace_id: string } | null} serverInfo
+ * @property {{ host?: string, workspace_id: string } | null} serverInfo
  * @property {any} settings { agent_plan_mode, agent_default_provider, ... }
  * @property {any[]} providers cloud providers list
  * @property {any[]} serverProviders admAgent 服务端 /providers 完整列表（含内置模型）
@@ -47,7 +47,7 @@ export const listen = window.__adm_listen;
 export const S = {
   unlisteners: [],
   clientId: null,   // UUID，客户端标识
-  serverInfo: null, // { port, workspace_id }
+  serverInfo: null, // { host, workspace_id } — host 为平台默认本地传输（unix://… / npipe://…），多客户端共享同一 server
   settings: null,   // { agent_plan_mode, agent_default_provider, ... }
   providers: [],    // cloud providers list
   serverProviders: [], // admAgent 服务端 /providers 返回的完整 provider 列表（含内置模型）

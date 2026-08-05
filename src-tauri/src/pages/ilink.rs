@@ -14,6 +14,7 @@
 
 use crate::app_state::AppState;
 use crate::bail;
+use crate::common::agent_http::{self, AgentHttpClient, AgentTransport, build_client};
 use crate::common::config;
 use crate::common::error::AppError;
 use crate::common::types::Settings;
@@ -163,8 +164,6 @@ struct RunRoute {
 /// Bridge 运行期共享数据（bot 任务与 SSE 任务共用）
 #[derive(Default)]
 struct BridgeShared {
-    /// 当前对接的 admAgent server 端口（None = 未就绪）
-    port: Option<u16>,
     /// Bridge 专属工作区 ID（None = 需要重建，设置变更时也会被置空以热生效）
     workspace_id: Option<String>,
     /// Bridge 专属 SSE client_id（与前端 Agent 页互不干扰）
@@ -192,7 +191,7 @@ pub struct IlinkRuntime {
     /// 凭据失效触发扫码时置位（状态查询上报 waiting_scan）
     awaiting_scan: Arc<AtomicBool>,
     /// admAgent HTTP 用短超时客户端（SSE 单独建）
-    http: reqwest::Client,
+    http: AgentHttpClient,
     persist: tokio::sync::Mutex<IlinkPersist>,
     shared: tokio::sync::Mutex<BridgeShared>,
     last_error: std::sync::Mutex<String>,
@@ -338,10 +337,7 @@ pub async fn start_bridge_internal(app: &tauri::AppHandle) -> Result<(), AppErro
     let path = state_file_path(app)?;
     save_persist_to(&path, &persist)?;
 
-    let http = reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(30))
-        .build()
+    let http = build_client(&AgentTransport::default_host(), Duration::from_secs(5))
         .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
 
     let awaiting_scan = Arc::new(AtomicBool::new(false));
@@ -628,21 +624,10 @@ async fn sleep_cancellable(rt: &IlinkRuntime, secs: u64) {
     }
 }
 
-/// 从 AppState 读取当前 admAgent server 的端口 + 工作区 ID（进程存活才算就绪）。
+/// 从 AppState 读取当前 admAgent server 的工作区 ID（会话可用才算就绪）。
 /// Bridge 复用 Agent 页所在的同一工作区，微信触发的会话才能在桌面端 Agent 页可见。
-fn current_agent_backend(app: &tauri::AppHandle) -> Option<(u16, String)> {
-    let state = app.state::<AppState>();
-    let mut s = state.agent_session.lock().ok()?;
-    match s.as_mut() {
-        Some(sess) => {
-            if matches!(sess.child.try_wait(), Ok(None)) && !sess.workspace_id.is_empty() {
-                Some((sess.port, sess.workspace_id.clone()))
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
+fn current_agent_backend(app: &tauri::AppHandle) -> Option<String> {
+    agent::current_agent_workspace(app)
 }
 
 /// admAgent server 未运行时尝试自动拉起（带冷却，失败静默等下轮）
@@ -695,30 +680,29 @@ fn save_agent_plan_mode(app: &tauri::AppHandle, plan: bool) -> Result<(), AppErr
 }
 
 /// admAgent HTTP POST（返回 HTTP 状态码 + 宽容解析的 JSON）
-async fn agent_post(rt: &IlinkRuntime, port: u16, path: &str, body: &Value) -> Result<(u16, Value), AppError> {
-    let resp = rt
-        .http
-        .post(format!("http://127.0.0.1:{}{}", port, path))
-        .json(body)
-        .send()
-        .await
-        .map_err(|e| format!("admAgent 请求失败: {}", e))?;
-    let status = resp.status().as_u16();
-    let v = resp.json::<Value>().await.unwrap_or_else(|_| json!({}));
-    Ok((status, v))
+async fn agent_post(rt: &IlinkRuntime, path: &str, body: &Value) -> Result<(u16, Value), AppError> {
+    let (st, bytes) = tokio::time::timeout(
+        Duration::from_secs(30),
+        agent_http::send(&rt.http, "POST", path, Some(body.clone())),
+    )
+    .await
+    .map_err(|_| "admAgent 请求超时".to_string())?
+    .map_err(|e| format!("admAgent 请求失败: {}", e))?;
+    let v = serde_json::from_slice(&bytes).unwrap_or_else(|_| json!({}));
+    Ok((st, v))
 }
 
 /// admAgent HTTP GET
-async fn agent_get(rt: &IlinkRuntime, port: u16, path: &str) -> Result<(u16, Value), AppError> {
-    let resp = rt
-        .http
-        .get(format!("http://127.0.0.1:{}{}", port, path))
-        .send()
-        .await
-        .map_err(|e| format!("admAgent 请求失败: {}", e))?;
-    let status = resp.status().as_u16();
-    let v = resp.json::<Value>().await.unwrap_or_else(|_| json!({}));
-    Ok((status, v))
+async fn agent_get(rt: &IlinkRuntime, path: &str) -> Result<(u16, Value), AppError> {
+    let (st, bytes) = tokio::time::timeout(
+        Duration::from_secs(30),
+        agent_http::send(&rt.http, "GET", path, None),
+    )
+    .await
+    .map_err(|_| "admAgent 请求超时".to_string())?
+    .map_err(|e| format!("admAgent 请求失败: {}", e))?;
+    let v = serde_json::from_slice(&bytes).unwrap_or_else(|_| json!({}));
+    Ok((st, v))
 }
 
 /// Bridge 主任务：登录（复用已存凭据）→ 注册消息处理器 → bot.run 长轮询。
@@ -898,12 +882,12 @@ async fn handle_command(rt: &Arc<IlinkRuntime>, from: &str, text: &str) {
     let cmd = text.split_whitespace().next().unwrap_or("").to_lowercase();
     match cmd.as_str() {
         "/stop" => {
-            let (port, ws) = backend_of(rt).await;
+            let ws = backend_of(rt).await;
             let sid = current_follow_session(&rt.app);
-            match (port, ws, sid) {
-                (Some(port), Some(ws), Some(sid)) if !sid.is_empty() => {
+            match (ws, sid) {
+                (Some(ws), Some(sid)) if !sid.is_empty() => {
                     let path = format!("/v1/workspaces/{}/agent/sessions/{}/cancel", ws, sid);
-                    match agent_post(rt, port, &path, &json!({})).await {
+                    match agent_post(rt, &path, &json!({})).await {
                         Ok((200, _)) => send_wx_text(rt, from, "⏹️ 已发送取消指令。").await,
                         Ok((st, _)) => send_wx_text(rt, from, &format!("取消失败：HTTP {}", st)).await,
                         Err(e) => send_wx_text(rt, from, &format!("取消失败：{}", e)).await,
@@ -913,7 +897,7 @@ async fn handle_command(rt: &Arc<IlinkRuntime>, from: &str, text: &str) {
             }
         }
         "/status" => {
-            let (port, ws) = backend_of(rt).await;
+            let ws = backend_of(rt).await;
             let s = load_settings(&rt.app);
             let workdir = if s.agent_workdir.is_empty() { "（跟随 Agent 页）".to_string() } else { s.agent_workdir.clone() };
             let mode = if s.agent_plan_mode { "Plan（只读计划）" } else { "执行（直接修改）" };
@@ -922,28 +906,27 @@ async fn handle_command(rt: &Arc<IlinkRuntime>, from: &str, text: &str) {
                 format!("工作目录：{}", workdir),
                 format!("模式：{}", mode),
             ];
-            match (port, ws) {
-                (Some(port), Some(ws)) => {
-                    match agent_get(rt, port, &format!("/v1/workspaces/{}/agent", ws)).await {
-                        Ok((200, info)) => {
-                            let model = info
-                                .get("model_cfg")
-                                .and_then(|m| m.get("model"))
-                                .and_then(|m| m.as_str())
-                                .unwrap_or("未知");
-                            let provider = info
-                                .get("model_cfg")
-                                .and_then(|m| m.get("provider"))
-                                .and_then(|m| m.as_str())
-                                .unwrap_or("未知");
-                            let busy = info.get("is_busy").and_then(|b| b.as_bool()).unwrap_or(false);
-                            lines.push(format!("模型：{} ({})", model, provider));
-                            lines.push(format!("运行中：{}", if busy { "是" } else { "否" }));
-                        }
-                        _ => lines.push("Agent 信息获取失败".to_string()),
+            if let Some(ws) = ws {
+                match agent_get(rt, &format!("/v1/workspaces/{}/agent", ws)).await {
+                    Ok((200, info)) => {
+                        let model = info
+                            .get("model_cfg")
+                            .and_then(|m| m.get("model"))
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("未知");
+                        let provider = info
+                            .get("model_cfg")
+                            .and_then(|m| m.get("provider"))
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("未知");
+                        let busy = info.get("is_busy").and_then(|b| b.as_bool()).unwrap_or(false);
+                        lines.push(format!("模型：{} ({})", model, provider));
+                        lines.push(format!("运行中：{}", if busy { "是" } else { "否" }));
                     }
+                    _ => lines.push("Agent 信息获取失败".to_string()),
                 }
-                _ => lines.push("Agent 服务：未就绪".to_string()),
+            } else {
+                lines.push("Agent 服务：未就绪".to_string());
             }
             send_wx_text(rt, from, &lines.join("\n")).await;
         }
@@ -966,9 +949,9 @@ async fn set_plan_mode(rt: &Arc<IlinkRuntime>, from: &str, plan: bool) {
         return;
     }
     // 后端就绪时实时同步到当前工作区（旧版 admAgent 无此接口时忽略失败，写盘仍生效）
-    let (port, ws) = backend_of(rt).await;
-    if let (Some(port), Some(ws)) = (port, ws) {
-        let _ = agent_post(rt, port, &format!("/v1/workspaces/{}/agent/mode", ws), &json!({ "plan": plan })).await;
+    let ws = backend_of(rt).await;
+    if let Some(ws) = ws {
+        let _ = agent_post(rt, &format!("/v1/workspaces/{}/agent/mode", ws), &json!({ "plan": plan })).await;
     }
     // 通知前端 Agent 页更新模式按钮/输入框，保持两端一致
     let _ = rt.app.emit("agent-mode-changed", json!({ "plan": plan }));
@@ -981,23 +964,21 @@ async fn set_plan_mode(rt: &Arc<IlinkRuntime>, from: &str, plan: bool) {
     send_wx_text(rt, from, reply).await;
 }
 
-/// 读取当前后端（端口 + 工作区）。直接实时读 AppState（前端当前订阅的工作区），
+/// 读取当前后端（工作区）。直接实时读 AppState（前端当前订阅的工作区），
 /// 而非 Bridge 的 SSE 缓存：避免前端切换工作区后的窗口期内把微信消息发进旧（孤儿）工作区。
-async fn backend_of(rt: &Arc<IlinkRuntime>) -> (Option<u16>, Option<String>) {
-    match current_agent_backend(&rt.app) {
-        Some((p, w)) => (Some(p), Some(w)),
-        None => (None, None),
-    }
+/// 传输地址固定为平台默认，无需读取。
+async fn backend_of(rt: &Arc<IlinkRuntime>) -> Option<String> {
+    current_agent_backend(&rt.app)
 }
 
 /// 转发消息给 admAgent（fire-and-forget，结果由 SSE run_complete 回投）。
 /// 微信消息直接注入桌面当前打开的会话（开关已在 handle_incoming 入口校验）。
 /// attachments：图片等附件（base64），与桌面端 send.js 的 attachments 字段同格式。
 async fn forward_to_agent(rt: &Arc<IlinkRuntime>, from: &str, text: &str, attachments: Vec<Value>) {
-    let (port, ws) = backend_of(rt).await;
-    let (port, ws) = match (port, ws) {
-        (Some(p), Some(w)) => (p, w),
-        _ => {
+    let ws = backend_of(rt).await;
+    let ws = match ws {
+        Some(w) => w,
+        None => {
             send_wx_text(rt, from, "⏳ Agent 服务尚未就绪，请先在电脑端打开 Agent 页。").await;
             return;
         }
@@ -1017,7 +998,7 @@ async fn forward_to_agent(rt: &Arc<IlinkRuntime>, from: &str, text: &str, attach
         run_id.clone(),
         RunRoute { wx_user: from.to_string(), session_id: sid.to_string() },
     );
-    flow_log(&rt.app, "forward", &format!("run_id={} session={} port={} atts={} prompt={}", run_id, sid, port, attachments.len(), text));
+    flow_log(&rt.app, "forward", &format!("run_id={} session={} atts={} prompt={}", run_id, sid, attachments.len(), text));
     // 前置来源标注，让 Agent 上下文可区分远程消息；纯图无文字时给默认提示词
     let prompt = if text.is_empty() {
         "[来自微信远程消息]\n（用户发来一张图片，请查看并处理）".to_string()
@@ -1028,7 +1009,7 @@ async fn forward_to_agent(rt: &Arc<IlinkRuntime>, from: &str, text: &str, attach
     if !attachments.is_empty() {
         body["attachments"] = Value::Array(attachments);
     }
-    match agent_post(rt, port, &format!("/v1/workspaces/{}/agent", ws), &body).await {
+    match agent_post(rt, &format!("/v1/workspaces/{}/agent", ws), &body).await {
         Ok((202, _)) | Ok((200, _)) => {
             flow_log(&rt.app, "forward_ok", &format!("run_id={} 已提交 admAgent（等待 run_complete 回复）", run_id));
             // 启动原生"正在输入"状态：周期续发，本 run 完成（从 runs 移除）时停止。
@@ -1083,10 +1064,7 @@ fn spawn_typing(rt: &Arc<IlinkRuntime>, wx_user: &str, run_id: &str) {
 /// admAgent 未运行时尝试自动拉起（带冷却）；断流后自动重连。
 async fn sse_loop(rt: Arc<IlinkRuntime>) {
     // SSE 是无限期长连接：只限制建连耗时，不给流本身设总超时（同 agent.rs 注释）
-    let client = match reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(5))
-        .build()
-    {
+    let client = match build_client(&AgentTransport::default_host(), Duration::from_secs(5)) {
         Ok(c) => c,
         Err(e) => {
             set_last_error(&rt, &format!("创建 SSE 客户端失败: {}", e));
@@ -1099,12 +1077,11 @@ async fn sse_loop(rt: Arc<IlinkRuntime>) {
         }
         // 复用 Agent 页所在工作区（AppState 中 admAgent server 创建的那个），
         // 微信会话才能出现在桌面端 Agent 页会话列表里（同工作区 session SSE 广播）。
-        let (port, agent_ws) = match current_agent_backend(&rt.app) {
-            Some(pw) => pw,
+        let agent_ws = match current_agent_backend(&rt.app) {
+            Some(w) => w,
             None => {
                 {
                     let mut s = rt.shared.lock().await;
-                    s.port = None;
                     s.workspace_id = None;
                 }
                 maybe_autostart_agent(&rt).await;
@@ -1115,17 +1092,17 @@ async fn sse_loop(rt: Arc<IlinkRuntime>) {
         // 工作区变化（Agent 页切目录/重启）或首次：采用新工作区并设置权限跳过
         let need_setup = {
             let s = rt.shared.lock().await;
-            s.workspace_id.as_deref() != Some(agent_ws.as_str()) || s.port != Some(port)
+            s.workspace_id.as_deref() != Some(agent_ws.as_str())
         };
         if need_setup {
-            if let Err(e) = adopt_workspace(&rt, port, &agent_ws).await {
+            if let Err(e) = adopt_workspace(&rt, &agent_ws).await {
                 eprintln!("[ilink] 采用工作区失败: {}", e);
                 set_last_error(&rt, &format!("采用工作区失败: {}", e));
                 sleep_cancellable(&rt, 3).await;
                 continue;
             }
             set_last_error(&rt, "");
-            flow_log(&rt.app, "adopt_ws", &format!("复用 Agent 页工作区 ws={} port={}", agent_ws, port));
+            flow_log(&rt.app, "adopt_ws", &format!("复用 Agent 页工作区 ws={}", agent_ws));
         }
         let (ws, cid) = {
             let s = rt.shared.lock().await;
@@ -1134,8 +1111,8 @@ async fn sse_loop(rt: Arc<IlinkRuntime>) {
                 _ => continue,
             }
         };
-        let url = format!("http://127.0.0.1:{}/v1/workspaces/{}/events?client_id={}", port, ws, cid);
-        let resp = match client.get(&url).send().await {
+        let path = format!("/v1/workspaces/{}/events?client_id={}", ws, cid);
+        let (status, body) = match agent_http::stream_get(&client, &path).await {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("[ilink] SSE 连接失败: {}", e);
@@ -1143,20 +1120,21 @@ async fn sse_loop(rt: Arc<IlinkRuntime>) {
                 continue;
             }
         };
-        if resp.status().as_u16() == 404 {
+        if status == 404 {
             // 工作区已被服务端 teardown：下轮重建
             rt.shared.lock().await.workspace_id = None;
             sleep_cancellable(&rt, 1).await;
             continue;
         }
-        if !resp.status().is_success() {
+        if !(200..300).contains(&status) {
             sleep_cancellable(&rt, 2).await;
             continue;
         }
         eprintln!("[ilink] SSE 已连接 workspace: {}", ws);
 
         use futures_util::StreamExt;
-        let mut stream = resp.bytes_stream();
+        use http_body_util::BodyExt;
+        let mut stream = body.into_data_stream();
         let mut buffer = String::new();
         'stream: loop {
             // 带超时读流：空闲工作区无事件 chunk，stream.next() 会无限阻塞，
@@ -1171,10 +1149,7 @@ async fn sse_loop(rt: Arc<IlinkRuntime>) {
                         return;
                     }
                     let latest = current_agent_backend(&rt.app);
-                    let stale = match &latest {
-                        Some((p, w)) => *p != port || w != &ws,
-                        None => true,
-                    };
+                    let stale = latest.as_deref() != Some(ws.as_str());
                     if stale {
                         flow_log(&rt.app, "ws_follow", &format!("前端工作区已变更（旧 ws={}），断流跟随", ws));
                         rt.shared.lock().await.workspace_id = None;
@@ -1224,39 +1199,38 @@ async fn sse_loop(rt: Arc<IlinkRuntime>) {
 
 /// 采用 Agent 页所在工作区（不再自建独立工作区），使微信会话在桌面端 Agent 页可见。
 /// 最小侵入原则：仅在 Agent 未就绪时才 init，仅在状态与期望不一致时才设置。
-async fn adopt_workspace(rt: &Arc<IlinkRuntime>, port: u16, ws: &str) -> Result<(), AppError> {
-    let ready = match agent_get(rt, port, &format!("/v1/workspaces/{}/agent", ws)).await {
+async fn adopt_workspace(rt: &Arc<IlinkRuntime>, ws: &str) -> Result<(), AppError> {
+    let ready = match agent_get(rt, &format!("/v1/workspaces/{}/agent", ws)).await {
         Ok((200, info)) => info.get("is_ready").and_then(|b| b.as_bool()).unwrap_or(false),
         _ => false,
     };
     if !ready {
-        let (st, _) = agent_post(rt, port, &format!("/v1/workspaces/{}/agent/init", ws), &json!({})).await?;
+        let (st, _) = agent_post(rt, &format!("/v1/workspaces/{}/agent/init", ws), &json!({})).await?;
         if st != 200 {
             bail!("初始化 Agent 失败: HTTP {}", st);
         }
         flow_log(&rt.app, "adopt_init", &format!("ws={} 未就绪，已 init", ws));
     }
     // 审批模式已移除：权限请求恒直通（skip=true），只读约束由 Plan 模式的服务端工具集承担
-    let cur_skip = match agent_get(rt, port, &format!("/v1/workspaces/{}/permissions/skip", ws)).await {
+    let cur_skip = match agent_get(rt, &format!("/v1/workspaces/{}/permissions/skip", ws)).await {
         Ok((200, v)) => v.get("skip").and_then(|b| b.as_bool()),
         _ => None,
     };
     if cur_skip != Some(true) {
-        let _ = agent_post(rt, port, &format!("/v1/workspaces/{}/permissions/skip", ws), &json!({ "skip": true })).await;
+        let _ = agent_post(rt, &format!("/v1/workspaces/{}/permissions/skip", ws), &json!({ "skip": true })).await;
         flow_log(&rt.app, "adopt_skip", &format!("ws={} skip {:?} -> true", ws, cur_skip));
     }
     // 同步 Plan 模式（跟随 Agent 页设置；旧版 admAgent 无此接口时忽略失败）
     let want_plan = load_settings(&rt.app).agent_plan_mode;
-    let cur_plan = match agent_get(rt, port, &format!("/v1/workspaces/{}/agent/mode", ws)).await {
+    let cur_plan = match agent_get(rt, &format!("/v1/workspaces/{}/agent/mode", ws)).await {
         Ok((200, v)) => v.get("plan").and_then(|b| b.as_bool()),
         _ => None,
     };
     if cur_plan != Some(want_plan) {
-        let _ = agent_post(rt, port, &format!("/v1/workspaces/{}/agent/mode", ws), &json!({ "plan": want_plan })).await;
+        let _ = agent_post(rt, &format!("/v1/workspaces/{}/agent/mode", ws), &json!({ "plan": want_plan })).await;
         flow_log(&rt.app, "adopt_plan", &format!("ws={} plan {:?} -> {}", ws, cur_plan, want_plan));
     }
     let mut s = rt.shared.lock().await;
-    s.port = Some(port);
     s.workspace_id = Some(ws.to_string());
     Ok(())
 }
@@ -1318,10 +1292,10 @@ async fn handle_sse_event(rt: &Arc<IlinkRuntime>, v: &Value, event_name: &str) {
         "permission_request" => {
             // 审批模式已移除：skip=true 下正常不会收到；同步瞬间的竞态请求直接放行，
             // 避免微信触发的运行被卡住（Plan 模式下服务端只挂载只读工具，放行的也只能是读操作）
-            let (port, ws) = backend_of(rt).await;
-            if let (Some(port), Some(ws)) = (port, ws) {
+            let ws = backend_of(rt).await;
+            if let Some(ws) = ws {
                 let body = json!({ "permission": inner, "action": "allow" });
-                let _ = agent_post(rt, port, &format!("/v1/workspaces/{}/permissions/grant", ws), &body).await;
+                let _ = agent_post(rt, &format!("/v1/workspaces/{}/permissions/grant", ws), &body).await;
                 flow_log(&rt.app, "perm_auto_allow", "权限请求已自动放行（审批模式已移除）");
             }
         }

@@ -3,14 +3,13 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use sysinfo::System;
 
-/// admAgent server 模式会话：保存子进程句柄与监听端口。
-/// 前端通过 `agent_http_request` 命令代理访问 `http://127.0.0.1:{port}` 的 HTTP API。
+/// admAgent server 模式会话：保存子进程句柄与本地传输地址。
+/// 前端通过 `agent_http_request` 命令代理访问默认 socket / named pipe 上的 HTTP API。
 /// SSE 事件通过后台 tokio task 从 admAgent SSE 端点读取并转发为 Tauri 事件。
 pub struct AgentServerSession {
-    /// admAgent server 子进程
-    pub child: tokio::process::Child,
-    /// server 监听端口
-    pub port: u16,
+    /// 本进程拉起的 admAgent server 子进程；None = 复用已运行的共享 server
+    /// （多客户端/多实例共用一个 server，由最后一个工作区删除时服务端自关闭）
+    pub child: Option<tokio::process::Child>,
     /// SSE 转发任务停止标志
     pub sse_stop: Arc<AtomicBool>,
     /// SSE 转发任务句柄：切换到不同工作区时 abort，立即断开旧连接。
