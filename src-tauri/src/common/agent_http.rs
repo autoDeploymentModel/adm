@@ -442,10 +442,7 @@ mod tests {
                 .kill_on_drop(true)
                 .stdout(Stdio::null())
                 .stderr(Stdio::null());
-            {
-                use std::os::windows::process::CommandExt;
-                cmd.creation_flags(0x08000000);
-            }
+            cmd.creation_flags(0x08000000);
             let child = cmd.spawn().expect("spawn admAgent server");
             spawned = Some(child);
             let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
