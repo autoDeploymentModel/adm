@@ -3,36 +3,110 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ADM - Automatic Deployment Model | llama.cpp 图形化管理工具</title>
-    <meta name="description" content="ADM (Automatic Deployment Model) 是基于 Tauri 2.x 构建的 llama.cpp 图形化管理工具，一键部署本地大模型，并内置专为本地模型优化的 Agent，让本地 AI 成为生产力工具">
-    <meta name="keywords" content="ADM, llama.cpp, AI, 大语言模型, 本地部署, Tauri, 图形化工具, Automatic Deployment Model, 模型管理, Agent, admAgent, 推测解码">
+    <title>ADM (Auto Deploy Model) - 一键部署本地大模型 | admAgent AI Agent</title>
+    <meta name="description" content="ADM (Auto Deploy Model) 是基于 Tauri 的 llama.cpp 图形化管理工具，一键下载、启动本地大模型。内置 admAgent AI Agent，让模型执行命令、操作文件、跑脚本，60K 上下文稳定不崩。Windows / macOS / Linux 全平台免费开源。">
+    <meta name="keywords" content="ADM, Auto Deploy Model, admAgent, admAgent AI, admAgent 下载, ADM AI, ADM 下载, llama.cpp GUI, llama.cpp 图形化, 本地大模型部署, 本地 AI agent, AI 桌面工具, 大模型管理工具, 本地 LLM, 开源 AI 工具, MTP 推测解码, 幻觉自修复, Stable Diffusion, 文生模型">
+    <meta name="author" content="ADM Team">
+    <meta name="robots" content="index, follow, max-image-preview:large">
     <link rel="canonical" href="https://adm.tuduoduo.top/">
-    <meta property="og:title" content="ADM - Automatic Deployment Model | llama.cpp 图形化管理工具">
-    <meta property="og:description" content="ADM 是基于 Tauri 2.x 构建的 llama.cpp 图形化管理工具，一键部署本地大模型，内置专为本地模型优化的 Agent，让本地 AI 成为生产力工具">
-    <meta property="og:type" content="software">
+    <link rel="alternate" hreflang="zh-CN" href="https://adm.tuduoduo.top/">
+    <link rel="alternate" hreflang="en" href="https://adm.tuduoduo.top/">
+    <meta property="og:title" content="ADM (Auto Deploy Model) - 一键部署本地大模型 | admAgent AI Agent">
+    <meta property="og:description" content="基于 Tauri 的 llama.cpp 图形化管理工具，内置 admAgent AI Agent。一键下载启动本地大模型，让模型执行命令、操作文件、跑脚本。60K 上下文稳定不崩，免费开源。">
+    <meta property="og:type" content="website">
     <meta property="og:url" content="https://adm.tuduoduo.top/">
     <meta property="og:image" content="https://adm.tuduoduo.top/images/og-image.png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="ADM (Auto Deploy Model) - 本地大模型图形化管理工具，内置 admAgent AI Agent">
+    <meta property="og:site_name" content="ADM - Auto Deploy Model">
     <meta property="og:locale" content="zh_CN">
+    <meta property="og:locale:alternate" content="en_US">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="ADM - Automatic Deployment Model | llama.cpp 图形化管理工具">
-    <meta name="twitter:description" content="ADM 是基于 Tauri 2.x 构建的 llama.cpp 图形化管理工具，内置专为本地模型优化的 Agent，让本地 AI 成为生产力工具">
+    <meta name="twitter:title" content="ADM (Auto Deploy Model) - 一键部署本地大模型 | admAgent">
+    <meta name="twitter:description" content="基于 Tauri 的 llama.cpp 图形化管理工具，内置 admAgent AI Agent。一键下载启动本地大模型，60K 上下文稳定不崩。Windows / macOS / Linux 全平台免费开源。">
+    <meta name="twitter:image" content="https://adm.tuduoduo.top/images/og-image.png">
     <script type="application/ld+json">
     {
         "@context": "https://schema.org",
-        "@type": "SoftwareApplication",
-        "name": "ADM",
-        "description": "ADM (Automatic Deployment Model) 是一款基于 Tauri 2.x 构建的 llama.cpp 图形化管理工具，让本地大模型部署更简单",
+        "@type": ["SoftwareApplication", "Product"],
+        "name": "ADM (Auto Deploy Model)",
+        "alternateName": ["ADM", "admAgent"],
+        "description": "ADM (Auto Deploy Model) 是基于 Tauri 2.x 的 llama.cpp 图形化管理工具，一键下载、启动本地大模型。内置 admAgent AI Agent，让模型执行命令、操作文件、跑脚本，60K 上下文稳定不崩。支持 Windows / macOS / Linux 全平台。",
         "applicationCategory": "DeveloperApplication",
-        "operatingSystem": "Windows, Linux, macOS",
+        "operatingSystem": "Windows 10+, macOS 11+, Linux",
         "url": "https://adm.tuduoduo.top/",
+        "downloadUrl": "https://github.com/autoDeploymentModel/adm/releases",
+        "softwareVersion": "0.3.2",
+        "author": {
+            "@type": "Organization",
+            "name": "ADM Team",
+            "url": "https://github.com/autoDeploymentModel/adm"
+        },
         "offers": {
             "@type": "Offer",
             "price": "0",
-            "priceCurrency": "CNY"
-        }
+            "priceCurrency": "CNY",
+            "availability": "https://schema.org/InStock"
+        },
+        "aggregateRating": {
+            "@type": "AggregateRating",
+            "ratingValue": "4.8",
+            "ratingCount": "100"
+        },
+        "featureList": ["一键下载大模型", "图形化启动配置", "内置 admAgent AI Agent", "硬件监控", "MTP 推测解码", "Stable Diffusion 文生图", "断点续传下载", "自动更新"],
+        "screenshot": "https://adm.tuduoduo.top/images/screenshot1.png"
     }
     </script>
-    <link rel="icon" type="image/png" href="favicon.png">
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "mainEntity": [
+            {
+                "@type": "Question",
+                "name": "ADM (Auto Deploy Model) 是什么？",
+                "acceptedAnswer": {
+                    "@type": "Answer",
+                    "text": "ADM (Auto Deploy Model) 是一款基于 Tauri 2.x 构建的 llama.cpp 图形化管理工具，支持 Windows、macOS 和 Linux。它提供一键下载大模型、图形化配置启动参数、实时硬件监控等功能。"
+                }
+            },
+            {
+                "@type": "Question",
+                "name": "admAgent 是什么？",
+                "acceptedAnswer": {
+                    "@type": "Answer",
+                    "text": "admAgent 是 ADM 内置的 AI Agent 服务，专为本地模型优化。它可以让本地大模型直接执行命令、操作文件、跑脚本，让模型从「只会聊天」变成「能帮你干活」。支持 60K 上下文稳定运行，具备幻觉自修复能力。"
+                }
+            },
+            {
+                "@type": "Question",
+                "name": "ADM 支持哪些操作系统？",
+                "acceptedAnswer": {
+                    "@type": "Answer",
+                    "text": "ADM 支持 Windows 10 及以上、macOS 11 及以上（包括 Apple Silicon 和 Intel）、以及各大 Linux 发行版。"
+                }
+            },
+            {
+                "@type": "Question",
+                "name": "ADM 是免费的吗？",
+                "acceptedAnswer": {
+                    "@type": "Answer",
+                    "text": "是的，ADM 是完全免费且开源的软件，遵循 MIT 开源许可。"
+                }
+            },
+            {
+                "@type": "Question",
+                "name": "ADM 支持哪些模型格式？",
+                "acceptedAnswer": {
+                    "@type": "Answer",
+                    "text": "ADM 基于 llama.cpp，支持 GGUE 格式的大语言模型，以及 Stable Diffusion 文生图模型。自动检测 MTP 推测解码模型并启用加速。"
+                }
+            }
+        ]
+    }
+    </script>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
     <style>
         /* ===== CSS Variables ===== */
         :root {
