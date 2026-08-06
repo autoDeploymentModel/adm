@@ -13,6 +13,38 @@ import { armAutoContinue, resetAutoContinue } from "./autocontinue.js";
 
 // ===== 发送消息 =====
 
+// 发送前模型可用性校验（见 sendMessage 调用点）：
+// - 本地模型：必须已在「模型列表」启动（runningModelId 非空），否则服务端 local
+//   provider 指向 127.0.0.1:1010 无可连服务，每轮对话都会报连接失败
+// - 云端模型：磁盘配置中必须已有 base_url 与 api_key；内置 provider（不在磁盘列表，
+//   配置由 admAgent 内置提供）跳过校验，交给服务端处理
+// 返回错误文案（null = 校验通过）
+function getModelReadiness() {
+  var providerKey = S.settings.agent_default_provider || "local";
+  var isLocal = providerKey === "local" || providerKey.indexOf("local:") === 0;
+  // 服务端实际模型为 localModel 也按本地处理（重启后 admAgent.json 恢复 local 的兜底）
+  if (S.agentInfo && S.agentInfo.model && S.agentInfo.model.id === "localModel") isLocal = true;
+
+  if (isLocal) {
+    var st = window.__adm_state; // index.html 初始化即暴露（types.d.ts 已声明结构）
+    if (!st || !st.runningModelId) {
+      return _t("当前使用本地模型，但没有本地模型在运行。请先到「模型列表」下载并启动一个本地模型，或点击顶部模型名称切换到已配置的云端模型。");
+    }
+    return null;
+  }
+
+  // 云端模型：校验磁盘配置（用户添加的 provider）
+  var p = S.providers.find(function(x) { return providerKey === x.key || providerKey.indexOf(x.key + "/") === 0; });
+  if (!p) return null; // 内置 provider / 无法定位：交给服务端报错
+  if (!p.base_url) {
+    return _t("云端模型「") + (p.name || p.key) + _t("」缺少接口地址（Base URL），请到设置中修改。");
+  }
+  if (!p.api_key) {
+    return _t("云端模型「") + (p.name || p.key) + _t("」缺少 API Key，请到设置中填写。");
+  }
+  return null;
+}
+
 export async function sendMessage() {
   console.log("[agent] sendMessage() isSending:", S.isSending, "convId:", S.currentConvId, "activeRun:", S.activeRun ? S.activeRun.sessionId : null, "queuedRun:", S.queuedRun ? S.queuedRun.sessionId : null);
   // 仅当「当前 UI 会话就是正在运行的会话」时，点击发送 = 取消该运行；
@@ -79,6 +111,15 @@ export async function sendMessage() {
   var input = /** @type {HTMLTextAreaElement} */ (document.getElementById("agent-input"));
   var text = input.value.trim();
   if (!text && S.pendingFiles.length === 0) return;
+
+  // 发送前模型可用性校验：本地模型必须已启动（否则服务端 local provider 指向
+  // 127.0.0.1:1010 无可连服务，每轮对话都报连接失败）；云端模型必须已配置
+  // base_url / api_key。校验失败给出明确引导，而不是等模型请求才报晦涩错误。
+  var readinessMsg = getModelReadiness();
+  if (readinessMsg) {
+    showError(readinessMsg);
+    return;
+  }
 
   // 若此前切换模型时 /agent/update 未生效（会话繁忙），发送前补一次重载，确保本轮用新模型
   if (S.pendingModelReload && S.serverInfo && S.serverInfo.workspace_id) {

@@ -6,7 +6,7 @@ import { template } from "./agent/template.js";
 import { S, invoke, listen } from "./agent/state.js";
 import { api } from "./agent/api.js";
 import { generateUUID, isMsgAreaAtBottom, autoResize, $input, normalizeReasoningEffort } from "./agent/utils.js";
-import { updateStatusBar, updateContextUsage, updateModeToggle, updateSendButton, exitManualScrollMode, startSendSafetyTimer, clearSendSafetyTimer, showError, showConfirm, showCopyPasteMenu, updateScrollBottomBtn, reportError } from "./agent/ui.js";
+import { updateStatusBar, updateContextUsage, updateModeToggle, updateSendButton, exitManualScrollMode, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showConfirm, showCopyPasteMenu, updateScrollBottomBtn, reportError } from "./agent/ui.js";
 import { loadConversations, renderConversationList, selectConversation, newConversation } from "./agent/session.js";
 import { syncWorkingIndicator } from "./agent/render.js";
 import { sendMessage } from "./agent/send.js";
@@ -136,8 +136,12 @@ async function init() {
   if (S.serverInfo.workspace_id) {
     try {
       await api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent/init");
-    } catch (_) {
-      // 初始化失败不阻塞，可能已经初始化过
+    } catch (e) {
+      // 不阻塞流程（可能已初始化过 / 服务端瞬时未就绪），但不再静默：
+      // coordinator 构建失败会导致对话时报「agent coordinator not initialized」，
+      // 提前提示让用户知道（发送消息时会自动重试 init，见 send.js）
+      console.warn("[agent] /agent/init 失败:", e);
+      showWarning(_t("Agent 初始化失败，对话可能暂时无法进行（发送时会自动重试）"));
     }
 
     // 获取 Agent 信息 (当前模型等)

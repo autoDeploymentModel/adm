@@ -1120,6 +1120,27 @@ pub async fn start_agent_server(
 
     let workdir = load_agent_workdir(&app);
 
+    // 子进程工作目录：Windows 用二进制所在目录（exe 根目录，可写）；
+    // macOS 二进制在只读性质的 ADM.app/Contents/MacOS 内，改用 app_data_dir，
+    // 避免任何潜在的「在 bundle 内写文件」行为（配置在 ~/.config/admAgent、工作区靠 --cwd，均不依赖 cwd）。
+    // 该目录同时作为「未配置工作目录」时创建 workspace 的默认路径：必须与子进程实际
+    // 工作目录一致，否则模型读写文件的目录（workspace path）与用户认知分叉。
+    let process_cwd = {
+        #[cfg(target_os = "macos")]
+        {
+            config::get_data_dir(Some(&app))
+                .map(|d| d.to_string_lossy().to_string())
+                .unwrap_or_else(|_| ".".to_string())
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            agent_path
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|| ".".to_string())
+        }
+    };
+
     eprintln!("[admAgent] 使用本地传输 {} 启动 server 模式", transport.display());
 
     // 探测默认传输：已有 server 在跑则直接复用（多客户端共享同一 server）
@@ -1139,21 +1160,7 @@ pub async fn start_agent_server(
         cmd.kill_on_drop(true);
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
-        // 子进程工作目录：Windows 用二进制所在目录（exe 根目录，可写）；
-        // macOS 二进制在只读性质的 ADM.app/Contents/MacOS 内，改用 app_data_dir，
-        // 避免任何潜在的「在 bundle 内写文件」行为（配置在 ~/.config/admAgent、工作区靠 --cwd，均不依赖 cwd）。
-        #[cfg(target_os = "macos")]
-        {
-            if let Ok(data_dir) = config::get_data_dir(Some(&app)) {
-                cmd.current_dir(data_dir);
-            }
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            if let Some(parent) = agent_path.parent() {
-                cmd.current_dir(parent);
-            }
-        }
+        cmd.current_dir(&process_cwd);
 
         #[cfg(target_os = "windows")]
         {
@@ -1255,9 +1262,9 @@ pub async fn start_agent_server(
             .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
 
         let workdir_for_api = if workdir.is_empty() {
-            std::env::current_dir()
-                .map(|d| d.to_string_lossy().to_string())
-                .unwrap_or_else(|_| ".".to_string())
+            // 未配置工作目录：用子进程实际工作目录（= 模型读写文件的目录），
+            // 保证 workspace path 与模型操作目录一致，不用 ADM 主进程 cwd。
+            process_cwd.clone()
         } else {
             workdir.clone()
         };
