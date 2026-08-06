@@ -85,8 +85,9 @@ export function renderVisionModelSelect() {
         entries.push({ key: sp.id + "/" + m.id, name: m.name || m.id });
       });
     });
-  } else if (!S.serverInfo) {
-    // 无运行中服务：回退磁盘配置（仅列出已确认的云端 provider）
+  } else {
+    // 快照未就绪（服务未运行或 provider 快照尚未拉取完成）：回退磁盘配置
+    // （仅列出已确认的云端 provider），保证下拉始终有可用选项
     S.providers.forEach(function(p) {
       if (S.pendingProviderKeys[p.key]) return;
       if (p.supports_images === true && p.model_id) {
@@ -102,7 +103,18 @@ export function renderVisionModelSelect() {
     opt.textContent = e.name;
     sel.appendChild(opt);
   });
-  sel.value = seen[current] ? current : "admAgent/admImage-model";
+  if (seen[current]) {
+    sel.value = current;
+  } else if (!S.serverProvidersLoaded && current !== "admAgent/admImage-model") {
+    // 快照未就绪时列表可能不完整：保留当前已配置值作为选项，避免保存时被静默重置为默认
+    var keep = document.createElement("option");
+    keep.value = current;
+    keep.textContent = current;
+    sel.appendChild(keep);
+    sel.value = current;
+  } else {
+    sel.value = "admAgent/admImage-model";
+  }
 }
 
 export async function saveSettings() {
@@ -261,6 +273,7 @@ function renderProviderList() {
           delete S.pendingProviderKeys[p.key];
           // 下拉优先使用 S.serverProviders；必须刷新服务端快照，避免已删 provider 继续显示并可被重新选中
           await refreshServerProviders();
+          renderVisionModelSelect();
           renderProviderList();
           updateModelDropdown();
         } catch (e) {
@@ -318,6 +331,7 @@ export async function addModel() {
       }
       S.providers = await invoke("list_cloud_providers");
       await refreshServerProviders();
+      renderVisionModelSelect();
       renderProviderList();
       updateModelDropdown();
       // 改的正是当前激活的 provider：重新切换一次，让新 model id / 上下文窗口立即应用到 agent
@@ -372,6 +386,7 @@ export async function addModel() {
     S.providers = await invoke("list_cloud_providers");
     // 只有 /config/set 成功且 /providers 快照确实包含该 key，才算运行时可用。
     var snapshotLoaded = await refreshServerProviders();
+    renderVisionModelSelect();
     var runtimeConfirmed = runtimeSynced && snapshotLoaded && S.serverProviders.some(function(sp) {
       return sp && sp.id === addResp.key;
     });
