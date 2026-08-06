@@ -522,6 +522,13 @@ const EN = {
   "语言 / Language": "Language",
   "界面语言": "UI Language",
   "切换后立即生效": "Applies immediately after switching",
+  // ===== finish reason（消息末尾状态标记）=====
+  "本轮执行完成": "Turn completed",
+  "达到 Token 上限": "Token limit reached",
+  "工具调用": "Tool use",
+  "已取消": "Cancelled",
+  "执行出错": "Error",
+  "未知状态": "Unknown",
 };
 
 let lang = "zh";
