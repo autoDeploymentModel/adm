@@ -402,8 +402,16 @@ function buildPartElement(part, partIdx, role, msgKey) {
       var finishDiv = document.createElement("div");
       finishDiv.className = "msg-finish";
       finishDiv.style.cssText = "border-top:1px solid var(--c-border);padding-top:4px;margin-top:4px;font-size:11px;color:var(--c-text-4);";
-      var reason = partData.reason || _t("完成");
-      finishDiv.textContent = "── " + reason + " ──";
+      var reasonMap = {
+        end_turn: "本轮执行完成",
+        max_tokens: "达到 Token 上限",
+        tool_use: "工具调用",
+        canceled: "已取消",
+        error: "执行出错",
+        unknown: "未知状态"
+      };
+      var reasonKey = reasonMap[partData.reason] || "本轮执行完成";
+      finishDiv.textContent = "── " + _t(reasonKey) + " ──";
       return finishDiv;
 
     case "shell_command":
