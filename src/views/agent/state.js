@@ -33,6 +33,7 @@ export const listen = window.__adm_listen;
  * @property {any} sendSafetyTimer
  * @property {boolean} manualScrollMode
  * @property {any} manualModeExitTimer
+ * @property {boolean} programmaticScroll 标记当前 scrollTop 变更来自代码（非用户操作），scroll 事件据此跳过手动模式判定
  * @property {boolean} pendingModelReload
  * @property {number} agentInfoSeq
  * @property {"skill" | "lsp" | "mcp"} toolsTab
@@ -70,8 +71,9 @@ export const S = {
   agentInfo: null,    // Agent 状态信息 (当前模型等)
   pendingFiles: [],   // 待发送附件列表 [{name, type, size, base64, dataUrl}]
   sendSafetyTimer: null, // isSending 安全超时定时器（3分钟无任何 SSE 活动则自动重置，收到消息事件会续期）
-  manualScrollMode: false,   // 手动模式：鼠标在消息区内，暂停自动滚底，保留滚动位置与折叠块展开状态
+  manualScrollMode: false,   // 手动模式：暂停自动滚底，保留滚动位置与折叠块展开状态
   manualModeExitTimer: null, // 鼠标离开消息区 1 秒后恢复自动模式的定时器
+  programmaticScroll: false, // 标记 scrollTop 变更来自代码（非用户操作），scroll 事件据此跳过手动模式判定
   pendingModelReload: false, // 切换模型时 /agent/update 失败（如会话繁忙）→ 挂起，run_complete/下次发送前重试
   agentInfoSeq: 0,           // agentInfo 刷新序号：只应用最新一次请求的结果，防止旧响应把切换后的模型覆盖回旧值
   toolsTab: "skill",         // 工具面板当前 tab: "skill" | "lsp" | "mcp"

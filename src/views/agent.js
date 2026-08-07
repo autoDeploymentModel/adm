@@ -605,17 +605,19 @@ function bindEvents() {
         S.manualModeExitTimer = null;
         S.manualScrollMode = false;
         var a = document.getElementById("agent-msg-area");
-        if (a) a.scrollTop = a.scrollHeight;
+        if (a) { S.programmaticScroll = true; a.scrollTop = a.scrollHeight; S.programmaticScroll = false; }
       }, 1000);
     });
 
-    // 滚动到底部 → 立即进入自动浏览模式（即使鼠标还在消息区内）；鼠标在区内向上滚离底部 → 回到手动模式
+    // 滚动到底部 → 立即进入自动浏览模式；不在底部 → 进入手动模式（暂停自动滚底）。
+    // 用 programmaticScroll 标志区分代码触发的滚动与用户操作，不依赖 :hover，
+    // 避免 macOS 触控板滚动时光标不在消息区内导致手动模式无法激活。
     msgArea.addEventListener("scroll", function() {
+      if (S.programmaticScroll) { updateScrollBottomBtn(); return; }
       if (isMsgAreaAtBottom(msgArea)) {
         if (S.manualModeExitTimer) { clearTimeout(S.manualModeExitTimer); S.manualModeExitTimer = null; }
         S.manualScrollMode = false;
-      } else if (msgArea.matches(":hover")) {
-        // :hover 判断避免鼠标已离开时手动模式下的程序化滚动（恢复 prevScrollTop）误触发重新进入手动模式
+      } else {
         S.manualScrollMode = true;
       }
       updateScrollBottomBtn();
@@ -627,7 +629,9 @@ function bindEvents() {
       scrollBottomBtn.addEventListener("click", function() {
         if (S.manualModeExitTimer) { clearTimeout(S.manualModeExitTimer); S.manualModeExitTimer = null; }
         S.manualScrollMode = false;
+        S.programmaticScroll = true;
         msgArea.scrollTop = msgArea.scrollHeight;
+        S.programmaticScroll = false;
         updateScrollBottomBtn();
       });
     }
