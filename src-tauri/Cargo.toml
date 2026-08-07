@@ -46,3 +46,8 @@ tar = "0.4"
 rand = "0.8"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 wechatbot = "0.4"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# 读取 NSPasteboard 中的文件路径列表（对应 Windows 的 CF_HDROP）
+objc2-app-kit = { version = "0.3", features = ["NSPasteboard", "NSPasteboardItem"] }
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSString"] }
