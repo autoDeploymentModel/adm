@@ -137,11 +137,13 @@ export function renderMessages() {
   syncWorkingIndicator(area);
 
   // 手动模式：保留用户当前滚动位置；自动模式：滚到底部
+  S.programmaticScroll = true;
   if (S.manualScrollMode) {
     area.scrollTop = prevScrollTop;
   } else {
     area.scrollTop = area.scrollHeight;
   }
+  S.programmaticScroll = false;
   // 流式输出时内容增长不一定触发 scroll 事件，渲染后主动刷新悬浮圆球显隐
   updateScrollBottomBtn();
 }

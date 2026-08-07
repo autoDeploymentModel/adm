@@ -266,7 +266,9 @@ export function showNotice(msg, level) {
   div.className = "msg " + cls;
   div.textContent = msg;
   area.appendChild(div);
+  S.programmaticScroll = true;
   if (!S.manualScrollMode) area.scrollTop = area.scrollHeight;
+  S.programmaticScroll = false;
   updateScrollBottomBtn();
   // 3 秒后自动消失（增量渲染会保留提示节点，需自行清理避免堆积）
   setTimeout(function() { if (div.parentNode) div.remove(); }, 3000);
