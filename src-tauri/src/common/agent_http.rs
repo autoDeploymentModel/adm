@@ -252,10 +252,10 @@ impl AgentConnector {
                     ))
                 }
             }
-            AgentTransport::NamedPipe(name) => {
+            AgentTransport::NamedPipe(_name) => {
                 #[cfg(windows)]
                 {
-                    let p = connect_pipe(&name).await?;
+                    let p = connect_pipe(&_name).await?;
                     Ok(AgentStream::Pipe(p))
                 }
                 #[cfg(not(windows))]

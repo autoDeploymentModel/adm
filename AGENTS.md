@@ -46,6 +46,15 @@ This file provides guidance to Qoder (qoder.com) when working with code in this 
 - **假完成/静默停止检测**（`sse.js` `detectFakeCompletion`）：本轮有 edit/write/multiedit/bash/lsp 等副作用工具调用、但工具调用总数 ≤4、且 prompt 含操作动词（部署/修复/重构…）时，`showWarning` 提示"任务可能未完整执行"（服务端重试耗尽后 run_complete 无 error 静默结束的兜底）。
 - **自动续跑进度判定**（`autocontinue.js` `maybeAutoContinue(data, runStats)`）：本轮有 edit/write/bash 等实质副作用工具**成功落地**（`runStats.sideEffectSuccess > 0`）视为有进展、不计无进展，避免"模型在干活但没标 todos"被误熔断。
 
+## 附件粘贴（跨平台差异，`agent.js` paste 事件 + `agent.rs` read_clipboard_files）
+- **根源是 WebView 内核与剪贴板格式不同**，必须两端各留一条"读系统剪贴板"的兜底，否则该平台粘贴文件失效：
+  - **Windows（WebView2/Chromium）**：复制文件时剪贴板为 `CF_HDROP`（无文本），但 Chromium 会把文件暴露成 DataTransfer 的非图片 file 项 → 前端 `hasFileItem` 命中即同步 `preventDefault`，再由 Rust 读 `CF_HDROP`（`windows` crate）。
+  - **macOS（WKWebView）**：Finder 复制文件时剪贴板只有 `public.file-url` / `NSFilenamesPboardType`（**无 text/plain 路径**，实测 `pbpaste` 为空），且 WKWebView **不**把文件暴露给 DataTransfer（items/files 全空、无 uri-list）→ 前端靠 `clipItems.length === 0` 兜底触发 `read_clipboard_files`；Rust 侧用 `objc2-app-kit` 的 `NSPasteboard`：先读 `NSFilenamesPboardType`（路径数组），兜底逐条读 `public.file-url` 剥掉 `file://` 前缀（多选文件时每个文件一个 item）。依赖挂在 `[target.'cfg(target_os = "macos")'.dependencies]`。
+  - **Linux**：`read_clipboard_files` 返回空数组（未实现）。
+- **前端兜底链顺序**（`src/views/agent.js` 粘贴处理）：①剪贴板图片直读 blob → ②`text/uri-list` 路径（`parseUriListPaths`）→ ③`text/plain` 且 `looksLikeFilePath` 才当路径（**普通文本粘贴禁止误判**，多行需每行都像路径）→ ④`cd.files` 带 `.path`（WebView2 注入）→ ⑤`read_clipboard_files`（触发条件 `hasFileItem` **或** `clipItems.length === 0`；macOS 无内容可插入故无需 preventDefault，Windows 需同步拦截防路径文本残留）。
+- **macOS 新增后端逻辑时注意**：NSPasteboard 的 extern 静态（`NSFilenamesPboardType`/`NSPasteboardTypeFileURL`）访问需 `unsafe` 块；`NSFilenamesPboardType` 已废弃（`#[allow(deprecated)]`）但仍是多文件权威来源；`DowncastTarget` 不支持泛型 `NSArray<NSString>`，需 downcast 成 `NSArray` 再逐元素 `downcast_ref::<NSString>`。
+- **验证方法**：`osascript -e 'tell application "Finder" to set the clipboard to (POSIX file "/tmp/x")'` 模拟复制文件，`pbpaste` 应输出空（证明无文本类型），Swift 小程序列 `NSPasteboard` 类型确认；Rust 侧可直接给 `read_clipboard_files` 写临时 `#[cfg(test)]` 单测验证（验证后删除，勿污染 CI）。
+
 ## Rust 后端（`src-tauri/src/`）
 | 模块 | 关键命令 |
 |--------|-------------|

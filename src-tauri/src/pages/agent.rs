@@ -2015,9 +2015,10 @@ pub async fn save_attachment_file(
     Ok(path.to_string_lossy().to_string())
 }
 
-/// 读取系统剪贴板中的文件路径列表（Windows 资源管理器复制文件时为 CF_HDROP 格式）。
-/// 返回空数组表示剪贴板无文件（复制的是文本/图片等）。WebView2 不把文件路径
-/// 暴露给网页 DataTransfer，故在 Rust 侧直读剪贴板。
+/// 读取系统剪贴板中的文件路径列表（Windows 资源管理器复制文件时为 CF_HDROP 格式；
+/// macOS Finder 复制文件时为 NSPasteboard 的 NSFilenamesPboardType / public.file-url）。
+/// 返回空数组表示剪贴板无文件（复制的是文本/图片等）。WKWebView 不把 Finder 复制的
+/// 文件暴露给网页 DataTransfer，故在 Rust 侧直读剪贴板。
 #[cfg(target_os = "windows")]
 #[tauri::command]
 pub async fn read_clipboard_files() -> Result<Vec<String>, String> {
@@ -2073,7 +2074,51 @@ pub async fn read_clipboard_files() -> Result<Vec<String>, String> {
     Ok(paths)
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+#[tauri::command]
+#[allow(deprecated)] // NSFilenamesPboardType 已废弃但仍是最权威的多文件来源
+pub async fn read_clipboard_files() -> Result<Vec<String>, String> {
+    use objc2_app_kit::{NSPasteboard, NSFilenamesPboardType, NSPasteboardTypeFileURL};
+    use objc2_foundation::{NSArray, NSString};
+
+    let mut paths: Vec<String> = Vec::new();
+    let pb = NSPasteboard::generalPasteboard();
+
+    unsafe {
+        // Finder/AppKit 复制文件：NSFilenamesPboardType 为权威类型（路径字符串数组）
+        if let Some(plist) = pb.propertyListForType(&NSFilenamesPboardType) {
+            if let Ok(arr) = plist.downcast::<NSArray>() {
+                for s in arr.iter() {
+                    if let Some(str) = s.downcast_ref::<NSString>() {
+                        let p = str.to_string();
+                        if !p.is_empty() {
+                            paths.push(p);
+                        }
+                    }
+                }
+                if !paths.is_empty() {
+                    return Ok(paths);
+                }
+            }
+        }
+
+        // 兜底：逐条读取 public.file-url（file:///path → /path；多选文件时每个文件一个 item）
+        if let Some(items) = pb.pasteboardItems() {
+            for item in items.iter() {
+                if let Some(s) = item.stringForType(&NSPasteboardTypeFileURL) {
+                    let url = s.to_string();
+                    let path = url.strip_prefix("file://").map(str::to_string).unwrap_or(url);
+                    if !path.is_empty() && !paths.contains(&path) {
+                        paths.push(path);
+                    }
+                }
+            }
+        }
+    }
+    Ok(paths)
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
 #[tauri::command]
 pub async fn read_clipboard_files() -> Result<Vec<String>, String> {
     Ok(Vec::new())

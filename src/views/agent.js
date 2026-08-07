@@ -529,10 +529,12 @@ function bindEvents() {
       addPastedPaths(paths);
       return;
     }
-    // 兜底3：WebView2 不暴露文件路径给 DataTransfer，Rust 侧直读剪贴板 CF_HDROP。
-    // DataTransfer 出现非图片 file 项即说明剪贴板是"复制文件"：同步拦截默认粘贴，
-    // 避免路径文本被插入输入框；随后异步读取 CF_HDROP 路径列表。
-    // CF_HDROP 只在"复制文件"时存在，正常复制文本时不会走到这里，无副作用。
+    // 兜底3：WebView2 / WKWebView 不把"复制文件"的文件项暴露给 DataTransfer，
+    // 由 Rust 侧直读系统剪贴板（Windows CF_HDROP / macOS NSPasteboard）。
+    // 触发条件：DataTransfer 出现非图片 file 项（Windows），或 items 完全为空
+    // （macOS WKWebView 对 Finder 复制的文件不暴露任何项、也无 text/uri-list/text/plain，
+    // 剪贴板里只有 public.file-url / NSFilenamesPboardType）。复制文本时 items 恒有
+    // string 项且剪贴板无文件类型，不会走到这里，无副作用。
     try {
       var hasFileItem = false;
       for (var fi2 = 0; fi2 < clipItems.length; fi2++) {
@@ -543,6 +545,11 @@ function bindEvents() {
       }
       if (hasFileItem) {
         e.preventDefault();
+        invoke("read_clipboard_files").then(function(files) {
+          if (files && files.length > 0) addPastedPaths(files);
+        }).catch(function() {});
+      } else if (clipItems.length === 0) {
+        // macOS WKWebView：默认粘贴本就无内容可插入，无需 preventDefault
         invoke("read_clipboard_files").then(function(files) {
           if (files && files.length > 0) addPastedPaths(files);
         }).catch(function() {});
