@@ -65,9 +65,10 @@ export async function switchToWorkspace(wsId, wsPath) {
     await syncModeToServer();
     await enableAutoCompact();
     try {
-      S.agentInfo = await api("GET", "/v1/workspaces/" + wsId + "/agent");
-      if (S.agentInfo && S.agentInfo.model && S.agentInfo.model.context_window) {
-        S.contextUsage.max = S.agentInfo.model.context_window;
+      var info = await api("GET", "/v1/workspaces/" + wsId + "/agent");
+      store.setAgentInfo(wsId, info);
+      if (info && info.model && info.model.context_window) {
+        store.setContextUsage(wsId, S.contextUsage.used, info.model.context_window, S.contextUsage.estimated);
       }
     } catch (_) {}
     // SSE 监听是全局的（后端为每个 workspace 独立转发），不需要重新订阅
@@ -76,7 +77,7 @@ export async function switchToWorkspace(wsId, wsPath) {
     await loadTools();
     updateContextUsage();
     updateStatusBar("ready", wsPath || null, 0);
-    // 首次进入后保存到状态池（store.setActive 已注册，Proxy 写入自动快照）
+    // 首次进入后保存到状态池（store.setActive 已注册，store 方法写入时自动快照）
   }
   updateWorkspaceSelector();
 }

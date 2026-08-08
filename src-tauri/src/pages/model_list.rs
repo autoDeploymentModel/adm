@@ -90,7 +90,7 @@ pub async fn scan_part_files(app: tauri::AppHandle) -> Result<Vec<PartFileProgre
                         let fp = entry.path();
                         if fp.is_file() {
                             if let Some(ext) = fp.extension() {
-                                if ext == "part" && fp.file_name().map_or(true, |n| n.to_string_lossy() != format!("{}.gguf.part", dir_str).as_str()) {
+                                if ext == "part" && fp.file_name().is_none_or(|n| n.to_string_lossy() != format!("{}.gguf.part", dir_str).as_str()) {
                                     let size = std::fs::metadata(&fp).map(|m| m.len()).unwrap_or(0);
                                     result.push(PartFileProgress { model_id: dir_str.clone(), existing_size: size });
                                 }
@@ -445,7 +445,7 @@ pub async fn start_model(
         } else if ngl_lower == "all" {
             // "all" 表示全部加载到 GPU，使用 99
             args.extend(["-ngl".to_string(), "99".to_string()]);
-        } else if let Ok(_) = ngl.parse::<i32>() {
+        } else if ngl.parse::<i32>().is_ok() {
             // 数字值直接传递
             args.extend(["-ngl".to_string(), ngl.clone()]);
         } else {

@@ -672,6 +672,8 @@ fn load_settings(app: &tauri::AppHandle) -> Settings {
 /// 写回 config.json 的 agent_plan_mode（读-改-写，保留其它字段）。
 /// 供微信端 /plan、/yolo 指令切换模式持久化，与 Agent 页共享同一份 config.json。
 fn save_agent_plan_mode(app: &tauri::AppHandle, plan: bool) -> Result<(), AppError> {
+    let state = app.state::<AppState>();
+    let _lock = state.config_write_lock.lock().map_err(|e| e.to_string())?;
     let data_dir = config::get_data_dir(Some(app))?;
     let config_path = data_dir.join("config.json");
     let mut settings = if config_path.exists() {
@@ -1382,9 +1384,11 @@ async fn send_wx_text(rt: &Arc<IlinkRuntime>, wx_user: &str, text: &str) {
 
 // ===== section 7: 消息转换工具 =====
 
-/// 流程调试日志：仅 debug 构建写盘，release 不产生任何文件。
-#[cfg(debug_assertions)]
+/// 流程调试日志：与 agent.rs 的 debug_logging 开关共用，release 也可用。
 fn flow_log(app: &tauri::AppHandle, stage: &str, detail: &str) {
+    if !agent::is_debug_logging_enabled() {
+        return;
+    }
     eprintln!("[ilink][flow] {} | {}", stage, detail);
     if let Ok(dir) = config::get_data_dir(Some(app)) {
         use std::io::Write;
@@ -1402,10 +1406,6 @@ fn flow_log(app: &tauri::AppHandle, stage: &str, detail: &str) {
         }
     }
 }
-
-/// release 构建：流程调试日志为空操作。
-#[cfg(not(debug_assertions))]
-fn flow_log(_app: &tauri::AppHandle, _stage: &str, _detail: &str) {}
 
 /// Markdown 降级为微信可读纯文本：去代码围栏、标题转【】、去加粗星号
 fn downgrade_markdown(text: &str) -> String {

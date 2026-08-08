@@ -52,7 +52,7 @@ impl AgentTransport {
                 .unwrap_or_else(|_| std::env::temp_dir());
             let mut path = dir.join(format!("admAgent-{}.sock", uid));
             // macOS sun_path 上限 104 字节：超长回退 /tmp（对齐 Go 逻辑）
-            if path.as_os_str().to_string_lossy().as_bytes().len() > 104 {
+            if path.as_os_str().len() > 104 {
                 path = PathBuf::from("/tmp").join(format!("admAgent-{}.sock", uid));
             }
             AgentTransport::Unix(path)

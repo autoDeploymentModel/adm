@@ -20,7 +20,7 @@ pub struct ModelStatus {
     pub port: Option<u16>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct LaunchParams {
     pub ctx_size: Option<i32>,
     pub n_predict: Option<i32>,
@@ -53,41 +53,6 @@ pub struct LaunchParams {
     pub preset_mode: Option<String>,
 }
 
-impl Default for LaunchParams {
-    fn default() -> Self {
-        Self {
-            ctx_size: None,
-            n_predict: None,
-            batch_size: None,
-            ubatch_size: None,
-            n_gpu_layers: None,
-            threads: None,
-            threads_batch: None,
-            flash_attn: None,
-            cache_type_k: None,
-            cache_type_v: None,
-            mlock: None,
-            mmap: None,
-            temperature: None,
-            top_k: None,
-            top_p: None,
-            min_p: None,
-            repeat_penalty: None,
-            repeat_last_n: None,
-            dry_multiplier: None,
-            dry_allowed_length: None,
-            dry_penalty_last_n: None,
-            presence_penalty: None,
-            frequency_penalty: None,
-            reasoning: None,
-            spec_draft_n_max: None,
-            spec_type: None,
-            port: None,
-            host: None,
-            preset_mode: None,
-        }
-    }
-}
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct RemoteModel {
@@ -121,7 +86,7 @@ pub struct WorkDirEntry {
     pub is_default: bool,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Settings {
 pub launch_params: LaunchParams,
 /// 已弃用：单个工作目录（迁移到 agent_workdirs 后仅用于向后兼容读取）
@@ -152,23 +117,6 @@ pub language: String,
 /// 空或缺失 = 内置 admImage-model；同步写入 admAgent.json 顶层 agent_vision_model 供 vision 子命令读取
 #[serde(default)]
 pub agent_vision_model: String,
-}
-
-impl Default for Settings {
-fn default() -> Self {
-Self {
-launch_params: LaunchParams::default(),
-agent_workdir: String::new(),
-agent_workdirs: Vec::new(),
-agent_plan_mode: false,
-agent_default_provider: String::new(),
-agent_reasoning_effort: String::new(),
-agent_temperature: None,
-debug_logging: false,
-language: String::new(),
-agent_vision_model: String::new(),
-}
-}
 }
 
 // ===== 自动更新相关结构 =====

@@ -9,7 +9,7 @@ use crate::common::utils::download::download_with_resume;
 use crate::pages::settings::get_llamacpp_version;
 use crate::bail;
 
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 
 // ===== 辅助函数 =====
 

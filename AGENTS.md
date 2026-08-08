@@ -1,7 +1,3 @@
-# AGENTS.md
-
-This file provides guidance to Qoder (qoder.com) when working with code in this repository.
-
 # ADM — Agent 指南
 
 ## 开发命令（始终使用 `pnpm`，不要用 `npm`/`yarn`）
@@ -24,7 +20,7 @@ This file provides guidance to Qoder (qoder.com) when working with code in this 
 - **单窗口 SPA（单页应用）** + hash 路由：
   - `index.html`（外壳）含 `#view-root` 容器、底部硬件栏与导航。
   - 4 个视图（`model_list` / `model_image` / `settings` / `agent`）各自为独立 **ES 模块**（`src/views/*.js`），默认导出 `{ template, mount(root, params), unmount() }`。模型运行后「查看模型」直接用系统浏览器打开 WebUI（`window.openUrl`），不再有 chat 视图。
-  - `agent` 视图已拆分：`src/views/agent.js` 为入口（init/bindEvents/生命周期），具体逻辑在 `src/views/agent/` 子模块（state/template/api/utils/ui/render/session/attach/send/sse/permission/tools/model/workspace/settings_dialog）；跨模块共享状态统一挂在 `state.js` 的 `S` 对象上。
+  - `agent` 视图已拆分：`src/views/agent.js` 为入口（init/bindEvents/生命周期），具体逻辑在 `src/views/agent/` 子模块（store/template/api/utils/ui/render/session/attach/send/sse/permission/tools/model/workspace/settings_dialog）；跨模块共享状态由 `store.js` 统一管理（`store` 为写入入口，`S` 为只读视图，workspace 字段禁止直接写 `S`）。
   - `index.html` 通过动态 `import()` 异步加载视图模块，把 `template`（含 `<style>` 的 HTML 字符串）注入 `#view-root`，调用 `mount`/`unmount` 管理生命周期。
 - CSS/JS **内联**在每个视图模块的 `template` 字符串或模块函数内，保持零运行时依赖。
 - **样式隔离约定**：全局 reset（`* {}`）与 `body` 样式只由 `index.html` 壳层提供，视图内不得重复定义；视图选择器带视图前缀（`agent-*` / `settings-*` 等）；视图内元素 id 不得与壳层 id（`app` / `view-root` 等）重复。

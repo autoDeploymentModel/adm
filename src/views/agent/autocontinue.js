@@ -2,7 +2,7 @@
 // 每轮新 prompt 会重置服务端所有 nudge 重试预算，等于把"推着模型干完"的
 // 预算按轮扩展；配进度守卫（连续无进展即停）与轮数上限防止无限烧 token。
 import { t as _t } from "../../i18n.js";
-import { S } from "./store.js";
+import { S, store } from "./store.js";
 import { api } from "./api.js";
 import { generateRunId } from "./utils.js";
 import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, reportError } from "./ui.js";
@@ -92,10 +92,9 @@ export async function maybeAutoContinue(data, runStats) {
 async function sendContinuePrompt(sessionId) {
   var workspaceId = S.serverInfo.workspace_id;
   var runId = generateRunId();
-  S.isSending = true;
-  S.activeRun = { workspaceId: workspaceId, sessionId: sessionId, runId: runId };
+  store.startRun(workspaceId, sessionId, runId);
   // 续跑轮也是新 run：重置运行统计，供本轮假完成检测与下一轮进度判定使用
-  S.runStats = {
+  store.setRunStats(workspaceId, {
     sessionId: sessionId,
     prompt: _t("任务清单还有未完成项，请继续完成剩余的 todos；每完成一项立即用 todos 工具标记，全部完成后再结束。"),
     toolCalls: 0,
@@ -103,7 +102,7 @@ async function sendContinuePrompt(sessionId) {
     sideEffectSuccess: 0,
     seenMsgIds: {},
     startedAt: Date.now(),
-  };
+  });
   updateSendButton();
   updateStatusBar("busy", null, S.contextUsage.used);
   try {
@@ -114,9 +113,7 @@ async function sendContinuePrompt(sessionId) {
     });
     startSendSafetyTimer();
   } catch (e) {
-    S.isSending = false;
-    S.activeRun = null;
-    S.queuedRun = null;
+    store.cancelRun(workspaceId);
     updateSendButton();
     clearSendSafetyTimer();
     updateStatusBar("ready", null, S.contextUsage.used);

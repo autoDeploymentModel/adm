@@ -36,6 +36,8 @@ pub struct AppState {
     pub active_workspace_id: Mutex<Option<String>>,
     /// admAgent server 启停单飞锁
     pub agent_start_lock: tokio::sync::Mutex<()>,
+    /// config.json 读-改-写 互斥锁（防止前端操作与微信端指令并发写 config.json 互相覆盖）
+    pub config_write_lock: std::sync::Mutex<()>,
     /// 全局标识：是否有模型成功启动
     pub model_running: Mutex<bool>,
     pub model_supports_images: Mutex<bool>,
@@ -59,6 +61,7 @@ impl AppState {
             agent_sessions: Mutex::new(HashMap::new()),
             active_workspace_id: Mutex::new(None),
             agent_start_lock: tokio::sync::Mutex::new(()),
+            config_write_lock: std::sync::Mutex::new(()),
             model_running: Mutex::new(false),
             model_supports_images: Mutex::new(false),
             model_supports_reasoning: Mutex::new(false),
@@ -68,7 +71,7 @@ impl AppState {
 
     #[allow(dead_code)]
     pub fn get_running_pid(&self) -> Option<u32> {
-        self.running_process.lock().map(|g| g.clone()).unwrap_or(None)
+        self.running_process.lock().map(|g| *g).unwrap_or(None)
     }
 
     #[allow(dead_code)]

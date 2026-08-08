@@ -1,6 +1,6 @@
 // 会话管理：列表 / 选择 / 新建 / 消息刷新 / 上下文估算
 import { t as _t } from "../../i18n.js";
-import { S, invoke } from "./store.js";
+import { S, invoke, store } from "./store.js";
 import { api } from "./api.js";
 import { escapeHtml, formatTime } from "./utils.js";
 import { showError, showConfirm, showInfo, reportError, exitManualScrollMode, clearErrorNotices, updateContextUsage, updateStatusBar, updateSendButton } from "./ui.js";
@@ -47,7 +47,7 @@ export async function loadConversations(restoreCurrent) {
     console.error("[agent] 会话列表响应格式异常:", JSON.stringify(resp).substring(0, 200));
     list = [];
   }
-  S.conversations = list;
+  store.setConversations(S.serverInfo.workspace_id, list);
   renderConversationList();
   console.log("[agent] 会话列表加载完成，共", S.conversations.length, "个, currentConvId:", S.currentConvId, "restore:", !!restoreCurrent);
 
@@ -60,7 +60,7 @@ export async function loadConversations(restoreCurrent) {
       return;
     }
     console.warn("[agent] 残留的 currentConvId 已不存在，回退默认选择:", S.currentConvId);
-    S.currentConvId = null;
+    store.setCurrentConvId(S.serverInfo.workspace_id, null);
   }
 
   // 自动选中或创建会话：确保 currentConvId 始终有效，否则发送按钮无反应
@@ -160,8 +160,15 @@ function handleConvAction(action, convId) {
         };
         api("PUT", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions/" + convId, body)
           .then(function() {
-            if (oldConv) { oldConv.title = newName; oldConv.name = newName; }
-            if (S.currentConvId === convId && S.currentConv) { S.currentConv.title = newName; }
+            // 更新会话列表与当前会话快照中的标题（列表项与 currentConv 分开维护，都走 Store）
+            var renamedList = S.conversations.map(function(c) {
+              if (c.id === convId) return Object.assign({}, c, { title: newName, name: newName });
+              return c;
+            });
+            store.setConversations(S.serverInfo.workspace_id, renamedList);
+            if (S.currentConvId === convId && S.currentConv) {
+              store.setCurrentConv(S.serverInfo.workspace_id, Object.assign({}, S.currentConv, { title: newName }));
+            }
             renderConversationList();
             if (S.currentConvId === convId) {
               document.getElementById("agent-conv-title").textContent = newName;
@@ -176,10 +183,10 @@ function handleConvAction(action, convId) {
           .then(function() {
             if (S.currentConvId === convId) {
               resetPermissionState();
-              S.currentConvId = null;
+              store.setCurrentConvId(S.serverInfo.workspace_id, null);
               syncWxFollowSession();
-              S.currentConv = null;
-              S.messages = [];
+              store.setCurrentConv(S.serverInfo.workspace_id, null);
+              store.setMessages(S.serverInfo.workspace_id, []);
               renderMessages();
               renderTodos([]);
               document.getElementById("agent-conv-title").textContent = _t("选择或创建一个会话");
@@ -194,7 +201,7 @@ function handleConvAction(action, convId) {
 
 export async function selectConversation(convId) {
   if (convId !== S.currentConvId) { resetPermissionState(); exitManualScrollMode(); clearErrorNotices(); }
-  S.currentConvId = convId;
+  store.setCurrentConvId(S.serverInfo.workspace_id, convId);
   syncWxFollowSession();
   renderConversationList();
   // 切换后同步按钮语义（运行中→取消 / 排队中→取消排队 / 其它→发送），
@@ -226,21 +233,21 @@ export async function selectConversation(convId) {
     }).catch(function() {});
 
     // 获取会话信息
-    S.currentConv = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions/" + convId);
+    var conv = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions/" + convId);
+    store.setCurrentConv(S.serverInfo.workspace_id, conv);
     document.getElementById("agent-conv-title").textContent = S.currentConv.title || _t("会话");
 
     // 单独获取消息列表
-    S.messages = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions/" + convId + "/messages");
-    if (!Array.isArray(S.messages)) S.messages = S.messages.messages || [];
+    var msgs = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions/" + convId + "/messages");
+    if (!Array.isArray(msgs)) msgs = msgs.messages || [];
+    store.setMessages(S.serverInfo.workspace_id, msgs);
     renderMessages();
 
     // 更新上下文用量（服务端重启后 context_tokens 不持久化会归 0，回退为本地估算）
     if (S.currentConv.context_tokens) {
-      S.contextUsage.used = S.currentConv.context_tokens;
-      S.contextUsage.estimated = false;
+      store.setContextUsage(S.serverInfo.workspace_id, S.currentConv.context_tokens, S.contextUsage.max, false);
     } else {
-      S.contextUsage.used = estimateContextTokens(S.messages);
-      S.contextUsage.estimated = true;
+      store.setContextUsage(S.serverInfo.workspace_id, estimateContextTokens(S.messages), S.contextUsage.max, true);
     }
     updateContextUsage();
 
@@ -271,12 +278,11 @@ export async function newConversation() {
     resetPermissionState();
     exitManualScrollMode();
     clearErrorNotices();
-    S.currentConvId = resp.id;
+    store.setCurrentConvId(S.serverInfo.workspace_id, resp.id);
     syncWxFollowSession();
-    S.messages = [];
-    S.currentConv = resp;
-    S.contextUsage.used = 0;
-    S.contextUsage.estimated = false;
+    store.setMessages(S.serverInfo.workspace_id, []);
+    store.setCurrentConv(S.serverInfo.workspace_id, resp);
+    store.setContextUsage(S.serverInfo.workspace_id, 0, S.contextUsage.max, false);
     await loadConversations();
     renderMessages();
     renderTodos([]);
@@ -296,7 +302,7 @@ export async function refreshMessages() {
   try {
     var msgs = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions/" + S.currentConvId + "/messages");
     if (!Array.isArray(msgs)) msgs = msgs.messages || [];
-    S.messages = msgs;
+    store.setMessages(S.serverInfo.workspace_id, msgs);
     renderMessages();
   } catch (_) {}
 }

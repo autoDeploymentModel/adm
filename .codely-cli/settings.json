@@ -4,21 +4,5 @@
       "httpUrl": "https://ai-generator.tuanjie.cn/mcp"
     }
   },
-  "model": "deepseek-v4-flash",
-  "contentGenerator": {
-    "overrides": {
-      "model": {
-        "authType": "openai"
-      },
-      "flashModel": {
-        "authType": "codely-oauth"
-      },
-      "multimodalModel": {
-        "authType": "codely-oauth"
-      }
-    }
-  },
-  "selectedAuthType": "openai",
-  "flashModel": "codely-flash",
-  "multimodalModel": "codely-vl"
+  "model": "codely-core"
 }

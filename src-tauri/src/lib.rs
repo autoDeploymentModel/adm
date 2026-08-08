@@ -204,7 +204,6 @@ pub fn run() {
             agent::get_agent_server_status,
             agent::agent_http_request,
             agent::agent_subscribe_events,
-            agent::agent_unsubscribe_events,
             agent::create_workspace,
             agent::switch_workspace,
             agent::agent_debug_log,

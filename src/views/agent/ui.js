@@ -1,6 +1,6 @@
 // 通用 UI：状态栏 / 上下文用量 / 错误与确认弹窗 / 滚动模式 / 安全超时 / 右键菜单
 import { t as _t } from "../../i18n.js";
-import { S } from "./store.js";
+import { S, store } from "./store.js";
 import { api } from "./api.js";
 import { formatTokens, isMsgAreaAtBottom } from "./utils.js";
 import { getErrorMessage, classifyError, ERROR_QUOTA } from "./error.js";
@@ -52,9 +52,7 @@ export function startSendSafetyTimer() {
     } catch (_) {}
     if (!S.isSending || S.activeRun !== activeRun) return; // 查询期间可能已正常收尾或开始下一轮
     console.warn("[agent] isSending 安全超时 (3min) 且运行会话已不在执行，自动重置");
-    S.isSending = false;
-    S.activeRun = null;
-    S.queuedRun = null;
+    store.cancelRun(store.activeWsId);
     updateSendButton();
     updateStatusBar("ready", null, S.contextUsage.used);
     showError(_t("运行超时，已自动重置状态"));
