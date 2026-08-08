@@ -53,6 +53,19 @@ export async function setupSSEListener() {
       var prevRunStats = S.runStats;
       store.handleSSEEvent(eventWsId, payload);
 
+      // 后台 workspace 运行出错时通知用户（active workspace 的错误由下方 handleSSEEvent 处理）
+      if (eventWsId !== S.activeWsId) {
+        var bgRaw = payload.data || payload;
+        var bgType = bgRaw.type || payload.type || "";
+        if (bgType === "run_complete") {
+          var bgInner = (bgRaw.payload || {}).payload || bgRaw.payload || {};
+          if (bgInner.error) {
+            // 与 active workspace 的错误处理一致：走 reportError 获得 quota 分类与空消息防护
+            reportError(bgInner.error, { prefix: _t("后台工作区运行出错: ") });
+          }
+        }
+      }
+
       // 当前 tab 的事件继续走原有 UI 处理逻辑
       if (eventWsId === S.activeWsId) {
         handleSSEEvent(payload, { prevActiveRun: prevActiveRun, prevQueuedRun: prevQueuedRun, prevRunStats: prevRunStats });
@@ -257,24 +270,25 @@ function handleMessageSSEEvent(action, msgData) {
   // 统计本轮工具调用（增量按消息 id + parts 数去重），供假完成检测与续跑进度判定使用
   if (action !== "deleted") collectRunStats(msgData);
   if (action === "created") {
+    // 用户消息：先按内容匹配并清理临时消息（无论正式消息是否已被 store 追加）。
+    // store.handleSSEEvent 先于本 handler 执行 appendMessage，正式消息可能已在列表中，
+    // 若在 existing 检查之后才清理临时消息，会因 existing 命中而跳过 → 临时+正式并存（短暂重复）。
+    // 注意不能用 updateMessage 替换：它按 msgData.id 查找（临时消息 id 是 temp-user-xxx），
+    // 找不到会走 else push，临时消息依然残留。
+    if (msgData.role === "user") {
+      // 服务端用户消息附带 <system_info> 附件引导块，与临时消息（纯正文）匹配前先剥离
+      var serverText = (msgData.content || getTextFromParts(msgData.parts)) || "";
+      var tempIdx = S.messages.findIndex(function(m) { return m._temp && m.role === "user" && m.content === stripSystemInfoText(serverText); });
+      if (tempIdx >= 0) {
+        store.deleteMessage(store.activeWsId, S.messages[tempIdx].id);
+      }
+    }
     // 新消息创建 → 追加到消息列表（按 ID 去重）
     var existing = S.messages.find(function(m) { return m.id === msgData.id; });
     if (!existing) {
-      // 对于用户消息，尝试按内容匹配临时消息并替换（避免重复）
-      if (msgData.role === "user") {
-        // 服务端用户消息附带 <system_info> 附件引导块，与临时消息（纯正文）匹配前先剥离
-        var serverText = (msgData.content || getTextFromParts(msgData.parts)) || "";
-        var tempIdx = S.messages.findIndex(function(m) { return m._temp && m.role === "user" && m.content === stripSystemInfoText(serverText); });
-        if (tempIdx >= 0) {
-          // 用正式消息替换临时消息
-          store.updateMessage(store.activeWsId, msgData);
-          renderMessages();
-          return;
-        }
-      }
       store.appendMessage(store.activeWsId, msgData);
-      renderMessages();
     }
+    renderMessages();
   } else if (action === "updated") {
     // 消息更新 → 找到对应消息并替换
     var idx = S.messages.findIndex(function(m) { return m.id === msgData.id; });

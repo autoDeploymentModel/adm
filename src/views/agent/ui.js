@@ -333,7 +333,12 @@ export function showConfirm(message, onOk) {
     close();
     onOk();
   });
-  overlay.addEventListener("click", function(e) { if (e.target === overlay) close(); });
+  // 弹窗内的点击不冒泡到 document，避免触发背后页面"点击外部关闭"的监听
+  // （如下拉列表：用户点"取消"时不应连带关闭下拉）
+  overlay.addEventListener("click", function(e) {
+    e.stopPropagation();
+    if (e.target === overlay) close();
+  });
   // 挂到视图根节点下，随视图 unmount 一起销毁
   (document.querySelector(".agent-root") || document.body).appendChild(overlay);
 }
