@@ -2,7 +2,7 @@
 // 数据源：admAgent 自动维护的 workspace/project_memory.json（约束/决策 anchors，
 // 随上下文压缩自动同步）。本模块负责读取并渲染为默认折叠的展示块。
 import { t as _t } from "../../i18n.js";
-import { S, invoke } from "./state.js";
+import { S, invoke } from "./store.js";
 import { escapeHtml } from "./utils.js";
 
 // Anchor JSON: { kind: "constraint"|"decision", key, value, why?, salience?, updated_at? }

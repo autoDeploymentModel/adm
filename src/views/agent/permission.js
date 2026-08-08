@@ -2,7 +2,7 @@
 // 审批弹窗已移除：执行模式 = YOLO 直通（服务端 skip=true，不产生权限请求）；
 // Plan 模式 = 服务端只挂载只读工具（/agent/mode plan=true），模型无法修改和写入。
 import { t as _t } from "../../i18n.js";
-import { S } from "./state.js";
+import { S } from "./store.js";
 import { api } from "./api.js";
 import { reportError } from "./ui.js";
 

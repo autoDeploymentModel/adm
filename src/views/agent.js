@@ -3,7 +3,8 @@
 
 import { t as _t } from "../i18n.js";
 import { template } from "./agent/template.js";
-import { S, invoke, listen } from "./agent/state.js";
+import { S, invoke, listen, store } from "./agent/store.js";
+import { setLogEnabled } from "./agent/log.js";
 import { api } from "./agent/api.js";
 import { generateUUID, isMsgAreaAtBottom, autoResize, $input, normalizeReasoningEffort } from "./agent/utils.js";
 import { updateStatusBar, updateContextUsage, updateModeToggle, updateSendButton, exitManualScrollMode, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showConfirm, showCopyPasteMenu, updateScrollBottomBtn, reportError } from "./agent/ui.js";
@@ -14,7 +15,7 @@ import { setupSSEListener } from "./agent/sse.js";
 import { syncModeToServer } from "./agent/permission.js";
 import { loadTools, renderToolsList } from "./agent/tools.js";
 import { switchModel, refreshServerProviders, resolveAgentModel, updateModelDropdown, updateModelBtn } from "./agent/model.js";
-import { enableAutoCompact, updateWorkspaceSelector } from "./agent/workspace.js";
+import { enableAutoCompact, updateWorkspaceSelector, toggleWorkDirDropdown, closeWorkDirDropdown, validateWorkDirs } from "./agent/workspace.js";
 import { showSettings, hideSettings, updateSettingsUI, saveSettings, showAddModelDialog, hideAddModelDialog, addModel, initProjectMemoryUI, renderVisionModelSelect } from "./agent/settings_dialog.js";
 import { addPendingFiles, parseUriListPaths, addPastedPaths, looksLikeFilePath } from "./agent/attach.js";
 import { setAutoContinueEnabled } from "./agent/autocontinue.js";
@@ -32,6 +33,9 @@ async function init() {
   } catch (_) {
     S.settings = {};
   }
+
+  // 根据 debug_logging 初始值设置前端日志级别
+  setLogEnabled(!!S.settings.debug_logging);
 
   // 更新状态栏
   updateStatusBar("ready", null, 0);
@@ -58,7 +62,7 @@ async function init() {
     } else {
       // 启动 server
       try {
-        S.serverInfo = await invoke("start_agent_server");
+        S.serverInfo = await invoke("start_agent_server", { clientId: S.clientId });
       console.log("[agent] Agent 服务已启动, host:", S.serverInfo?.host);
       } catch (e) {
         console.error("[agent] 启动 Agent 服务失败:", e);
@@ -73,6 +77,9 @@ async function init() {
     return;
   }
   if (seq !== S.initSeq) return; // 页面已切走/重新挂载，终止过期 init
+
+  // 验证工作目录列表（移除不存在的路径）
+  await validateWorkDirs();
 
   // 加载工作区信息 (获取或创建工作区)
   try {
@@ -100,6 +107,14 @@ async function init() {
         // 更新 serverInfo 的 workspace_id
         if (S.workspaceInfo && S.workspaceInfo.id) {
           S.serverInfo.workspace_id = S.workspaceInfo.id;
+          // 设置 activeWsId：init 时首个 workspace 就是激活的，
+          // 后续切换时 switchToWorkspace 才能正确保存旧 workspace 状态
+          S.activeWsId = S.workspaceInfo.id;
+          // 必须用 setActive 而非 registerWorkspace：setActive 会设置
+          // store.activeWsId 并把 S 绑定到该 workspace。否则 store.activeWsId
+          // 保持 null —— Proxy 自动同步失效、startRun/completeRun 的 bindToS
+          // 不执行、首次切换时旧 workspace 状态不会被保存（切回即丢失）。
+          store.setActive(S.workspaceInfo.id);
         }
       } catch (_) {
         S.workspaceInfo = { path: workdir, name: workdir.split(/[\\/]/).pop() };
@@ -203,7 +218,7 @@ async function init() {
   // 重新挂载后必须以服务端 is_busy 为准校准，否则「正在思考」永远卡住
   await reconcileSendingState();
 
-  // 工作区选择器为纯展示，不支持点击切换（切换工作目录请去设置弹窗）
+  // 工作区选择器点击切换已绑定到 bindEvents 中（下拉列表）
 
   // 检查项目初始化引导
   checkProjectInit();
@@ -341,21 +356,19 @@ function bindEvents() {
   // 项目记忆折叠块交互（默认折叠）
   initProjectMemoryUI();
 
+  // 工作区选择器点击 → 下拉列表
+  var wsSelector = document.getElementById("agent-workspace-selector");
+  if (wsSelector) {
+    wsSelector.style.cursor = "pointer";
+    wsSelector.addEventListener("click", function(e) {
+      e.stopPropagation();
+      toggleWorkDirDropdown();
+    });
+  }
+
   // 设置项即时生效：任一字段变更立即应用并持久化（无保存/取消按钮）
   ["settings-plan", "settings-auto-continue", "settings-debug-logging", "settings-reasoning-effort", "settings-temperature", "settings-vision-model"].forEach(function(id) {
     $input(id).addEventListener("change", applySettings);
-  });
-
-  // 浏览工作目录（选完目录后自动关闭设置弹窗）
-  document.getElementById("settings-browse-btn").addEventListener("click", async function() {
-    try {
-      var dir = await invoke("pick_workdir_folder");
-      if (dir) {
-        $input("settings-workdir").value = dir;
-        await applySettings();
-        hideSettings();
-      }
-    } catch (_) {}
   });
 
   // 打开调试日志目录（在系统文件管理器中定位 adm_api_debug.log）
@@ -365,11 +378,6 @@ function bindEvents() {
     } catch (e) {
       reportError(e, { prefix: _t("打开日志目录失败: ") });
     }
-  });
-
-  // 工作目录输入框变更时自动保存
-  $input("settings-workdir").addEventListener("change", async function() {
-    if ($input("settings-workdir").value.trim()) await applySettings();
   });
 
   // 从所有设置弹窗字段读取并保存（即时生效，弹窗保持打开）
@@ -387,6 +395,7 @@ function bindEvents() {
     try {
       await invoke("set_debug_logging", { enabled: debugLogging });
       S.settings.debug_logging = debugLogging;
+      setLogEnabled(debugLogging);
     } catch (e) {
       console.warn("[agent] 切换调试日志失败:", e);
       S.settings.debug_logging = false;
@@ -713,6 +722,8 @@ export default {
     // 使在途 init() 失效，防止切走后旧 init 继续执行、或与下次 mount 的新 init 并发互踩
     S.initSeq++;
     S.pendingFiles = [];
+    // 关闭工作目录下拉（清理 DOM 和文档级监听器）
+    closeWorkDirDropdown();
     // 重置手动滚动模式
     exitManualScrollMode();
     clearSendSafetyTimer();

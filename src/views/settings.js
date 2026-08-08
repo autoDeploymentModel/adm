@@ -679,16 +679,10 @@ async function saveParams() {
   const params = getParamsFromForm();
   console.log("[settings] 保存参数:", JSON.stringify(params).substring(0, 200));
   try {
-    // 加载当前设置以保留其他字段（如 agent_workdir / language）
-    let current = {};
-    try { current = await invoke()("load_settings"); } catch (_) {}
-    const settings = {
-      launch_params: params,
-      agent_workdir: current.agent_workdir || current.agentWorkdir || "",
-      // 保留原值（可为空 = 跟随系统语言检测）；用户显式切换时由语言选择器写入
-      language: current.language || "",
-    };
-    await invoke()("save_settings", { settings: settings });
+    // 加载完整设置，仅替换 launch_params，保留 agent_workdirs 等所有其他字段
+    let s = await invoke()("load_settings");
+    s.launch_params = params;
+    await invoke()("save_settings", { settings: s });
     console.log("[settings] 保存成功");
     showToast(_t("设置已保存，重启模型后生效"));
   } catch (e) {

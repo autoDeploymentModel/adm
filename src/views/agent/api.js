@@ -1,6 +1,5 @@
 // admAgent HTTP API 客户端
-import { t as _t } from "../../i18n.js";
-import { invoke } from "./state.js";
+import { invoke } from "./store.js";
 
 // ===== API 客户端 =====
 export async function api(method, path, body) {
@@ -12,20 +11,4 @@ export async function api(method, path, body) {
     console.error("[agent] API 失败:", method, path, "→", e);
     throw e;
   }
-}
-
-// 等待 server 就绪 (轮询 health)
-export async function waitForServerReady() {
-  var retries = 0;
-  var maxRetries = 30; // 最多等待 30 次，每次 500ms = 15 秒
-  while (retries < maxRetries) {
-    try {
-      await api("GET", "/v1/health");
-      return; // server 就绪
-    } catch (_) {
-      retries++;
-      await new Promise(function(resolve) { setTimeout(resolve, 500); });
-    }
-  }
-  throw new Error(_t("等待 server 超时"));
 }

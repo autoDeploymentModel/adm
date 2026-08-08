@@ -114,10 +114,22 @@ pub struct RemoteModel {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct WorkDirEntry {
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub is_default: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Settings {
 pub launch_params: LaunchParams,
+/// 已弃用：单个工作目录（迁移到 agent_workdirs 后仅用于向后兼容读取）
 #[serde(default)]
 pub agent_workdir: String,
+/// 工作目录列表（数组模式），is_default=true 的为当前默认目录
+#[serde(default)]
+pub agent_workdirs: Vec<WorkDirEntry>,
 /// Agent Plan 模式：只读调研并产出计划，不修改任何文件（false = 执行模式直通）
 #[serde(default)]
 pub agent_plan_mode: bool,
@@ -147,6 +159,7 @@ fn default() -> Self {
 Self {
 launch_params: LaunchParams::default(),
 agent_workdir: String::new(),
+agent_workdirs: Vec::new(),
 agent_plan_mode: false,
 agent_default_provider: String::new(),
 agent_reasoning_effort: String::new(),

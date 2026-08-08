@@ -3,7 +3,7 @@
 use crate::app_state::{AppState, AgentServerSession};
 use crate::common::agent_http::{self, AgentTransport, build_client, health_check};
 use crate::common::config;
-use crate::common::types::Settings;
+use crate::common::types::{Settings, WorkDirEntry};
 use crate::common::utils::platform;
 use crate::common::error::AppError;
 use crate::bail;
@@ -422,19 +422,10 @@ pub fn sync_local_model_capabilities(app: tauri::AppHandle) {
         }
         let ws = {
             let state = app.state::<AppState>();
-            let mut guard = match state.agent_session.lock() {
-                Ok(g) => g,
-                Err(_) => return,
-            };
-            match guard.as_mut() {
-                Some(s) => {
-                    if session_usable(s) {
-                        s.workspace_id.clone()
-                    } else {
-                        return; // 进程已退出：下次启动会读新配置
-                    }
-                }
-                _ => return, // server 未运行：启动时会读新配置，无需热同步
+            let active = state.active_workspace_id.lock().map(|g| g.clone()).unwrap_or(None);
+            match active {
+                Some(ws_id) if !ws_id.is_empty() => ws_id,
+                _ => return, // 无激活 workspace
             }
         };
         let client = match build_client(&AgentTransport::default_host(), Duration::from_secs(3)) {
@@ -500,19 +491,10 @@ pub fn sync_agent_vision_model(app: &tauri::AppHandle, value: &str) {
         }
         let ws = {
             let state = app.state::<AppState>();
-            let mut guard = match state.agent_session.lock() {
-                Ok(g) => g,
-                Err(_) => return,
-            };
-            match guard.as_mut() {
-                Some(s) => {
-                    if session_usable(s) {
-                        s.workspace_id.clone()
-                    } else {
-                        return; // 进程已退出：下次启动会读新配置
-                    }
-                }
-                _ => return, // server 未运行：启动时会读新配置，无需热同步
+            let active = state.active_workspace_id.lock().map(|g| g.clone()).unwrap_or(None);
+            match active {
+                Some(ws_id) if !ws_id.is_empty() => ws_id,
+                _ => return, // 无激活 workspace
             }
         };
         let client = match build_client(&AgentTransport::default_host(), Duration::from_secs(3)) {
@@ -1010,6 +992,142 @@ pub async fn set_agent_workdir(app: tauri::AppHandle, workdir: String) -> Result
     save_agent_workdir(&app, workdir.trim())
 }
 
+/// 读取工作目录列表，并在首次加载时从旧 agent_workdir 迁移
+fn load_workdirs(app: &tauri::AppHandle) -> Vec<WorkDirEntry> {
+    let data_dir = match config::get_data_dir(Some(app)) {
+        Ok(d) => d,
+        Err(_) => return Vec::new(),
+    };
+    let config_path = data_dir.join("config.json");
+    let json = match std::fs::read_to_string(&config_path) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let settings = match serde_json::from_str::<Settings>(&json) {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+
+    // Migration: if agent_workdirs is empty but agent_workdir is set,
+    // migrate the single workdir into the array.
+    if settings.agent_workdirs.is_empty() && !settings.agent_workdir.is_empty() {
+        let migrated = vec![WorkDirEntry {
+            path: settings.agent_workdir.clone(),
+            is_default: true,
+        }];
+        // Persist the migrated state.
+        let _ = save_workdirs_internal(app, &migrated);
+        return migrated;
+    }
+
+    settings.agent_workdirs
+}
+
+/// Write workdirs to config.json (read-modify-write to preserve other fields)
+fn save_workdirs_internal(app: &tauri::AppHandle, dirs: &[WorkDirEntry]) -> Result<(), AppError> {
+    let data_dir = config::get_data_dir(Some(app))?;
+    let config_path = data_dir.join("config.json");
+
+    let mut settings = if config_path.exists() {
+        let json = std::fs::read_to_string(&config_path)
+            .map_err(|e| format!("读取配置文件失败: {}", e))?;
+        serde_json::from_str::<Settings>(&json)
+            .map_err(|e| format!("解析配置文件失败: {}", e))?
+    } else {
+        Settings::default()
+    };
+
+    settings.agent_workdirs = dirs.to_vec();
+    // Sync the legacy agent_workdir to the default entry for backward compat.
+    let default_path = dirs.iter()
+        .find(|d| d.is_default)
+        .or_else(|| dirs.first())
+        .map(|d| d.path.clone())
+        .unwrap_or_default();
+    settings.agent_workdir = default_path;
+
+    let json = serde_json::to_string_pretty(&settings)
+        .map_err(|e| format!("序列化配置失败: {}", e))?;
+    std::fs::write(&config_path, &json).map_err(|e| format!("写入配置文件失败: {}", e))?;
+    Ok(())
+}
+
+/// 获取工作目录列表（含迁移逻辑）
+#[tauri::command]
+pub async fn get_workdirs(app: tauri::AppHandle) -> Result<Vec<WorkDirEntry>, AppError> {
+    Ok(load_workdirs(&app))
+}
+
+/// 添加工作目录（去重），若列表为空则设为默认
+#[tauri::command]
+pub async fn add_workdir(app: tauri::AppHandle, path: String) -> Result<Vec<WorkDirEntry>, AppError> {
+    let mut dirs = load_workdirs(&app);
+    let path = path.trim().to_string();
+    if dirs.iter().any(|d| d.path == path) {
+        return Ok(dirs); // Already exists
+    }
+    let is_first = dirs.is_empty();
+    dirs.push(WorkDirEntry { path, is_default: is_first });
+    save_workdirs_internal(&app, &dirs)?;
+    Ok(dirs)
+}
+
+/// 移除工作目录；若移除的是默认项则将剩余第一项设为默认
+#[tauri::command]
+pub async fn remove_workdir(app: tauri::AppHandle, path: String) -> Result<Vec<WorkDirEntry>, AppError> {
+    let mut dirs = load_workdirs(&app);
+    let path = path.trim().to_string();
+    let removed_default = dirs.iter().find(|d| d.path == path).map(|d| d.is_default).unwrap_or(false);
+    dirs.retain(|d| d.path != path);
+    if removed_default && !dirs.is_empty() {
+        dirs[0].is_default = true;
+    }
+    save_workdirs_internal(&app, &dirs)?;
+    Ok(dirs)
+}
+
+/// 设置默认工作目录
+#[tauri::command]
+pub async fn set_default_workdir(app: tauri::AppHandle, path: String) -> Result<Vec<WorkDirEntry>, AppError> {
+    let mut dirs = load_workdirs(&app);
+    let path = path.trim().to_string();
+    for d in &mut dirs {
+        d.is_default = d.path == path;
+    }
+    // Also sync legacy agent_workdir
+    save_workdirs_internal(&app, &dirs)?;
+    Ok(dirs)
+}
+
+/// 验证工作目录列表：检查每个路径是否存在，删除不存在的并返回被删除的路径
+#[tauri::command]
+pub async fn validate_workdirs(app: tauri::AppHandle) -> Result<Vec<String>, AppError> {
+    let mut dirs = load_workdirs(&app);
+    let mut removed = Vec::new();
+    let mut removed_default = false;
+
+    dirs.retain(|d| {
+        let exists = std::path::Path::new(&d.path).is_dir();
+        if !exists {
+            removed.push(d.path.clone());
+            if d.is_default {
+                removed_default = true;
+            }
+        }
+        exists
+    });
+
+    if removed_default && !dirs.is_empty() {
+        dirs[0].is_default = true;
+    }
+
+    if !removed.is_empty() {
+        save_workdirs_internal(&app, &dirs)?;
+    }
+
+    Ok(removed)
+}
+
 // ===== admAgent Server 模式 =====
 
 /// admAgent server 启动信息
@@ -1030,55 +1148,47 @@ pub struct AgentServerStatus {
 }
 
 /// 会话可用判定：会话存在，且（共享 server 无子进程 或 自有子进程存活）
-fn session_usable(sess: &mut AgentServerSession) -> bool {
-    match sess.child.as_mut() {
-        Some(c) => matches!(c.try_wait(), Ok(None)),
-        None => true,
+/// 检查全局 admAgent server 子进程是否存活（已 pull 起子进程时）。
+/// 复用共享 server（无子进程）时返回 true（外部管理，假定存活）。
+fn server_process_alive(state: &AppState) -> bool {
+    let mut c = match state.agent_child.lock() { Ok(g) => g, Err(_) => return false };
+    match c.as_mut() {
+        Some(child) => matches!(child.try_wait(), Ok(None)),
+        None => true, // 共享 server，无子进程，假定存活
     }
 }
 
-/// 供 ilink 桥读取当前 admAgent server 会话的工作区 ID（会话可用才算就绪）。
-/// 传输地址固定为平台默认（Unix socket / Windows named pipe），无需再传。
+/// 供 ilink 桥读取当前激活的 workspace ID。
 pub fn current_agent_workspace(app: &tauri::AppHandle) -> Option<String> {
     let state = app.state::<AppState>();
-    let mut s = state.agent_session.lock().ok()?;
-    match s.as_mut() {
-        Some(sess) => {
-            if session_usable(sess) && !sess.workspace_id.is_empty() {
-                Some(sess.workspace_id.clone())
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
+    state.active_workspace_id.lock().ok().and_then(|g| g.clone())
 }
 
-/// 内部函数：停止 admAgent server 并清理会话
+/// 内部函数：停止 admAgent server，清理所有 workspace 会话和子进程
 fn stop_agent_server_internal(state: &tauri::State<'_, AppState>) -> Result<(), AppError> {
-    let old = {
-        let mut s = state
-            .agent_session
-            .lock()
-            .map_err(|e| e.to_string())?;
-        s.take()
-    };
-    if let Some(mut sess) = old {
-        sess.sse_stop.store(true, Ordering::Relaxed);
-        // 只终止本进程拉起的子进程；复用的共享 server 不杀（其它客户端/实例还在用），
-        // 由服务端在最后一个工作区被 teardown 时自行退出。
-        if let Some(child) = sess.child.as_mut() {
-            #[cfg(target_os = "windows")]
-            {
-                if let Some(pid) = child.id() {
-                    let pid_str = pid.to_string();
-                    let _ = platform::create_hidden_command("taskkill")
-                        .args(["/PID", &pid_str, "/T", "/F"])
-                        .spawn();
-                }
-            }
-            let _ = child.start_kill();
+    // 停止所有 workspace 的 SSE 转发任务
+    {
+        let mut sessions = state.agent_sessions.lock().map_err(|e| e.to_string())?;
+        for (_, sess) in sessions.iter() {
+            sess.sse_stop.store(true, Ordering::Relaxed);
+            if let Some(task) = &sess.sse_task { task.abort(); }
         }
+        sessions.clear();
+    }
+    *state.active_workspace_id.lock().map_err(|e| e.to_string())? = None;
+    // 终止子进程（只杀本进程拉起的，共享 server 不杀）
+    let old_child = state.agent_child.lock().map_err(|e| e.to_string())?.take();
+    if let Some(mut child) = old_child {
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(pid) = child.id() {
+                let pid_str = pid.to_string();
+                let _ = platform::create_hidden_command("taskkill")
+                    .args(["/PID", &pid_str, "/T", "/F"])
+                    .spawn();
+            }
+        }
+        let _ = child.start_kill();
     }
     Ok(())
 }
@@ -1092,18 +1202,26 @@ fn stop_agent_server_internal(state: &tauri::State<'_, AppState>) -> Result<(), 
 pub async fn start_agent_server(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
+    client_id: String,
 ) -> Result<AgentServerInfo, AppError> {
     // 覆盖完整异步启动流程的单飞锁。第二个并发调用必须等待第一个完成，
     // 随后直接复用已启动的会话，不能再次 stop + spawn 产生孤儿进程。
     let _start_guard = state.agent_start_lock.lock().await;
+    // 检查是否已有运行中的 workspace 会话（server 进程存活）。有则直接复用，
+    // 不再重复 spawn 或 stop。
     {
-        let mut session = state.agent_session.lock().map_err(|e| e.to_string())?;
-        if let Some(existing) = session.as_mut() {
-            if session_usable(existing) {
+        let active = state.active_workspace_id.lock().map(|g| g.clone()).unwrap_or(None);
+        if let Some(ws_id) = active {
+            let has_session = state.agent_sessions.lock()
+                .map(|m| m.contains_key(&ws_id))
+                .unwrap_or(false);
+            if has_session && server_process_alive(&state) {
+                let client_id = state.agent_sessions.lock().unwrap_or_else(|e| e.into_inner())
+                    .get(&ws_id).map(|s| s.client_id.clone()).unwrap_or_default();
                 return Ok(AgentServerInfo {
                     host: AgentTransport::default_host().display(),
-                    workspace_id: existing.workspace_id.clone(),
-                    client_id: existing.client_id.clone(),
+                    workspace_id: ws_id,
+                    client_id,
                 });
             }
         }
@@ -1248,14 +1366,22 @@ pub async fn start_agent_server(
         }
     }
 
-    let client_id = format!(
-        "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
-        rand::random::<u32>(),
-        rand::random::<u16>(),
-        rand::random::<u16>(),
-        rand::random::<u16>(),
-        rand::random::<u64>() & 0xFFFFFFFFFFFF
-    );
+    // 使用前端传入的 client_id，确保 SSE 流、POST /v1/workspaces、
+    // current-session 全用同一个 client_id（Go 服务端要求 current-session
+    // 的 client_id 已挂活跃 SSE 流，否则返回 404 client not attached）。
+    let client_id = if client_id.is_empty() {
+        // 兜底：前端未传时本地生成（不应发生，但避免空字符串导致服务端校验失败）
+        format!(
+            "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+            rand::random::<u32>(),
+            rand::random::<u16>(),
+            rand::random::<u16>(),
+            rand::random::<u16>(),
+            rand::random::<u64>() & 0xFFFFFFFFFFFF
+        )
+    } else {
+        client_id
+    };
 
     let workspace_id = {
         let client = build_client(&transport, Duration::from_secs(5))
@@ -1303,16 +1429,25 @@ pub async fn start_agent_server(
         let _ = forward_sse_events(&app2, &t2, &ws_id, &cid, sse_stop2).await;
     });
 
+    // 全局子进程只存一次（共享 server）
     {
-        let mut s = state.agent_session.lock().map_err(|e| e.to_string())?;
-        *s = Some(AgentServerSession {
-            child,
+        let mut c = state.agent_child.lock().map_err(|e| e.to_string())?;
+        if c.is_none() {
+            *c = child;
+        }
+    }
+    // 注册 workspace 会话
+    {
+        let mut sessions = state.agent_sessions.lock().map_err(|e| e.to_string())?;
+        sessions.insert(workspace_id.clone(), AgentServerSession {
             sse_stop: sse_stop.clone(),
             sse_task: Some(sse_task),
             workspace_id: workspace_id.clone(),
             client_id: client_id.clone(),
         });
     }
+    // 设为激活 workspace
+    *state.active_workspace_id.lock().map_err(|e| e.to_string())? = Some(workspace_id.clone());
 
     let host = transport.display();
     app.emit("agent-server-ready",
@@ -1381,7 +1516,7 @@ async fn forward_sse_events(
                         .unwrap_or(serde_json::json!({ "raw": event_data }));
                     // 只写关键事件；流式增量/快照等噪音返回 None 不落盘。
                     api_debug_log(|| summarize_sse_event(&payload).unwrap_or_default());
-                    let _ = app.emit("agent-sse-event", serde_json::json!({ "type": event_type, "data": payload }));
+                    let _ = app.emit("agent-sse-event", serde_json::json!({ "type": event_type, "data": payload, "workspace_id": workspace_id }));
                 }
             }
         }
@@ -1400,13 +1535,10 @@ async fn forward_sse_events(
 /// start_agent_server 会先探活，真死才重新拉起，活着的共享 server 不受影响。
 fn agent_process_exited(app: &tauri::AppHandle) -> bool {
     let state = app.state::<AppState>();
-    let mut s = match state.agent_session.lock() { Ok(g) => g, Err(_) => return false };
-    match s.as_mut() {
-        Some(sess) => match sess.child.as_mut() {
-            Some(c) => matches!(c.try_wait(), Ok(Some(_))),
-            None => true,
-        },
-        None => false,
+    let mut c = match state.agent_child.lock() { Ok(g) => g, Err(_) => return false };
+    match c.as_mut() {
+        Some(child) => matches!(child.try_wait(), Ok(Some(_))),
+        None => false, // 共享 server 无子进程，不判定为退出
     }
 }
 
@@ -1563,34 +1695,21 @@ pub async fn stop_agent_server(state: tauri::State<'_, AppState>) -> Result<(), 
 
 #[tauri::command]
 pub async fn get_agent_server_status(state: tauri::State<'_, AppState>) -> Result<AgentServerStatus, AppError> {
-    let mut s = state.agent_session.lock().map_err(|e| e.to_string())?;
-    match s.as_mut() {
-        Some(sess) => {
-            let running = session_usable(sess);
-            Ok(AgentServerStatus {
-                running,
-                host: Some(AgentTransport::default_host().display()),
-                workspace_id: Some(sess.workspace_id.clone()),
-            })
-        }
-        None => Ok(AgentServerStatus { running: false, host: None, workspace_id: None }),
-    }
+    let active = state.active_workspace_id.lock().map(|g| g.clone()).unwrap_or(None);
+    let running = server_process_alive(&state) && active.is_some();
+    Ok(AgentServerStatus {
+        running,
+        host: Some(AgentTransport::default_host().display()),
+        workspace_id: active,
+    })
 }
 
 #[tauri::command]
 pub async fn agent_http_request(
     state: tauri::State<'_, AppState>, method: String, path: String, body: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, AppError> {
-    {
-        let mut s = state.agent_session.lock().map_err(|e| e.to_string())?;
-        match s.as_mut() {
-            Some(sess) => {
-                if !session_usable(sess) {
-                    bail!("admAgent server 未运行");
-                }
-            }
-            None => bail!("admAgent server 未运行"),
-        }
+    if !server_process_alive(&state) {
+        bail!("admAgent server 未运行");
     }
     let started = std::time::Instant::now();
     // 只读 GET 多为高频轮询（每轮 run 后刷 /agent /sessions /messages），是主噪音：
@@ -1659,16 +1778,8 @@ pub async fn read_project_memory(
     state: tauri::State<'_, AppState>,
     workspace_id: String,
 ) -> Result<serde_json::Value, AppError> {
-    {
-        let mut s = state.agent_session.lock().map_err(|e| e.to_string())?;
-        match s.as_mut() {
-            Some(sess) => {
-                if !session_usable(sess) {
-                    bail!("admAgent server 未运行");
-                }
-            }
-            None => bail!("admAgent server 未运行"),
-        }
+    if !server_process_alive(&state) {
+        bail!("admAgent server 未运行");
     }
 
     // GET /v1/workspaces/{id} → { id, path, data_dir, ... }
@@ -1708,28 +1819,25 @@ pub async fn agent_subscribe_events(
     workspace_id: String,
     client_id: String,
 ) -> Result<(), AppError> {
-    let mut s = state.agent_session.lock().map_err(|e| e.to_string())?;
-    let sess = s.as_mut().ok_or("Agent server 未运行")?;
+    let mut sessions = state.agent_sessions.lock().map_err(|e| e.to_string())?;
+    let sess = sessions.get_mut(&workspace_id).ok_or("workspace session not found")?;
 
-    // 停止旧的 SSE 转发任务（设标志，旧任务在下一个 chunk 到达时退出）
-    sess.sse_stop.store(true, Ordering::Relaxed);
-    let old_task = sess.sse_task.take();
-    // 仅在切换到不同 workspace 时 abort 强制断开旧连接：
-    // - 不 abort：空闲 workspace 没有事件，旧连接无限期挂着→被切走的 workspace
-    //   靠僵尸连接"假活"，之后连接一断服务端立即 teardown，前端再用该 id 全是 404；
-    //   此时新 workspace 由创建 hold 保活（设置弹窗先 POST 创建再切换），不受影响。
-    // - 同 workspace 重订（页面挂载/断线重连）绝不能 abort：会产生零流间隙，
-    //   服务端引用计数归零直接 teardown 当前 workspace；若它是最后一个，
-    //   整个 server 立即自杀退出（表现为"admAgent 服务异常退出"）。
-    //   让旧任务凭 stop 标志自然退出，新旧流短暂重叠由服务端 streams 计数兼容。
-    if sess.workspace_id != workspace_id {
-        if let Some(task) = old_task { task.abort(); }
+    // 同 workspace 重复订阅（页面挂载/断线重连）：若已有活 SSE 转发任务，直接复用。
+    // 绝不能 abort 活任务——abort 产生零流间隙，服务端 streams 计数归零立即
+    // teardown 该 workspace；若它是最后一个 workspace，整个 server 自杀退出
+    // （表现为 "admAgent 服务异常退出" + 反复重启循环）。
+    // forward_sse_events 自带断线自愈循环，无需重建。
+    if let Some(task) = &sess.sse_task {
+        if !task.is_finished() {
+            return Ok(());
+        }
     }
+    sess.sse_stop.store(true, Ordering::Relaxed);
+    let _ = sess.sse_task.take();
 
     // 创建新的停止标志并更新 session
     let new_sse_stop = Arc::new(AtomicBool::new(false));
     sess.sse_stop = new_sse_stop.clone();
-    sess.workspace_id = workspace_id.clone();
 
     let transport = AgentTransport::default_host();
 
@@ -1744,8 +1852,8 @@ pub async fn agent_subscribe_events(
 
 #[tauri::command]
 pub async fn agent_unsubscribe_events(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
-    let mut s = state.agent_session.lock().map_err(|e| e.to_string())?;
-    if let Some(sess) = s.as_mut() {
+    let mut sessions = state.agent_sessions.lock().map_err(|e| e.to_string())?;
+    for (_, sess) in sessions.iter_mut() {
         sess.sse_stop.store(true, Ordering::Relaxed);
         if let Some(task) = sess.sse_task.take() { task.abort(); }
     }
@@ -1753,105 +1861,148 @@ pub async fn agent_unsubscribe_events(state: tauri::State<'_, AppState>) -> Resu
 }
 
 pub fn kill_agent_session(state: &AppState) {
-    let old = if let Ok(mut s) = state.agent_session.lock() { s.take() } else { None };
-    if let Some(mut sess) = old {
-        sess.sse_stop.store(true, Ordering::Relaxed);
-        // 只终止本进程拉起的子进程；复用的共享 server 不杀（服务端在最后一个
-        // 工作区被 teardown 时自行退出，其它客户端/实例不受影响）。
-        if let Some(child) = sess.child.as_mut() {
-            #[cfg(target_os = "windows")]
-            {
-                if let Some(pid) = child.id() {
-                    let pid_str = pid.to_string();
-                    let _ = platform::create_hidden_command("taskkill").args(["/PID", &pid_str, "/T", "/F"]).spawn();
+    // 停止所有 workspace 的 SSE 任务
+    if let Ok(mut sessions) = state.agent_sessions.lock() {
+        for (_, sess) in sessions.iter() {
+            sess.sse_stop.store(true, Ordering::Relaxed);
+            if let Some(task) = &sess.sse_task { task.abort(); }
+        }
+        sessions.clear();
+    }
+    // 终止子进程
+    let old_child = state.agent_child.lock().ok().and_then(|mut g| g.take());
+    if let Some(mut child) = old_child {
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(pid) = child.id() {
+                let pid_str = pid.to_string();
+                let _ = platform::create_hidden_command("taskkill").args(["/PID", &pid_str, "/T", "/F"]).spawn();
+            }
+        }
+        let _ = child.start_kill();
+    }
+}
+
+// ===== 新增：多 workspace 管理命令 =====
+
+/// 在已运行的 admAgent server 上创建新 workspace 并启动独立 SSE 转发。
+/// 不影响已有 workspace 的运行。
+#[tauri::command]
+pub async fn create_workspace(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    path: String,
+    client_id: String,
+) -> Result<AgentServerInfo, AppError> {
+    // 持有启动锁：避免与 start_agent_server 并发时 server 尚未就绪导致连接失败
+    let _guard = state.agent_start_lock.lock().await;
+    if !server_process_alive(&state) {
+        bail!("admAgent server 未运行");
+    }
+
+    let transport = AgentTransport::default_host();
+    // 使用前端传入的 client_id（同 start_agent_server）
+    let client_id = if client_id.is_empty() {
+        format!(
+            "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+            rand::random::<u32>(),
+            rand::random::<u16>(),
+            rand::random::<u16>(),
+            rand::random::<u16>(),
+            rand::random::<u64>() & 0xFFFFFFFFFFFF
+        )
+    } else {
+        client_id
+    };
+
+    let client = build_client(&transport, Duration::from_secs(5))
+        .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+
+    let (status, bytes) = tokio::time::timeout(
+        Duration::from_secs(10),
+        agent_http::send(
+            &client,
+            "POST",
+            "/v1/workspaces",
+            Some(serde_json::json!({ "path": path, "client_id": &client_id })),
+        ),
+    )
+    .await
+    .map_err(|_| "创建工作区超时".to_string())?
+    .map_err(|e| format!("创建工作区失败: {}", e))?;
+    if !(200..300).contains(&status) {
+        bail!("创建工作区失败: HTTP {}", status);
+    }
+    let body: serde_json::Value =
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::json!({}));
+    let workspace_id = body.get("id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "default".to_string());
+
+    // 检查是否已有该 workspace 的活 SSE 转发任务。切回已存在的 path 时
+    // Go 端按 path 去重返回同一 workspace_id，若这里无条件 spawn 新任务
+    // 会产生僵尸任务：同一 workspace 多条 SSE 流 → 事件重复投递、
+    // 前端 run_complete 重复处理导致会话"卡住"。有活任务直接复用。
+    {
+        let sessions = state.agent_sessions.lock().map_err(|e| e.to_string())?;
+        if let Some(existing) = sessions.get(&workspace_id) {
+            if let Some(task) = &existing.sse_task {
+                if !task.is_finished() {
+                    // 已有活任务，直接复用（保持原有 client_id，SSE 流不变）
+                    return Ok(AgentServerInfo {
+                        host: AgentTransport::default_host().display(),
+                        workspace_id: workspace_id.clone(),
+                        client_id: existing.client_id.clone(),
+                    });
                 }
             }
-            let _ = child.start_kill();
         }
     }
+
+    // 走到这里说明该 workspace 无活 SSE 任务（首次创建或旧任务已死）：
+    // 启动该 workspace 的独立 SSE 转发
+    let sse_stop = Arc::new(AtomicBool::new(false));
+    let app2 = app.clone();
+    let ws_id = workspace_id.clone();
+    let cid = client_id.clone();
+    let sse_stop2 = sse_stop.clone();
+    let t2 = transport.clone();
+    let sse_task = tokio::spawn(async move {
+        let _ = forward_sse_events(&app2, &t2, &ws_id, &cid, sse_stop2).await;
+    });
+
+    // 注册会话
+    {
+        let mut sessions = state.agent_sessions.lock().map_err(|e| e.to_string())?;
+        sessions.insert(workspace_id.clone(), AgentServerSession {
+            sse_stop: sse_stop.clone(),
+            sse_task: Some(sse_task),
+            workspace_id: workspace_id.clone(),
+            client_id: client_id.clone(),
+        });
+    }
+
+    let host = transport.display();
+    Ok(AgentServerInfo { host, workspace_id, client_id })
+}
+
+/// 切换当前激活的 workspace（不停止旧 workspace 的 SSE）。
+#[tauri::command]
+pub async fn switch_workspace(
+    state: tauri::State<'_, AppState>,
+    workspace_id: String,
+) -> Result<(), AppError> {
+    let sessions = state.agent_sessions.lock().map_err(|e| e.to_string())?;
+    if !sessions.contains_key(&workspace_id) {
+        bail!("workspace {} 不存在", workspace_id);
+    }
+    drop(sessions);
+    *state.active_workspace_id.lock().map_err(|e| e.to_string())? = Some(workspace_id);
+    Ok(())
 }
 
 // ===== 日志管理 =====
-
-/// 获取 admAgent 日志文件路径（<数据目录>/.admAgent/logs/admAgent.log）。
-/// admAgent 的 DataDirectory 默认 ".admAgent" 按进程 cwd 解析，故日志落在进程 cwd 下：
-/// - macOS：start_agent_server 把进程 cwd 设为 app_data_dir（避免写入只读的 App bundle）
-/// - 其它平台：进程 cwd = admAgent 二进制所在目录
-fn get_adm_agent_log_path(app: &tauri::AppHandle) -> Result<PathBuf, AppError> {
-    #[cfg(target_os = "macos")]
-    {
-        return Ok(config::get_data_dir(Some(app))?
-            .join(".admAgent")
-            .join("logs")
-            .join("admAgent.log"));
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let agent_path = adm_agent_path(app)?;
-        let agent_dir = agent_path.parent().unwrap_or(std::path::Path::new("."));
-        Ok(agent_dir
-            .join(".admAgent")
-            .join("logs")
-            .join("admAgent.log"))
-    }
-}
-
-/// 读取 admAgent 日志文件内容（返回最后 N 行，默认 2000 行）
-#[tauri::command]
-pub async fn get_adm_agent_logs(app: tauri::AppHandle, tail: Option<usize>) -> Result<String, AppError> {
-    let log_path = get_adm_agent_log_path(&app)?;
-    if !log_path.exists() {
-        return Ok("（admAgent 日志文件不存在: {}）".to_string().replace("{}", &log_path.display().to_string()));
-    }
-
-    let content = tokio::fs::read_to_string(&log_path)
-        .await
-        .map_err(|e| format!("读取日志文件失败: {}", e))?;
-
-    let tail_n = tail.unwrap_or(2000);
-    if tail_n > 0 {
-        let lines: Vec<&str> = content.lines().collect();
-        let start = if lines.len() > tail_n { lines.len() - tail_n } else { 0 };
-        Ok(lines[start..].join("\n"))
-    } else {
-        Ok(content)
-    }
-}
-
-/// 导出 admAgent 日志到用户指定的文件路径
-#[tauri::command]
-pub async fn export_agent_logs(app: tauri::AppHandle) -> Result<(), AppError> {
-    use tauri_plugin_dialog::DialogExt;
-
-    let log_path = get_adm_agent_log_path(&app)?;
-    if !log_path.exists() {
-        bail!("admAgent 日志文件不存在: {}", log_path.display());
-    }
-
-    let (tx, rx) = tokio::sync::oneshot::channel();
-
-    app.dialog()
-        .file()
-        .add_filter("日志文件", &["log", "txt"])
-        .add_filter("所有文件", &["*"])
-        .set_file_name("admAgent.log")
-        .save_file(move |file_path| {
-            let _ = tx.send(file_path);
-        });
-
-    let file_path = rx.await.map_err(|_| "保存对话框失败".to_string())?;
-    let file_path = file_path.ok_or_else(|| "用户取消了保存".to_string())?;
-
-    let dest_path = file_path
-        .as_path()
-        .ok_or_else(|| "无法获取保存路径".to_string())?;
-
-    tokio::fs::copy(&log_path, dest_path)
-        .await
-        .map_err(|e| format!("导出日志失败: {}", e))?;
-
-    Ok(())
-}
 
 /// 弹出系统目录选择对话框，返回用户选择的目录路径
 #[tauri::command]
@@ -1910,6 +2061,15 @@ pub async fn set_debug_logging(app: tauri::AppHandle, enabled: bool) -> Result<S
         disable_api_debug_log(&app);
         Ok(String::new())
     }
+}
+
+/// 前端调试日志写入：让 JS 端把关键事件写到 adm_api_debug.log，
+/// 与 Rust 端的 api_debug_log 统一格式、统一文件。
+/// 仅在 debug_logging 开启时写入（与 api_debug_log 同一个开关）。
+#[tauri::command]
+pub async fn agent_debug_log(_app: tauri::AppHandle, line: String) -> Result<(), AppError> {
+    api_debug_log(|| format!("UI: {}", line));
+    Ok(())
 }
 
 /// 在系统文件管理器中打开调试日志所在位置（app 数据目录）。

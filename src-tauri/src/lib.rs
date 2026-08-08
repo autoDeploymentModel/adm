@@ -190,6 +190,11 @@ pub fn run() {
             agent::get_agent_workdir,
             agent::set_agent_workdir,
             agent::pick_workdir_folder,
+            agent::get_workdirs,
+            agent::add_workdir,
+            agent::remove_workdir,
+            agent::set_default_workdir,
+            agent::validate_workdirs,
             agent::add_cloud_provider,
             agent::list_cloud_providers,
             agent::update_cloud_provider,
@@ -200,8 +205,9 @@ pub fn run() {
             agent::agent_http_request,
             agent::agent_subscribe_events,
             agent::agent_unsubscribe_events,
-            agent::get_adm_agent_logs,
-            agent::export_agent_logs,
+            agent::create_workspace,
+            agent::switch_workspace,
+            agent::agent_debug_log,
             agent::set_debug_logging,
             agent::open_debug_log_dir,
             agent::read_attachment_file,
@@ -219,8 +225,6 @@ pub fn run() {
             ilink::unbind_ilink,
             ilink::set_ilink_follow,
             ilink::set_ilink_current_session,
-            // lib.rs (index.rs)
-            index::minimize_to_tray,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
