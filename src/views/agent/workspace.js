@@ -2,11 +2,12 @@
 import { t as _t } from "../../i18n.js";
 import { S, invoke, store } from "./store.js";
 import { api } from "./api.js";
-import { updateContextUsage, exitManualScrollMode, clearErrorNotices, reportError, clearSendSafetyTimer, updateStatusBar } from "./ui.js";
+import { updateContextUsage, exitManualScrollMode, clearErrorNotices, reportError, clearSendSafetyTimer, updateStatusBar, showConfirm } from "./ui.js";
 import { log } from "./log.js";
 import { renderMessages, renderTodos } from "./render.js";
 import { loadConversations, renderConversationList } from "./session.js";
 import { loadTools } from "./tools.js";
+import { refreshAgentInfo } from "./model.js";
 import { resetPermissionState, syncModeToServer } from "./permission.js";
 
 // ===== 会话上下文压缩 =====
@@ -46,10 +47,13 @@ export async function switchToWorkspace(wsId, wsPath) {
   if (!isFirstVisit) {
     // 恢复已保存的状态（store.setActive 已恢复，但 UI 需手动刷新）
     renderMessages();
-    renderTodos([]);
+    renderTodos(S.currentConv && Array.isArray(S.currentConv.todos) ? S.currentConv.todos : []);
     renderConversationList();
     updateContextUsage();
     updateStatusBar(S.isSending ? "busy" : "ready", wsPath || null, S.contextUsage.used);
+    // 刷新服务端数据：后台运行可能已更新会话标题、上下文用量、Agent 信息
+    loadConversations();
+    refreshAgentInfo();
   } else {
     // 首次进入该 workspace：初始化
     clearSendSafetyTimer();
@@ -57,7 +61,7 @@ export async function switchToWorkspace(wsId, wsPath) {
     exitManualScrollMode();
     clearErrorNotices();
     renderMessages();
-    renderTodos([]);
+    renderTodos(S.currentConv && Array.isArray(S.currentConv.todos) ? S.currentConv.todos : []);
     document.getElementById("agent-conv-title").textContent = _t("选择或创建一个会话");
 
     // 重新初始化 Agent
@@ -155,16 +159,18 @@ async function renderWorkDirDropdown() {
       var delBtn = document.createElement("span");
       delBtn.textContent = "✕";
       delBtn.className = "workdir-dropdown-del";
-      delBtn.style.cssText = "flex-shrink:0;cursor:pointer;color:var(--c-text-3,#888);font-size:11px;padding:0 4px;";
       delBtn.title = _t("移除");
-      delBtn.addEventListener("click", async function(e) {
+      delBtn.addEventListener("click", function(e) {
         e.stopPropagation();
-        try {
-          await invoke("remove_workdir", { path: d.path });
-          closeWorkDirDropdown();
-        } catch (err) {
-          reportError(err, { prefix: _t("移除工作目录失败: ") });
-        }
+        // 移除前确认，避免误删工作目录
+        showConfirm(_t("确定要移除工作目录「") + d.path + _t("」吗？"), async function() {
+          try {
+            await invoke("remove_workdir", { path: d.path });
+            closeWorkDirDropdown();
+          } catch (err) {
+            reportError(err, { prefix: _t("移除工作目录失败: ") });
+          }
+        });
       });
       item.appendChild(delBtn);
     }

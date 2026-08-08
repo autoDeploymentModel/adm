@@ -281,6 +281,41 @@ class Store {
     if (wsId === this.activeWsId) this.bindToS();
   }
 
+  // ===== Session 事件（后台 workspace 也需要更新状态池） =====
+  handleSessionEvent(wsId, action, sessData) {
+    var ws = this.workspaces.get(wsId);
+    if (!ws) return;
+    if (action === "created") {
+      if (!ws.conversations.some(function(c) { return c.id === sessData.id; })) {
+        var newList = ws.conversations.slice();
+        newList.unshift(sessData);
+        this.setConversations(wsId, newList);
+      }
+    } else if (action === "updated") {
+      var idx = ws.conversations.findIndex(function(c) { return c.id === sessData.id; });
+      if (idx >= 0) {
+        var updatedList = ws.conversations.slice();
+        updatedList[idx] = sessData;
+        this.setConversations(wsId, updatedList);
+      }
+      if (ws.currentConvId === sessData.id) {
+        this.setCurrentConv(wsId, sessData);
+        if (sessData.context_tokens) {
+          this.setContextUsage(wsId, sessData.context_tokens, ws.contextUsage.max, false);
+        }
+      }
+    } else if (action === "deleted") {
+      var filtered = ws.conversations.filter(function(c) { return c.id !== sessData.id; });
+      this.setConversations(wsId, filtered);
+      if (ws.currentConvId === sessData.id) {
+        this.setCurrentConvId(wsId, null);
+        this.setCurrentConv(wsId, null);
+        // 与会话删除的 UI handler 一致：清空消息列表，避免切回时残留旧消息
+        this.setMessages(wsId, []);
+      }
+    }
+  }
+
   // ===== SSE 事件统一入口 =====
   handleSSEEvent(wsId, eventPayload) {
     var rawData = eventPayload.data || eventPayload;
@@ -296,6 +331,9 @@ class Store {
       case "message":
         if (innerType === "created") this.appendMessage(wsId, actualData);
         else if (innerType === "updated") this.updateMessage(wsId, actualData);
+        break;
+      case "session":
+        this.handleSessionEvent(wsId, innerType, actualData);
         break;
       case "run_complete":
         this.completeRun(wsId);

@@ -333,6 +333,20 @@ export const template = `
     background: var(--c-border);
     margin: 2px 0;
   }
+  .workdir-dropdown-del {
+    flex-shrink: 0;
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1;
+    color: var(--c-text-2, #bbb);
+    padding: 2px 5px;
+    border-radius: 4px;
+    transition: color 0.15s, background-color 0.15s;
+  }
+  .workdir-dropdown-del:hover {
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.15);
+  }
 
   .settings-btn-sidebar {
     display: flex;
