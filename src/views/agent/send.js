@@ -1,8 +1,9 @@
 // 发送消息（fire-and-forget，结果经 SSE 返回）
 import { t as _t } from "../../i18n.js";
-import { S, invoke } from "./state.js";
+import { S, invoke, store } from "./store.js";
 import { api } from "./api.js";
 import { autoResize, generateRunId } from "./utils.js";
+import { log } from "./log.js";
 import { getErrorMessage } from "./error.js";
 import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, showInfo, reportError, updateContextUsage } from "./ui.js";
 import { renderMessages } from "./render.js";
@@ -46,7 +47,7 @@ function getModelReadiness() {
 }
 
 export async function sendMessage() {
-  console.log("[agent] sendMessage() isSending:", S.isSending, "convId:", S.currentConvId, "activeRun:", S.activeRun ? S.activeRun.sessionId : null, "queuedRun:", S.queuedRun ? S.queuedRun.sessionId : null);
+  log.debug("SEND", "sendMessage: isSending=" + S.isSending + " convId=" + S.currentConvId + " activeRun=" + (S.activeRun ? S.activeRun.sessionId : "null") + " queuedRun=" + (S.queuedRun ? S.queuedRun.sessionId : "null"));
   // 仅当「当前 UI 会话就是正在运行的会话」时，点击发送 = 取消该运行；
   // 若运行发生在其它会话（用户已切走），点击发送 = 给当前会话发新消息（服务端排队）
   var isCurrentRun = S.isSending && S.activeRun && S.activeRun.sessionId === S.currentConvId;
@@ -85,7 +86,7 @@ export async function sendMessage() {
     }
     if (S.queuedRun) {
       // 取消当前运行后仍有排队运行：由排队运行接管（服务端队列 FIFO，取消后即轮到它）
-      console.log("[agent] 取消当前运行，排队运行接管:", S.queuedRun.sessionId);
+      log.debug("SEND", "sendMessage: 取消当前运行，排队运行接管: " + S.queuedRun.sessionId);
       S.activeRun = S.queuedRun;
       S.queuedRun = null;
       startSendSafetyTimer();
@@ -161,16 +162,11 @@ export async function sendMessage() {
   var sessionId = S.currentConvId;
   var runId = generateRunId();
   // 此刻工作区是否已被其它会话占用（本消息将排队等待）——用于发送成功后提示
-  var wasBusyOther = S.isSending && S.activeRun && S.activeRun.sessionId !== sessionId;
+  var wasBusyOther = store.isBusy(workspaceId) && S.activeRun && S.activeRun.sessionId !== sessionId;
   if (wasBusyOther) {
-    // 工作区被其它会话占用：保留 activeRun（真正执行的运行）不变，
-    // 本消息进入服务端队列，排队身份记入 queuedRun；isSending 已为 true 无需改动。
-    // 提前设置 queuedRun：让临时消息渲染的「排队中」指示器与按钮文案立即生效
-    S.queuedRun = { workspaceId: workspaceId, sessionId: sessionId, runId: runId };
+    store.setQueuedRun(workspaceId, sessionId, runId);
   } else {
-    S.isSending = true;
-    S.activeRun = { workspaceId: workspaceId, sessionId: sessionId, runId: runId };
-    S.queuedRun = null;
+    store.startRun(workspaceId, sessionId, runId);
   }
   updateSendButton();
 
@@ -206,7 +202,7 @@ export async function sendMessage() {
       await api("POST", "/v1/workspaces/" + workspaceId + "/agent/init");
       await api("POST", "/v1/workspaces/" + workspaceId + "/agent", body);
     }
-    console.log("[agent] 消息已发送, runId:", runId);
+    log.debug("SEND", "sendMessage: 消息已发送, runId=" + runId + " wsId=" + workspaceId + " sessionId=" + sessionId);
     // 初始化本轮运行统计：供假完成检测（A）与自动续跑进度判定（C）使用
     S.runStats = {
       sessionId: sessionId,
@@ -228,14 +224,11 @@ export async function sendMessage() {
     updateContextUsage();
   } catch (e) {
     if (wasBusyOther) {
-      // 排队发送失败：只清排队身份，不得触碰仍在执行的其它会话运行态
-      S.queuedRun = null;
+      store.clearQueuedRun(workspaceId);
       updateSendButton();
       renderConversationList();
     } else {
-      S.isSending = false;
-      S.activeRun = null;
-      S.queuedRun = null;
+      store.cancelRun(workspaceId);
       updateSendButton();
       clearSendSafetyTimer();
       updateStatusBar("ready", null, S.contextUsage.used);

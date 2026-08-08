@@ -1,10 +1,10 @@
 // 设置弹窗 / 云端模型添加 / admAgent 版本显示
 import { t as _t } from "../../i18n.js";
-import { S, invoke } from "./state.js";
+import { S, invoke } from "./store.js";
 import { api } from "./api.js";
 import { parseContextSize, escapeHtml, $input, normalizeReasoningEffort } from "./utils.js";
-import { showConfirm, reportError, updateStatusBar } from "./ui.js";
-import { switchToWorkspace, updateWorkspaceSelector } from "./workspace.js";
+import { showConfirm, reportError } from "./ui.js";
+import { updateWorkspaceSelector } from "./workspace.js";
 import { updateModelDropdown, switchModel, refreshServerProviders } from "./model.js";
 import { isAutoContinueEnabled } from "./autocontinue.js";
 import { refreshProjectMemory } from "./memory.js";
@@ -32,15 +32,9 @@ export function initProjectMemoryUI() {
 }
 
 export function updateSettingsUI() {
-  var workdir = $input("settings-workdir");
   var planCheck = $input("settings-plan");
   var reasoningSelect = $input("settings-reasoning-effort");
   var tempInput = $input("settings-temperature");
-
-  // 工作目录
-  invoke("get_agent_workdir").then(function(dir) {
-    workdir.value = dir || "";
-  }).catch(function() {});
 
   // Plan 模式
   planCheck.checked = !!S.settings.agent_plan_mode;
@@ -120,11 +114,6 @@ export function renderVisionModelSelect() {
 export async function saveSettings() {
   console.log("[agent] 保存设置");
   try {
-    // 保存工作目录
-    var workdir = $input("settings-workdir").value.trim();
-    var oldWorkdir = S.workspaceInfo ? S.workspaceInfo.path : "";
-    await invoke("set_agent_workdir", { workdir: workdir });
-
     // 保存 agent 设置到 config
     var s = await invoke("load_settings");
     s.agent_plan_mode = S.settings.agent_plan_mode || false;
@@ -134,33 +123,7 @@ export async function saveSettings() {
     s.debug_logging = S.settings.debug_logging || false;
     s.agent_vision_model = S.settings.agent_vision_model || "admAgent/admImage-model";
     await invoke("save_settings", { settings: s });
-
-    // 如果工作目录发生了变化，切换 workspace
-    if (workdir && workdir !== oldWorkdir && S.serverInfo && S.serverInfo.workspace_id) {
-      try {
-        // 直接 POST 创建：服务端按 path 原子去重（first-wins）并为本客户端注册创建 hold，
-        // 保证新 SSE 接上前 workspace 不会被回收。
-        // 不能用 GET 列表查找复用 id：列表里可能有靠残留连接"假活"的旧 workspace，
-        // 复用它不产生任何引用保护，随后被服务端 teardown 就会满屏 404
-        var newWs = await api("POST", "/v1/workspaces", {
-          path: workdir,
-          yolo: true, // 审批模式已移除：权限请求直通，Plan 模式靠服务端只读工具集约束
-          client_id: S.clientId
-        });
-        // 切换到新 workspace
-        if (newWs && newWs.id) {
-          await switchToWorkspace(newWs.id, workdir);
-        }
-      } catch (e) {
-        console.warn("[agent] 切换工作区失败:", e);
-        reportError(e, { prefix: _t("切换工作目录失败: ") });
-      }
-    } else {
-      // 工作目录未变化，只更新 UI
-      S.workspaceInfo = { path: workdir || "默认", name: workdir ? workdir.split(/[\\/]/).pop() : _t("默认工作区") };
-    }
     updateWorkspaceSelector();
-    updateStatusBar("ready", workdir, S.contextUsage.used);
   } catch (e) {
     reportError(e, { prefix: _t("保存设置失败: ") });
   }

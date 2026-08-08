@@ -279,6 +279,8 @@ export const template = `
     border: 1px solid var(--c-border);
     border-radius: 6px;
     user-select: none;
+    cursor: pointer;
+    position: relative;
   }
   .workspace-icon { font-size: 14px; }
   .workspace-name {
@@ -288,6 +290,48 @@ export const template = `
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    cursor: pointer;
+  }
+
+  .workdir-dropdown {
+    position: absolute;
+    bottom: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    background: var(--c-bg-deep);
+    border: 1px solid var(--c-border);
+    border-radius: 6px;
+    box-shadow: 0 -4px 12px rgba(0,0,0,0.3);
+    z-index: 100;
+    max-height: 300px;
+    overflow-y: auto;
+    padding: 4px 0;
+  }
+  .workdir-dropdown-item {
+    padding: 6px 10px;
+    font-size: 12px;
+    color: var(--c-text);
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .workdir-dropdown-item:hover {
+    background: var(--c-bg-hover, rgba(255,255,255,0.08));
+  }
+  .workdir-dropdown-item.active {
+    color: var(--c-accent, #3b82f6);
+  }
+  .workdir-dropdown-item.add {
+    color: var(--c-accent, #3b82f6);
+    border-top: 1px solid var(--c-border);
+    margin-top: 2px;
+    padding-top: 8px;
+  }
+  .workdir-dropdown-sep {
+    height: 1px;
+    background: var(--c-border);
+    margin: 2px 0;
   }
 
   .settings-btn-sidebar {
@@ -888,11 +932,6 @@ export const template = `
     border-color: var(--c-accent);
   }
 
-  .workdir-row {
-    display: flex;
-    gap: 6px;
-  }
-  .workdir-row .settings-input { flex: 1; }
   .browse-btn {
     background: var(--c-overlay);
     border: 1px solid var(--c-border);
@@ -1325,16 +1364,6 @@ export const template = `
       <!-- 基础设置 -->
       <div class="param-group">
         <div class="param-group-title">${_t("基础设置")}</div>
-        <div class="param-row">
-          <div class="param-label">${_t("工作目录")}</div>
-          <div class="param-input">
-            <div class="workdir-row">
-              <input type="text" class="settings-input" id="settings-workdir" placeholder="${_t("选择工作目录")}">
-              <button class="browse-btn" id="settings-browse-btn">${_t("浏览…")}</button>
-            </div>
-            <div class="param-desc">${_t("Agent 操作文件的根目录")}</div>
-          </div>
-        </div>
         <div class="param-row">
           <div class="param-label">${_t("Plan 模式")}</div>
           <div class="param-input">

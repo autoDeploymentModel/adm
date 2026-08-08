@@ -1,6 +1,6 @@
 // 通用 UI：状态栏 / 上下文用量 / 错误与确认弹窗 / 滚动模式 / 安全超时 / 右键菜单
 import { t as _t } from "../../i18n.js";
-import { S } from "./state.js";
+import { S } from "./store.js";
 import { api } from "./api.js";
 import { formatTokens, isMsgAreaAtBottom } from "./utils.js";
 import { getErrorMessage, classifyError, ERROR_QUOTA } from "./error.js";

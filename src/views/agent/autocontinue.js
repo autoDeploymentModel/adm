@@ -2,7 +2,7 @@
 // 每轮新 prompt 会重置服务端所有 nudge 重试预算，等于把"推着模型干完"的
 // 预算按轮扩展；配进度守卫（连续无进展即停）与轮数上限防止无限烧 token。
 import { t as _t } from "../../i18n.js";
-import { S } from "./state.js";
+import { S } from "./store.js";
 import { api } from "./api.js";
 import { generateRunId } from "./utils.js";
 import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, reportError } from "./ui.js";

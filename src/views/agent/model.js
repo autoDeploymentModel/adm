@@ -1,6 +1,6 @@
 // 模型切换与 provider 列表
 import { t as _t } from "../../i18n.js";
-import { S, invoke } from "./state.js";
+import { S, invoke } from "./store.js";
 import { api } from "./api.js";
 import { escapeHtml, formatTokens, slugifyModelId, normalizeReasoningEffort } from "./utils.js";
 import { reportError, updateContextUsage } from "./ui.js";

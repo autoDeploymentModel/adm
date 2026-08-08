@@ -3,23 +3,18 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use sysinfo::System;
 
-/// admAgent server 模式会话：保存子进程句柄与本地传输地址。
-/// 前端通过 `agent_http_request` 命令代理访问默认 socket / named pipe 上的 HTTP API。
-/// SSE 事件通过后台 tokio task 从 admAgent SSE 端点读取并转发为 Tauri 事件。
+/// admAgent server 模式会话：每个 workspace 一个独立会话，持有该 workspace 的
+/// SSE 转发任务。子进程由 AppState.agent_child 全局管理（单进程 server
+/// 被所有 workspace 共享）。
 pub struct AgentServerSession {
-    /// 本进程拉起的 admAgent server 子进程；None = 复用已运行的共享 server
-    /// （多客户端/多实例共用一个 server，由最后一个工作区删除时服务端自关闭）
-    pub child: Option<tokio::process::Child>,
     /// SSE 转发任务停止标志
     pub sse_stop: Arc<AtomicBool>,
-    /// SSE 转发任务句柄：切换到不同工作区时 abort，立即断开旧连接。
-    /// 空闲 workspace 无事件到达时仅靠停止标志无法及时退出（僵尸连接会让
-    /// 被切走的 workspace "假活"，之后连接一断即被服务端 teardown → 404）
+    /// SSE 转发任务句柄
     pub sse_task: Option<tokio::task::JoinHandle<()>>,
-    /// 工作区 ID（admAgent server 启动时创建 / 连接的工作区）
+    /// 工作区 ID（与 HashMap key 相同，保留用于调试/日志）
+    #[allow(dead_code)]
     pub workspace_id: String,
     /// 客户端 ID（UUID）
-    #[allow(dead_code)]
     pub client_id: String,
 }
 
@@ -33,17 +28,18 @@ pub struct AppState {
     pub sd_download_progress: Mutex<u8>,
     pub sd_download_status: Mutex<String>,
     pub sys: Mutex<System>,
-    /// admAgent server 会话
-    pub agent_session: Mutex<Option<AgentServerSession>>,
-    /// admAgent server 启停单飞锁：覆盖完整异步启动流程，避免并发 spawn/覆盖会话
+    /// admAgent server 子进程（全局唯一，所有 workspace 共享）
+    pub agent_child: Mutex<Option<tokio::process::Child>>,
+    /// 多 workspace 会话（按 workspace_id 索引）
+    pub agent_sessions: Mutex<HashMap<String, AgentServerSession>>,
+    /// 当前激活的 workspace ID（用于微信路由等需要"当前 tab"的场景）
+    pub active_workspace_id: Mutex<Option<String>>,
+    /// admAgent server 启停单飞锁
     pub agent_start_lock: tokio::sync::Mutex<()>,
-    /// 全局标识：是否有模型成功启动（用于进入 Agent 页前的判断）
+    /// 全局标识：是否有模型成功启动
     pub model_running: Mutex<bool>,
-    /// 当前运行模型是否支持图片输入（启动时按 support_images + mmproj 文件实际加载判定）
     pub model_supports_images: Mutex<bool>,
-    /// 当前运行模型是否支持推理（启动时按 --reasoning 参数判定，on/auto 视为支持）
     pub model_supports_reasoning: Mutex<bool>,
-    /// 模型启动代次：每次成功启动模型 +1
     pub model_generation: Mutex<u64>,
 }
 
@@ -59,7 +55,9 @@ impl AppState {
             sd_download_progress: Mutex::new(0),
             sd_download_status: Mutex::new("".to_string()),
             sys: Mutex::new(System::new_all()),
-            agent_session: Mutex::new(None),
+            agent_child: Mutex::new(None),
+            agent_sessions: Mutex::new(HashMap::new()),
+            active_workspace_id: Mutex::new(None),
             agent_start_lock: tokio::sync::Mutex::new(()),
             model_running: Mutex::new(false),
             model_supports_images: Mutex::new(false),
@@ -96,7 +94,6 @@ impl AppState {
         self.model_running.lock().map(|g| *g).unwrap_or(false)
     }
 
-    /// 模型成功启动一代：代次 +1（返回新代次）
     pub fn bump_model_generation(&self) -> u64 {
         let mut g = self.model_generation.lock().unwrap_or_else(|e| e.into_inner());
         *g += 1;

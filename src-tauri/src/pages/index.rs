@@ -13,24 +13,6 @@ use tauri::{Emitter, Manager};
 
 // ===== 辅助函数 =====
 
-/// 将主窗口最小化到系统托盘：隐藏窗口 + 从任务栏移除 + 通知前端显示提示。
-/// 供 Agent 终端启动后自动最小化主窗口使用（仅 Windows 外部 WT 场景）。
-///
-/// macOS 不调用 `set_skip_taskbar(true)`，避免切换到 `Accessory` 激活策略
-/// 导致后续无法从托盘恢复窗口（参见 lib.rs `show_main_window` / `hide_main_window`）。
-#[tauri::command]
-pub async fn minimize_to_tray(app: tauri::AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.hide();
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = window.set_skip_taskbar(true);
-        }
-    }
-    let _ = app.emit("window-minimized-to-tray", ());
-    Ok(())
-}
-
 #[cfg(target_os = "windows")]
 fn extract_nvidia_series(gpu_name: &str) -> Option<u32> {
     let upper = gpu_name.to_uppercase();

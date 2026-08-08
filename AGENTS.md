@@ -72,7 +72,8 @@ This file provides guidance to Qoder (qoder.com) when working with code in this 
 - **更新流程**：启动后延迟 3 秒 → 应用更新 → VC++ 运行库（仅 Windows）→ llamacpp 下载。admAgent 不再运行时下载/升级，随安装包内置（见下）。
 - **admAgent 内置分发**：编译好的 admAgent 压缩包放在 `buildAgent/`（`admAgent_{ver}_Windows_x86_64.zip` / `admAgent_{ver}_Darwin_arm64.tar.gz`）。`beforeDevCommand`/`beforeBuildCommand` 运行 `scripts/prepare-agent-binary.mjs`：按构建目标自动选包、解压到临时目录、把二进制放到 `src-tauri/binaries/admAgent-<target-triple>`（git 忽略），再由 `bundle.externalBin`（sidecar）打进安装包。运行时路径：Windows 为 ADM.exe 同目录的 `admAgent.exe`，macOS 为 `ADM.app/Contents/MacOS/admAgent`；macOS 启动时会清理旧版下载模式遗留在 app_data_dir 的 admAgent。
 - **窗口关闭**：`on_window_event` 通过 `taskkill /F`（Windows）或 `kill -9` 杀死 llama-server 和 admAgent server。
-- **Agent server 模式**：admAgent 以子进程 `serve --host tcp://127.0.0.1:0` 启动，后端从 stdout 解析端口，通过 `agent_http_request` 代理 HTTP API，SSE 事件通过 Tauri event `agent-sse-event` 转发给前端。
+- **Agent server 模式**：admAgent 以子进程 `server` 命令启动（不传 `--host`，服务端绑定平台默认本地传输：macOS/Linux 为 Unix socket、Windows 为 named pipe，不占 TCP 端口）。多客户端共享：先探测默认传输地址是否已有 server 在跑，有则直接复用不 spawn。就绪检测通过轮询 `GET /v1/health`（15 秒超时），stdout/stderr 仅做日志转发。HTTP API 通过 `agent_http_request` 代理（hyper 直连 socket/pipe），SSE 事件通过 Tauri event `agent-sse-event` 转发给前端。
+- **多 workspace 并发架构**：单 admAgent server 进程支持多个 workspace 同时干活。每个 workspace 有独立的 `AgentCoordinator`/SQLite DB/SSE 转发任务。Rust 后端 `AppState.agent_sessions: HashMap<String, AgentServerSession>` 按 workspace_id 索引各会话，`agent_child` 全局共享子进程，`active_workspace_id` 跟踪当前 tab。前端 `S.workspaces[wsId]` 状态池存各 workspace 的会话/消息/运行状态，切换 tab 时保存当前+恢复目标，不中断旧 workspace 的 agent run。SSE 事件携带 `workspace_id`，前端只处理当前激活 tab 的事件。微信 Bot 跟随当前激活 tab 路由消息。
 - **Agent loop 抖动恢复体系**（`admAgent/internal/agent/agent_loop_llm.go`）：空 stop 重试（上限 3）、叙述性 stop 重试、推理超限（软阈值按 reasoning_effort 分档，丢弃+nudge+重试 1 次）、未完成 todos nudge（**进度感知**：连续 3 次无进展才放弃，有进展（todo 完成或 edit/write/bash 等实质副作用工具成功）即清零计数，硬熔断总上限 10 次）、假完成检测。重试耗尽后本轮**无 error 静默结束**（run_complete 不带错误），UI 侧表现为“突然停了”。
 - **Plan 模式 = 纯规划**：工具白名单（`config.ResolvePlanModeTools`）只含只读工具，**不含 edit/write/download/todos/MCP**；bash 在工具内部按只读命令白名单校验；计划以正文文本输出，todo 追踪只属于执行模式；todo-nudge 在 todos 工具不在目录时自动跳过。
 - **前端自动续跑**（`src/views/agent/autocontinue.js`）：本轮正常结束但 todos 未完成时自动发“继续”开新轮（每轮重置服务端 nudge 预算）；上限 10 轮、连续 2 轮无进展自动停；仅续跑本客户端发起的任务；Plan 模式、出错、取消、切走会话均不触发；开关存 localStorage（`agent_auto_continue`，默认开）。
@@ -88,3 +89,18 @@ This file provides guidance to Qoder (qoder.com) when working with code in this 
 - admAgent api文档在 `doc/server-api.md`
 - llama-server cli 启动参数文档  windows在`doc/llamacpp.txt`，  macos在 `doc/llamacpp-macos.txt`
 - admAgent 源码在 `admAgent` 目录下，有不清楚的地方可以直接搜索源码确定后再决定怎么改，admAgent源码目录只能读，不能有任何修改和写入动作，如果真的发现是admAgent的问题，先列出问题和需要改动的地方给我审核
+- **改动必须区分桌面端和 TUI**：每次改动前必须先告知用户改动目标是桌面端（`src/` + `src-tauri/`）还是 TUI 端（`admAgent/`），未经明确指示不混改两端。
+- **项目结构**：
+  - `admAgent/` — Go TUI（Bubbletea/lipgloss/ultraviolet）+ 共享后端服务器（Go），两个前端共用此 server
+  - `src/` + `src-tauri/` — Tauri 桌面端（vanilla JS 前端 + Rust 后端）
+  - `buildAgent/` — 构建工具
+  - `website/` — 营销网站
+  - `scripts/` — 工具脚本
+- **工作目录切换功能仅桌面端**：TUI 只显示当前工作目录（PrettyPath），不做切换/下拉/添加/删除。所有工作目录切换 UI 在桌面端实现。
+- **调试日志统一写入 `adm_api_debug.log`**：复杂问题排查需要日志时，Rust 端用 `api_debug_log!`，前端 JS 用 `invoke("agent_debug_log", { line: "..." })`，统一写入 `~/Library/Application Support/com.adm.admapp/adm_api_debug.log`（macOS）或 `%LOCALAPPDATA%\com.adm.admapp\adm_api_debug.log`（Windows）。日志必须带类型标记便于过滤：
+  - `UI:` 前缀 — 前端 JS 日志（SSE 事件过滤、状态变更、消息处理等）
+  - `HTTP >` / `HTTP <` — HTTP 请求/响应
+  - `SSE =` / `SSE !` — SSE 连接/断开
+  - `< message created` / `< run_complete` / `< agent_event` — SSE 事件转发
+  - `UpdateModels:` / `readyWg:` — admAgent 服务端诊断日志
+  日志格式：`{epoch_ms} {HH:MM:SS.mmmZ} {类型标记} {内容}`，由 Rust 端统一格式化。调试模式开关：设置→调试模式（`config.json` 的 `debug_logging` 字段）。

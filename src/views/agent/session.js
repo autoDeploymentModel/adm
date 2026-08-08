@@ -1,6 +1,6 @@
 // 会话管理：列表 / 选择 / 新建 / 消息刷新 / 上下文估算
 import { t as _t } from "../../i18n.js";
-import { S, invoke } from "./state.js";
+import { S, invoke } from "./store.js";
 import { api } from "./api.js";
 import { escapeHtml, formatTime } from "./utils.js";
 import { showError, showConfirm, showInfo, reportError, exitManualScrollMode, clearErrorNotices, updateContextUsage, updateStatusBar, updateSendButton } from "./ui.js";

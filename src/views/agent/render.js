@@ -1,6 +1,6 @@
 // 消息渲染（增量 DOM 对齐）与 Todo 列表
 import { t as _t } from "../../i18n.js";
-import { S } from "./state.js";
+import { S } from "./store.js";
 import { renderMarkdown, formatTime, splitSystemInfo } from "./utils.js";
 import { updateScrollBottomBtn } from "./ui.js";
 

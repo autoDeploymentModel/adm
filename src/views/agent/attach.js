@@ -1,6 +1,6 @@
 // 附件处理：选择 / 压缩 / 预览
 import { t as _t } from "../../i18n.js";
-import { S, invoke } from "./state.js";
+import { S, invoke } from "./store.js";
 import { showError, showInfo } from "./ui.js";
 import { getErrorMessage } from "./error.js";
 

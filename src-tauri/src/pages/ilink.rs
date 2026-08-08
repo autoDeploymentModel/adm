@@ -643,7 +643,16 @@ async fn maybe_autostart_agent(rt: &Arc<IlinkRuntime>) {
     rt.last_agent_start.store(now, Ordering::Relaxed);
     let app = rt.app.clone();
     let state = app.state::<AppState>();
-    if let Err(e) = agent::start_agent_server(app.clone(), state).await {
+    // ilink 自动启动时无前端 client_id，本地生成（ilink 不依赖 current-session）
+    let ilink_client_id = format!(
+        "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+        rand::random::<u32>(),
+        rand::random::<u16>(),
+        rand::random::<u16>(),
+        rand::random::<u16>(),
+        rand::random::<u64>() & 0xFFFFFFFFFFFF
+    );
+    if let Err(e) = agent::start_agent_server(app.clone(), state, ilink_client_id).await {
         eprintln!("[ilink] 自动启动 admAgent server 失败: {}", e);
     }
 }

@@ -1,6 +1,6 @@
 // SSE 事件订阅 / 分发 / 断线重连
 import { t as _t } from "../../i18n.js";
-import { S, invoke, listen } from "./state.js";
+import { S, invoke, listen, store } from "./store.js";
 import { api } from "./api.js";
 import { getTextFromParts, stripSystemInfoText } from "./utils.js";
 import { getErrorMessage } from "./error.js";
@@ -11,6 +11,7 @@ import { handlePermissionRequest, resetPermissionState } from "./permission.js";
 import { loadTools } from "./tools.js";
 import { refreshAgentInfo, reloadAgentConfig } from "./model.js";
 import { maybeAutoContinue, resetAutoContinue } from "./autocontinue.js";
+import { log } from "./log.js";
 
 // ===== SSE 事件 =====
 export async function setupSSEListener() {
@@ -33,7 +34,29 @@ export async function setupSSEListener() {
     // 必须 await：listen() 返回 Promise，不 await 会导致 sseListener 存的是 Promise，
     // 下次注销时调用失败被吞掉，旧监听器永远无法移除 → 事件重复处理
     S.sseListener = await listen("agent-sse-event", function(event) {
-      handleSSEEvent(event.payload);
+      var payload = event.payload;
+      var eventWsId = payload && payload.workspace_id;
+      var rawData0 = payload.data || payload;
+      var evType0 = rawData0.type || payload.type || "";
+      log.debug("SSE", "event: " + evType0 + " ws: " + eventWsId + " activeWs: " + S.activeWsId + " currentConv: " + S.currentConvId);
+
+      // 统一走 Store：自动处理跨 workspace 一致性
+      // 非当前 tab 的事件更新对应 workspace 状态池
+      // 当前 tab 的事件触发 emit → handleSSEEvent
+      //
+      // store.handleSSEEvent 可能已执行 queued 接管（completeRun 把 activeRun
+      // 切到排队运行、非接管时清空 runStats），handleSSEEvent 里的 mismatch
+      // 判定、tookOverQueued 检测和 maybeAutoContinue 的 runStats 都需要用
+      // store 处理前的状态，否则会误杀前序运行/拿到 null 统计
+      var prevActiveRun = S.activeRun;
+      var prevQueuedRun = S.queuedRun;
+      var prevRunStats = S.runStats;
+      store.handleSSEEvent(eventWsId, payload);
+
+      // 当前 tab 的事件继续走原有 UI 处理逻辑
+      if (eventWsId === S.activeWsId) {
+        handleSSEEvent(payload, { prevActiveRun: prevActiveRun, prevQueuedRun: prevQueuedRun, prevRunStats: prevRunStats });
+      }
     });
 
     // 监听 SSE 错误事件（断线重连）—— 用单独的变量保存 unlisten，避免重复注册
@@ -61,6 +84,7 @@ function reconnectSSE() {
         S.isSending = false;
         S.activeRun = null;
         S.queuedRun = null;
+        store.syncWsFromS(store.activeWsId);
         clearSendSafetyTimer();
         updateStatusBar("ready", null, S.contextUsage.used);
         return;
@@ -87,7 +111,8 @@ function reconnectSSE() {
 // 错误格式化 / 分类统一收口到 error.js（getErrorMessage / classifyError），
 // 展示统一走 ui.js 的 reportError（quota 类错误自动提示"余额不足，任务中断"）。
 
-function handleSSEEvent(payload) {
+function handleSSEEvent(payload, ctx) {
+  ctx = ctx || {};
   if (!payload) return;
   console.log("[agent] SSE 事件:", payload.type || payload?.data?.type, "数据:", JSON.stringify(payload).substring(0, 150));
   // 后端 emit 格式: { "type": event_type, "data": parsed_sse_json }
@@ -100,6 +125,7 @@ function handleSSEEvent(payload) {
 
   switch (eventType) {
     case "message":
+      log.debug("SSE", "message: " + innerType + " role: " + actualData.role + " session: " + actualData.session_id + " currentConv: " + S.currentConvId + " match: " + (!actualData.session_id || actualData.session_id === S.currentConvId));
       // 只有实际运行会话的消息才能续期其安全计时器，其他会话事件不得干扰
       if (S.isSending && S.activeRun && (!actualData.session_id || actualData.session_id === S.activeRun.sessionId)) {
         startSendSafetyTimer();
@@ -120,8 +146,10 @@ function handleSSEEvent(payload) {
       // SSE 是工作区级广播：非当前打开会话的消息（如微信 Bot 会话的运行）不得进入当前消息列表，
       // 否则先被 push 显示、run_complete 后 refreshMessages 按当前会话拉取又被清掉（表现为消息闪现后消失）
       if (actualData.session_id && actualData.session_id !== S.currentConvId) {
+        log.warn("SSE", "message DROPPED (session mismatch): " + actualData.session_id + " vs " + S.currentConvId);
         break;
       }
+      log.debug("SSE", "message PASSED to handler: " + innerType + " role: " + actualData.role + " id: " + actualData.id);
       handleMessageSSEEvent(innerType, actualData);
       break;
     case "session":
@@ -130,19 +158,21 @@ function handleSSEEvent(payload) {
     case "run_complete":
       // SSE 是 workspace 级事件流；只让当前运行自己的完成事件收尾发送态，
       // 避免同 workspace 其它会话/排队任务的 run_complete 提前结束当前运行。
-      if (S.activeRun && (
-        (actualData.run_id && actualData.run_id !== S.activeRun.runId) ||
-        (!actualData.run_id && actualData.session_id && actualData.session_id !== S.activeRun.sessionId)
+      // 用 store 处理前的 activeRun 做判定：store.completeRun 可能已把
+      // activeRun 切到排队运行，此时用 S.activeRun 会误判前序运行的完成事件为"非当前运行"
+      var checkRun = ctx.prevActiveRun || S.activeRun;
+      if (checkRun && (
+        (actualData.run_id && actualData.run_id !== checkRun.runId) ||
+        (!actualData.run_id && actualData.session_id && actualData.session_id !== checkRun.sessionId)
       )) {
         console.log("[agent] 忽略非当前运行的 run_complete:", actualData.run_id || actualData.session_id);
         break;
       }
       var tookOverQueued = false;
-      if (S.queuedRun) {
-        // 前序运行完成，排队运行接管：activeRun 切到排队运行，保持运行态连续
-        console.log("[agent] 前序运行完成，排队运行接管:", S.queuedRun.sessionId);
-        S.activeRun = S.queuedRun;
-        S.queuedRun = null;
+      if (ctx.prevQueuedRun) {
+        // store.completeRun 已完成排队接管（activeRun 已切换、queuedRun 已清空），
+        // 此处仅跟踪标志供后续 UI 逻辑使用，不重复 mutate 状态
+        console.log("[agent] 前序运行完成，排队运行接管:", ctx.prevQueuedRun.sessionId);
         tookOverQueued = true;
         // 接管后运行即将开始（服务端队列 FIFO），重启安全计时器保护新运行
         startSendSafetyTimer();
@@ -171,7 +201,8 @@ function handleSSEEvent(payload) {
         } else {
           // 正常收尾：检查 todos 未完成时自动续跑（内部自带开关/进度守卫/轮数熔断）
           // 排队接管时不续跑已结束的前序会话（用户已转向其它会话，且其 prompt 正排队）
-          if (!tookOverQueued) maybeAutoContinue(actualData, S.runStats);
+          // runStats 用 store 处理前的快照：store.completeRun 非接管时已清空 S.runStats
+          if (!tookOverQueued) maybeAutoContinue(actualData, ctx.prevRunStats || S.runStats);
         }
         // 排队接管时仍有运行在队列中，状态栏保持运行中，不切回就绪
         if (!tookOverQueued) updateStatusBar("ready", null, S.contextUsage.used);
@@ -190,6 +221,9 @@ function handleSSEEvent(payload) {
         refreshAgentInfo();
       }
       // 运行完成后刷新会话列表和消息
+      // syncWsFromS：handleSSEEvent 里可能直接改了 S.isSending/S.activeRun 等值类型字段，
+      // 需同步回 workspace 内部确保切换时快照一致
+      store.syncWsFromS(store.activeWsId);
       loadConversations();
       if (S.currentConvId) {
         refreshMessages();

@@ -1,6 +1,6 @@
 // 工具面板（Skill / LSP / MCP）
 import { t as _t } from "../../i18n.js";
-import { S } from "./state.js";
+import { S } from "./store.js";
 import { api } from "./api.js";
 
 // ===== 工具列表 =====
