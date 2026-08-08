@@ -5,7 +5,7 @@ import { api } from "./api.js";
 import { updateContextUsage, exitManualScrollMode, clearErrorNotices, reportError, clearSendSafetyTimer, updateStatusBar, showConfirm } from "./ui.js";
 import { log } from "./log.js";
 import { renderMessages, renderTodos } from "./render.js";
-import { loadConversations, renderConversationList } from "./session.js";
+import { loadConversations, renderConversationList, syncWxFollowSession } from "./session.js";
 import { loadTools } from "./tools.js";
 import { refreshAgentInfo } from "./model.js";
 import { resetPermissionState, syncModeToServer } from "./permission.js";
@@ -84,6 +84,8 @@ export async function switchToWorkspace(wsId, wsPath) {
     // 首次进入后保存到状态池（store.setActive 已注册，store 方法写入时自动快照）
   }
   updateWorkspaceSelector();
+  // 切换工作区后同步微信 follow session，防止微信消息仍用旧 workspace 的 session ID
+  syncWxFollowSession();
 }
 
 // ===== 工作区下拉列表 =====
