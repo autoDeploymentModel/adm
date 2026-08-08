@@ -4,12 +4,17 @@ use crate::common::*;
 use crate::common::config;
 use crate::common::utils::platform;
 use crate::dbg_log;
+use crate::app_state::AppState;
+use tauri::Manager;
 
 // ===== Tauri Command =====
 
 #[tauri::command]
 pub async fn save_settings(app: tauri::AppHandle, settings: Settings) -> Result<(), AppError> {
     dbg_log!("[DEBUG] save_settings called with: {:?}", settings);
+    // 持有 config 写锁：防止与 agent.rs / ilink.rs 的 read-modify-write 并发互相覆盖
+    let state = app.state::<AppState>();
+    let _lock = state.config_write_lock.lock().map_err(|e| e.to_string())?;
     let data_dir = config::get_data_dir(Some(&app))?;
     let config_path = data_dir.join("config.json");
 

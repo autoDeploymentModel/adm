@@ -81,10 +81,7 @@ function reconnectSSE() {
       // 否则后续直接用 S.serverInfo.workspace_id 拼 URL 会抛错被吞、重连假死
       if (!S.serverInfo || !S.serverInfo.workspace_id) {
         console.warn("[agent] 重连中止：serverInfo/workspace_id 缺失，状态退回就绪");
-        S.isSending = false;
-        S.activeRun = null;
-        S.queuedRun = null;
-        store.syncWsFromS(store.activeWsId);
+        store.cancelRun(store.activeWsId);
         clearSendSafetyTimer();
         updateStatusBar("ready", null, S.contextUsage.used);
         return;
@@ -97,7 +94,8 @@ function reconnectSSE() {
       if (S.currentConvId) {
         await refreshMessages();
         // 刷新会话信息
-        S.currentConv = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions/" + S.currentConvId);
+        var reconnectedConv = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions/" + S.currentConvId);
+        store.setCurrentConv(store.activeWsId, reconnectedConv);
         renderTodos(S.currentConv.todos);
       }
       if (S.isSending && S.activeRun) startSendSafetyTimer();
@@ -134,8 +132,7 @@ function handleSSEEvent(payload, ctx) {
       // 清除排队标识并接管 activeRun（前序运行的 run_complete 可能晚到，不能因此误清状态）
       if (S.queuedRun && actualData.session_id && actualData.session_id === S.queuedRun.sessionId) {
         console.log("[agent] 排队会话开始产出，接管运行:", actualData.session_id);
-        S.activeRun = S.queuedRun;
-        S.queuedRun = null;
+        store.promoteQueuedRun(S.queuedRun.workspaceId);
         renderConversationList();
       }
       // 未打开任何会话时，后台会话（如微信 Bot）来消息 → 自动打开该会话实时跟踪
@@ -177,8 +174,8 @@ function handleSSEEvent(payload, ctx) {
         // 接管后运行即将开始（服务端队列 FIFO），重启安全计时器保护新运行
         startSendSafetyTimer();
       } else {
-        S.isSending = false;
-        S.activeRun = null;
+        // 非接管：状态收尾已在 store.handleSSEEvent → completeRun 完成（isSending/activeRun/runStats），
+        // 此处只处理 UI 副作用
         clearSendSafetyTimer();
       }
       updateSendButton();
@@ -209,7 +206,7 @@ function handleSSEEvent(payload, ctx) {
       }
       // 本轮运行统计生命周期结束，清理避免跨轮残留；
       // 排队接管时该统计属于排队中的会话（发送时已初始化），保留给其实际执行轮使用
-      if (!tookOverQueued) S.runStats = null;
+      if (!tookOverQueued) store.setRunStats(store.activeWsId, null);
       // 若切换模型时会话繁忙导致 /agent/update 未生效，本轮结束后立即重试重载
       if (S.pendingModelReload) {
         S.pendingModelReload = false;
@@ -221,9 +218,6 @@ function handleSSEEvent(payload, ctx) {
         refreshAgentInfo();
       }
       // 运行完成后刷新会话列表和消息
-      // syncWsFromS：handleSSEEvent 里可能直接改了 S.isSending/S.activeRun 等值类型字段，
-      // 需同步回 workspace 内部确保切换时快照一致
-      store.syncWsFromS(store.activeWsId);
       loadConversations();
       if (S.currentConvId) {
         refreshMessages();
@@ -273,28 +267,28 @@ function handleMessageSSEEvent(action, msgData) {
         var tempIdx = S.messages.findIndex(function(m) { return m._temp && m.role === "user" && m.content === stripSystemInfoText(serverText); });
         if (tempIdx >= 0) {
           // 用正式消息替换临时消息
-          S.messages[tempIdx] = msgData;
+          store.updateMessage(store.activeWsId, msgData);
           renderMessages();
           return;
         }
       }
-      S.messages.push(msgData);
+      store.appendMessage(store.activeWsId, msgData);
       renderMessages();
     }
   } else if (action === "updated") {
     // 消息更新 → 找到对应消息并替换
     var idx = S.messages.findIndex(function(m) { return m.id === msgData.id; });
     if (idx >= 0) {
-      S.messages[idx] = msgData;
+      store.updateMessage(store.activeWsId, msgData);
       renderMessages();
     } else {
       // 消息不在列表中 → 追加
-      S.messages.push(msgData);
+      store.appendMessage(store.activeWsId, msgData);
       renderMessages();
     }
   } else if (action === "deleted") {
     // 消息删除 → 从列表中移除
-    S.messages = S.messages.filter(function(m) { return m.id !== msgData.id; });
+    store.deleteMessage(store.activeWsId, msgData.id);
     renderMessages();
   }
 }
@@ -331,43 +325,48 @@ function collectRunStats(msgData) {
 
 // 处理会话 SSE 事件
 function handleSessionSSEEvent(action, sessData) {
+  var wsId = store.activeWsId;
   if (action === "created") {
     // 新会话创建
     var existing = S.conversations.find(function(c) { return c.id === sessData.id; });
     if (!existing) {
-      S.conversations.unshift(sessData);
+      var newList = S.conversations.slice();
+      newList.unshift(sessData);
+      store.setConversations(wsId, newList);
       renderConversationList();
     }
   } else if (action === "updated") {
     // 会话更新
     var idx = S.conversations.findIndex(function(c) { return c.id === sessData.id; });
     if (idx >= 0) {
-      S.conversations[idx] = sessData;
+      var updatedList = S.conversations.slice();
+      updatedList[idx] = sessData;
+      store.setConversations(wsId, updatedList);
       renderConversationList();
     }
     // 如果是当前会话，更新快照、标题、上下文和 Todo 面板
     if (S.currentConvId === sessData.id) {
-      S.currentConv = sessData;
+      store.setCurrentConv(wsId, sessData);
       document.getElementById("agent-conv-title").textContent = sessData.title || _t("会话");
       // Session SSE 是完整快照；todos 使用 omitempty，字段缺失表示列表已清空，必须隐藏旧面板
       renderTodos(Array.isArray(sessData.todos) ? sessData.todos : []);
       // context_tokens 为 0 时（如仅改标题触发的更新）保留现有估算值，避免被清零
       if (sessData.context_tokens) {
-        S.contextUsage.used = sessData.context_tokens;
-        S.contextUsage.estimated = false;
+        store.setContextUsage(wsId, sessData.context_tokens, S.contextUsage.max, false);
         updateContextUsage();
       }
     }
   } else if (action === "deleted") {
     // 会话删除
-    S.conversations = S.conversations.filter(function(c) { return c.id !== sessData.id; });
+    var filtered = S.conversations.filter(function(c) { return c.id !== sessData.id; });
+    store.setConversations(wsId, filtered);
     renderConversationList();
     if (S.currentConvId === sessData.id) {
       resetPermissionState();
-      S.currentConvId = null;
+      store.setCurrentConvId(wsId, null);
       syncWxFollowSession();
-      S.currentConv = null;
-      S.messages = [];
+      store.setCurrentConv(wsId, null);
+      store.setMessages(wsId, []);
       renderMessages();
       renderTodos([]);
       document.getElementById("agent-conv-title").textContent = _t("选择或创建一个会话");

@@ -33,6 +33,8 @@ fn load_agent_workdir(app: &tauri::AppHandle) -> String {
 
 // 原子写入工作目录到配置文件
 fn save_agent_workdir(app: &tauri::AppHandle, workdir: &str) -> Result<(), AppError> {
+    let state = app.state::<AppState>();
+    let _lock = state.config_write_lock.lock().map_err(|e| e.to_string())?;
     let data_dir = config::get_data_dir(Some(app))?;
     let config_path = data_dir.join("config.json");
 
@@ -211,7 +213,7 @@ fn migrate_legacy_config(new_dir: &std::path::Path) {
             let mut new_value: serde_json::Value = serde_json::from_str(&s)
                 .map_err(|e| format!("解析 {} 失败: {}", new_path.display(), e))?;
             merge_json(&mut new_value, &legacy_value);
-            write_json_atomic(&new_path, &new_value)?;
+            write_json_direct(&new_path, &new_value)?;
         } else {
             if let Some(parent) = new_path.parent() {
                 std::fs::create_dir_all(parent)
@@ -313,7 +315,7 @@ fn build_adm_agent_config(
 ///   supports_images（取自 AppState，启动模型时按 mmproj 实际加载判定）
 ///   与 can_reason / reasoning_levels / default_reasoning_effort（按 --reasoning 参数判定），
 ///   以及 providers.local.base_url 中的端口，尽量保留文件中其它字段；
-/// 若结构异常无法原地更新，则回退写入完整默认结构。
+///   若结构异常无法原地更新，则回退写入完整默认结构。
 fn ensure_adm_agent_config(app: &tauri::AppHandle) -> Result<(), AppError> {
     let ctx = load_ctx_size(app)
         .filter(|v| *v > 0)
@@ -383,7 +385,7 @@ fn ensure_adm_agent_config(app: &tauri::AppHandle) -> Result<(), AppError> {
                     }
                 }
                 if updated {
-                    write_json_atomic(&path, &v)?;
+                    write_json_direct(&path, &v)?;
                     return Ok(());
                 }
             }
@@ -392,11 +394,12 @@ fn ensure_adm_agent_config(app: &tauri::AppHandle) -> Result<(), AppError> {
 
     // 文件不存在，或结构异常无法原地更新：写入完整默认结构
     let config = build_adm_agent_config(ctx, port, supports_images, supports_reasoning);
-    write_json_atomic(&path, &config)
+    write_json_direct(&path, &config)
 }
 
-/// 原子写入 JSON：直接写入目标文件，避免 macOS 上 rename 失败。
-fn write_json_atomic(path: &std::path::Path, value: &serde_json::Value) -> Result<(), AppError> {
+/// 直接写入 JSON 到目标文件（非原子：避免 macOS 上 rename 失败）。
+/// 进程在写入过程中崩溃可能导致文件截断/损坏，但 config.json 可由调用方重建。
+fn write_json_direct(path: &std::path::Path, value: &serde_json::Value) -> Result<(), AppError> {
     let json = serde_json::to_string_pretty(value)
         .map_err(|e| format!("序列化 admAgent 配置失败: {}", e))?;
     std::fs::write(path, &json)
@@ -411,9 +414,9 @@ fn write_json_atomic(path: &std::path::Path, value: &serde_json::Value) -> Resul
 ///    不能直接写 models 数组元素：/config/set 落盘到服务端数据配置文件，
 ///    与 Rust 写的 admAgent.json 合并时数组按拼接处理，会造成模型重复）；
 /// 3) POST /agent/update 重建 coordinator 内的 agent，使新 ModelInfo 即时生效。
-/// 统一视觉链路下 supports_images 不再决定图片处理（图片一律走 vision bridge），
-/// 仅用于前端 UI 展示与「多模态模型」下拉（agent_vision_model）筛选。
-/// 失败静默：server 未运行时下次启动自然读到新配置。
+///    统一视觉链路下 supports_images 不再决定图片处理（图片一律走 vision bridge），
+///    仅用于前端 UI 展示与「多模态模型」下拉（agent_vision_model）筛选。
+///    失败静默：server 未运行时下次启动自然读到新配置。
 pub fn sync_local_model_capabilities(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         if let Err(e) = ensure_adm_agent_config(&app) {
@@ -545,7 +548,7 @@ fn write_agent_vision_model(value: &str) -> Result<bool, AppError> {
         return Ok(false);
     }
     config["agent_vision_model"] = target;
-    write_json_atomic(&path, &config)?;
+    write_json_direct(&path, &config)?;
     Ok(true)
 }
 
@@ -580,11 +583,9 @@ fn slugify_model_id(name: &str) -> String {
         if c.is_ascii_alphanumeric() || c == '.' {
             out.push(c.to_ascii_lowercase());
             prev_dash = false;
-        } else if c.is_whitespace() || c == '-' || c == '_' {
-            if !out.is_empty() && !prev_dash {
-                out.push('-');
-                prev_dash = true;
-            }
+        } else if (c.is_whitespace() || c == '-' || c == '_') && !out.is_empty() && !prev_dash {
+            out.push('-');
+            prev_dash = true;
         }
         // 其它标点（如中文、括号等）直接忽略
     }
@@ -662,7 +663,7 @@ pub async fn add_cloud_provider(
         build_adm_agent_config(DEFAULT_CONTEXT_WINDOW, DEFAULT_PORT, false, false)
     };
 
-    if !config.get("providers").map_or(false, |v| v.is_object()) {
+    if !config.get("providers").is_some_and(|v| v.is_object()) {
         config["providers"] = serde_json::json!({});
     }
 
@@ -703,7 +704,7 @@ pub async fn add_cloud_provider(
     config["providers"][&key] = provider;
 
     // 4) 原子写入
-    write_json_atomic(&path, &config)?;
+    write_json_direct(&path, &config)?;
 
     Ok(serde_json::json!({ "key": key, "success": true }))
 }
@@ -829,7 +830,7 @@ pub async fn delete_cloud_provider(
     }
 
     providers.remove(&key);
-    write_json_atomic(&path, &config)?;
+    write_json_direct(&path, &config)?;
 
     Ok(serde_json::json!({ "key": key, "success": true }))
 }
@@ -892,7 +893,7 @@ pub async fn update_cloud_provider(
     });
 
     providers.insert(key.clone(), new_provider);
-    write_json_atomic(&path, &config)?;
+    write_json_direct(&path, &config)?;
 
     Ok(serde_json::json!({ "key": key, "success": true }))
 }
@@ -1025,6 +1026,8 @@ fn load_workdirs(app: &tauri::AppHandle) -> Vec<WorkDirEntry> {
 
 /// Write workdirs to config.json (read-modify-write to preserve other fields)
 fn save_workdirs_internal(app: &tauri::AppHandle, dirs: &[WorkDirEntry]) -> Result<(), AppError> {
+    let state = app.state::<AppState>();
+    let _lock = state.config_write_lock.lock().map_err(|e| e.to_string())?;
     let data_dir = config::get_data_dir(Some(app))?;
     let config_path = data_dir.join("config.json");
 
@@ -1145,6 +1148,9 @@ pub struct AgentServerStatus {
     pub running: bool,
     pub host: Option<String>,
     pub workspace_id: Option<String>,
+    /// 当前激活 workspace 的 client_id（页面 remount 时前端需用它同步 S.clientId，
+    /// 否则 current-session 等接口会因 client_id 不匹配返回 404）
+    pub client_id: Option<String>,
 }
 
 /// 会话可用判定：会话存在，且（共享 server 无子进程 或 自有子进程存活）
@@ -1538,7 +1544,7 @@ fn agent_process_exited(app: &tauri::AppHandle) -> bool {
     let mut c = match state.agent_child.lock() { Ok(g) => g, Err(_) => return false };
     match c.as_mut() {
         Some(child) => matches!(child.try_wait(), Ok(Some(_))),
-        None => false, // 共享 server 无子进程，不判定为退出
+        None => true, // 共享 server 无子进程，无法探测；返回 true 让前端尝试重启（start_agent_server 会先探活）
     }
 }
 
@@ -1549,6 +1555,11 @@ fn agent_process_exited(app: &tauri::AppHandle) -> bool {
 // api_debug_log 一次 atomic load 即返回，无任何开销也不产生文件。
 
 static LOG_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// 调试日志是否已开启（供 ilink.rs 的 flow_log 复用同一开关）
+pub fn is_debug_logging_enabled() -> bool {
+    LOG_ENABLED.load(Ordering::Relaxed)
+}
 // 日志文件句柄：None = 尚未打开 / 打开失败。开关打开时截断重建，
 // 为“每次重启软件自动清空上次日志”：重启后首次 enable 时 File::create 截断。
 static LOG_FILE: std::sync::OnceLock<std::sync::Mutex<Option<std::fs::File>>> = std::sync::OnceLock::new();
@@ -1681,7 +1692,7 @@ fn summarize_sse_event(payload: &serde_json::Value) -> Option<String> {
         // session 快照（context_tokens/is_busy 每次 token 变化都推）、file/lsp/
         // mcp/skills 等杂项：噪音，跳过。解析失败的原始事件仍记一行以便发现异常。
         "session" => None,
-        "" if payload.get("raw").is_some() => Some(format!("< raw {}", api_log_snippet(&payload.get("raw").and_then(|v| v.as_str()).unwrap_or(""), 200))),
+        "" if payload.get("raw").is_some() => Some(format!("< raw {}", api_log_snippet(payload.get("raw").and_then(|v| v.as_str()).unwrap_or(""), 200))),
         _ => None,
     }
 }
@@ -1697,10 +1708,19 @@ pub async fn stop_agent_server(state: tauri::State<'_, AppState>) -> Result<(), 
 pub async fn get_agent_server_status(state: tauri::State<'_, AppState>) -> Result<AgentServerStatus, AppError> {
     let active = state.active_workspace_id.lock().map(|g| g.clone()).unwrap_or(None);
     let running = server_process_alive(&state) && active.is_some();
+    let client_id = if running {
+        let sessions = state.agent_sessions.lock().map_err(|e| e.to_string())?;
+        active.as_ref()
+            .and_then(|ws_id| sessions.get(ws_id))
+            .map(|s| s.client_id.clone())
+    } else {
+        None
+    };
     Ok(AgentServerStatus {
         running,
         host: Some(AgentTransport::default_host().display()),
         workspace_id: active,
+        client_id,
     })
 }
 
@@ -1850,15 +1870,6 @@ pub async fn agent_subscribe_events(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn agent_unsubscribe_events(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
-    let mut sessions = state.agent_sessions.lock().map_err(|e| e.to_string())?;
-    for (_, sess) in sessions.iter_mut() {
-        sess.sse_stop.store(true, Ordering::Relaxed);
-        if let Some(task) = sess.sse_task.take() { task.abort(); }
-    }
-    Ok(())
-}
 
 pub fn kill_agent_session(state: &AppState) {
     // 停止所有 workspace 的 SSE 任务
@@ -2246,7 +2257,7 @@ pub async fn read_clipboard_files() -> Result<Vec<String>, String> {
 
     unsafe {
         // Finder/AppKit 复制文件：NSFilenamesPboardType 为权威类型（路径字符串数组）
-        if let Some(plist) = pb.propertyListForType(&NSFilenamesPboardType) {
+        if let Some(plist) = pb.propertyListForType(NSFilenamesPboardType) {
             if let Ok(arr) = plist.downcast::<NSArray>() {
                 for s in arr.iter() {
                     if let Some(str) = s.downcast_ref::<NSString>() {
@@ -2265,7 +2276,7 @@ pub async fn read_clipboard_files() -> Result<Vec<String>, String> {
         // 兜底：逐条读取 public.file-url（file:///path → /path；多选文件时每个文件一个 item）
         if let Some(items) = pb.pasteboardItems() {
             for item in items.iter() {
-                if let Some(s) = item.stringForType(&NSPasteboardTypeFileURL) {
+                if let Some(s) = item.stringForType(NSPasteboardTypeFileURL) {
                     let url = s.to_string();
                     let path = url.strip_prefix("file://").map(str::to_string).unwrap_or(url);
                     if !path.is_empty() && !paths.contains(&path) {

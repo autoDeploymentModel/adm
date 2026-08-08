@@ -1,6 +1,6 @@
 // 模型切换与 provider 列表
 import { t as _t } from "../../i18n.js";
-import { S, invoke } from "./store.js";
+import { S, invoke, store } from "./store.js";
 import { api } from "./api.js";
 import { escapeHtml, formatTokens, slugifyModelId, normalizeReasoningEffort } from "./utils.js";
 import { reportError, updateContextUsage } from "./ui.js";
@@ -24,7 +24,7 @@ export async function reloadAgentConfig() {
 export async function switchModel(providerKey, displayName, ctxLen) {
   console.log("[agent] 切换模型:", providerKey, displayName);
   S.settings.agent_default_provider = providerKey;
-  if (ctxLen) S.contextUsage.max = ctxLen;
+  if (ctxLen && S.serverInfo && S.serverInfo.workspace_id) store.setContextUsage(S.serverInfo.workspace_id, S.contextUsage.used, ctxLen, S.contextUsage.estimated);
 
   var dropdown = document.getElementById("agent-model-dropdown");
   if (dropdown) dropdown.classList.remove("show");
@@ -86,9 +86,9 @@ export async function refreshAgentInfo() {
   try {
     var info = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent");
     if (seq !== S.agentInfoSeq) return null; // 已有更新的请求，丢弃旧响应
-    S.agentInfo = info;
+    store.setAgentInfo(S.serverInfo.workspace_id, info);
     if (info && info.model && info.model.context_window) {
-      S.contextUsage.max = info.model.context_window;
+      store.setContextUsage(S.serverInfo.workspace_id, S.contextUsage.used, info.model.context_window, S.contextUsage.estimated);
       updateContextUsage();
     }
     updateModelBtn();

@@ -61,10 +61,11 @@ export async function sendMessage() {
         reportError(e, { prefix: _t("取消排队失败: ") });
         return;
       }
-      S.queuedRun = null;
+      var cancelWsId = S.queuedRun.workspaceId;
+      store.clearQueuedRun(cancelWsId);
       // 若无其它运行则整体回到就绪态；若其它会话仍在执行则保持运行态
       if (!S.activeRun) {
-        S.isSending = false;
+        store.cancelRun(cancelWsId);
         clearSendSafetyTimer();
         updateStatusBar("ready", null, S.contextUsage.used);
       }
@@ -87,16 +88,13 @@ export async function sendMessage() {
     if (S.queuedRun) {
       // 取消当前运行后仍有排队运行：由排队运行接管（服务端队列 FIFO，取消后即轮到它）
       log.debug("SEND", "sendMessage: 取消当前运行，排队运行接管: " + S.queuedRun.sessionId);
-      S.activeRun = S.queuedRun;
-      S.queuedRun = null;
+      store.promoteQueuedRun(activeRun.workspaceId);
       startSendSafetyTimer();
       updateSendButton();
       renderConversationList();
       return;
     }
-    S.isSending = false;
-    S.activeRun = null;
-    S.queuedRun = null;
+    store.cancelRun(activeRun.workspaceId);
     updateSendButton();
     updateStatusBar("ready", null, S.contextUsage.used);
     clearSendSafetyTimer();
@@ -172,7 +170,7 @@ export async function sendMessage() {
 
   // 立即显示用户消息（使用临时 ID，以便 SSE 到来时去重替换）
   var tempId = "temp-user-" + Date.now();
-  S.messages.push({ id: tempId, role: "user", content: text, _temp: true, _attachments: filesToSend.length > 0 ? filesToSend.map(function(f) { return f.name; }) : null });
+  store.appendMessage(workspaceId, { id: tempId, role: "user", content: text, _temp: true, _attachments: filesToSend.length > 0 ? filesToSend.map(function(f) { return f.name; }) : null });
   renderMessages();
   input.value = "";
   autoResize(input);
@@ -204,7 +202,7 @@ export async function sendMessage() {
     }
     log.debug("SEND", "sendMessage: 消息已发送, runId=" + runId + " wsId=" + workspaceId + " sessionId=" + sessionId);
     // 初始化本轮运行统计：供假完成检测（A）与自动续跑进度判定（C）使用
-    S.runStats = {
+    store.setRunStats(workspaceId, {
       sessionId: sessionId,
       prompt: text || _t("（用户发来附件，请查看并处理）"),
       toolCalls: 0,
@@ -212,7 +210,7 @@ export async function sendMessage() {
       sideEffectSuccess: 0,
       seenMsgIds: {},
       startedAt: Date.now(),
-    };
+    });
     // 手动发送成功 → 武装自动续跑（重置轮数/进度计数，绑定本会话）
     armAutoContinue(sessionId);
     // 排队场景提示：queuedRun 已在发送前设置（供指示器/按钮/列表标识用），此处仅提示与刷新
@@ -233,7 +231,7 @@ export async function sendMessage() {
       clearSendSafetyTimer();
       updateStatusBar("ready", null, S.contextUsage.used);
     }
-    S.messages.push({ role: "error", content: _t("发送失败: ") + getErrorMessage(e), type: "error" });
+    store.appendMessage(workspaceId, { role: "error", content: _t("发送失败: ") + getErrorMessage(e), type: "error" });
     renderMessages();
   }
 }

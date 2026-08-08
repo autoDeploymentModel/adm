@@ -59,6 +59,9 @@ async function init() {
     const status = await invoke("get_agent_server_status");
     if (status.running && status.host) {
       S.serverInfo = { host: status.host, workspace_id: status.workspace_id || "" };
+      // 复用已运行的 server 时必须同步 client_id：remount 后 S.clientId 已重新生成，
+      // 若不更新则 current-session 等接口会因 client_id 不匹配返回 404
+      if (status.client_id) S.clientId = status.client_id;
     } else {
       // 启动 server
       try {
@@ -107,12 +110,9 @@ async function init() {
         // 更新 serverInfo 的 workspace_id
         if (S.workspaceInfo && S.workspaceInfo.id) {
           S.serverInfo.workspace_id = S.workspaceInfo.id;
-          // 设置 activeWsId：init 时首个 workspace 就是激活的，
-          // 后续切换时 switchToWorkspace 才能正确保存旧 workspace 状态
-          S.activeWsId = S.workspaceInfo.id;
           // 必须用 setActive 而非 registerWorkspace：setActive 会设置
-          // store.activeWsId 并把 S 绑定到该 workspace。否则 store.activeWsId
-          // 保持 null —— Proxy 自动同步失效、startRun/completeRun 的 bindToS
+          // store.activeWsId 并把 S 绑定到该 workspace（bindToS 同步 S.activeWsId）。
+          // 否则 store.activeWsId 保持 null —— startRun/completeRun 的 bindToS
           // 不执行、首次切换时旧 workspace 状态不会被保存（切回即丢失）。
           store.setActive(S.workspaceInfo.id);
         }
@@ -161,10 +161,11 @@ async function init() {
 
     // 获取 Agent 信息 (当前模型等)
     try {
-      S.agentInfo = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent");
+      var info = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent");
+      store.setAgentInfo(S.serverInfo.workspace_id, info);
       // 更新 contextUsage.max
-      if (S.agentInfo && S.agentInfo.model && S.agentInfo.model.context_window) {
-        S.contextUsage.max = S.agentInfo.model.context_window;
+      if (info && info.model && info.model.context_window) {
+        store.setContextUsage(S.serverInfo.workspace_id, S.contextUsage.used, info.model.context_window, S.contextUsage.estimated);
       }
       updateContextUsage();
     } catch (e) {
@@ -237,8 +238,7 @@ async function reconcileSendingState() {
   if (!S.isSending) return;
   var run = S.activeRun;
   if (!run) {
-    S.isSending = false;
-    S.queuedRun = null;
+    store.cancelRun(store.activeWsId);
     updateSendButton();
     updateStatusBar("ready", null, S.contextUsage.used);
     return;
@@ -261,9 +261,7 @@ async function reconcileSendingState() {
   // 启动窗口内（尚无助手输出）即便 is_busy=false 也保留指示器，等待 SSE 流继续。
   if (!busy && lastAssistantTurnFinished()) {
     console.warn("[agent] 挂载对账：运行会话已结束，重置发送态");
-    S.isSending = false;
-    S.activeRun = null;
-    S.queuedRun = null;
+    store.cancelRun(store.activeWsId);
     clearSendSafetyTimer();
     updateSendButton();
     updateStatusBar("ready", null, S.contextUsage.used);
@@ -289,9 +287,7 @@ async function handleServerDied() {
   serverRestarting = true;
   console.warn("[agent] admAgent server 意外退出，自动重启中...");
   showError(_t("admAgent 服务异常退出，正在自动重启..."));
-  S.isSending = false;
-  S.activeRun = null;
-  S.queuedRun = null;
+  store.cancelRun(store.activeWsId);
   updateSendButton();
   clearSendSafetyTimer();
   updateStatusBar("error", null, S.contextUsage.used);

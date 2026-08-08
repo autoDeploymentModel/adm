@@ -121,6 +121,7 @@ fn calc_part_file_progress(base_dir: &std::path::Path, download_url: &str) -> u8
 }
 
 #[tauri::command]
+#[allow(clippy::manual_inspect)]
 pub async fn download_and_extract_sd(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> Result<(), AppError> {
     // 检查是否已在下载中，防止并发
     {
@@ -343,6 +344,7 @@ pub async fn save_sd_image_as(app: tauri::AppHandle, source_path: String) -> Res
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn start_sd_generation(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,

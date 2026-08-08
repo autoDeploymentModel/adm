@@ -196,7 +196,7 @@ pub fn detect_gpu_vendor() -> Option<String> {
                 return Some("apple".to_string());
             }
         }
-        return None;
+        None
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]

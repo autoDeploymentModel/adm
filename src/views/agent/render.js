@@ -1,6 +1,6 @@
 // 消息渲染（增量 DOM 对齐）与 Todo 列表
 import { t as _t } from "../../i18n.js";
-import { S } from "./store.js";
+import { S, store } from "./store.js";
 import { renderMarkdown, formatTime, splitSystemInfo } from "./utils.js";
 import { updateScrollBottomBtn } from "./ui.js";
 
@@ -464,7 +464,7 @@ function buildPartElement(part, partIdx, role, msgKey) {
 // 数据源：selectConversation 的会话详情 + session SSE updated 事件（proto.Session 自带 todos）。
 export function renderTodos(todos) {
   if (S.currentConv) {
-    S.currentConv.todos = todos || [];
+    store.setCurrentConv(store.activeWsId, Object.assign({}, S.currentConv, { todos: todos || [] }));
   }
   var panel = document.getElementById("agent-todos-panel");
   var listEl = document.getElementById("agent-todos-list");
