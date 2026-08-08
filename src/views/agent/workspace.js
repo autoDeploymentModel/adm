@@ -179,7 +179,7 @@ async function renderWorkDirDropdown() {
 
     // 点击整行切换（用 classList 判断删除按钮，避免 delBtn 闭包未定义问题）
     item.addEventListener("click", async function(e) {
-      if (e.target.classList && e.target.classList.contains("workdir-dropdown-del")) return;
+      if (e.target instanceof Element && e.target.classList.contains("workdir-dropdown-del")) return;
       e.stopPropagation();
       closeWorkDirDropdown();
       if (!d.is_default) {
