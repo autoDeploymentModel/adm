@@ -7,7 +7,7 @@ import { log } from "./log.js";
 import { renderMessages, renderTodos } from "./render.js";
 import { loadConversations, renderConversationList, syncWxFollowSession } from "./session.js";
 import { loadTools } from "./tools.js";
-import { refreshAgentInfo } from "./model.js";
+import { refreshAgentInfo, refreshServerProviders, updateModelDropdown } from "./model.js";
 import { resetPermissionState, syncModeToServer } from "./permission.js";
 
 // ===== 会话上下文压缩 =====
@@ -83,9 +83,49 @@ export async function switchToWorkspace(wsId, wsPath) {
     updateStatusBar("ready", wsPath || null, 0);
     // 首次进入后保存到状态池（store.setActive 已注册，store 方法写入时自动快照）
   }
+
+  // 刷新云端模型列表：切换 workspace 后目标 workspace 的服务端 ConfigStore 可能过期
+  // （在另一个 workspace 添加云端模型时 config/set scope:0 只触发当前 workspace 的 autoReload），
+  // 需要重新加载 S.providers（全局 admAgent.json，始终最新）、触发目标 workspace 配置重载、
+  // 再拉取 /providers 快照并更新模型下拉。
+  await refreshProvidersOnSwitch(wsId);
+
   updateWorkspaceSelector();
   // 切换工作区后同步微信 follow session，防止微信消息仍用旧 workspace 的 session ID
   syncWxFollowSession();
+}
+
+// 切换 workspace 后刷新云端模型 provider 列表。
+// 1) 从 admAgent.json 重新加载 S.providers（全局文件，始终最新）
+// 2) 对目标 workspace 触发一次 config/set（scope:0），强制其 ConfigStore autoReload，
+//    从而拾取全局配置文件中其他 workspace 添加的云端模型
+// 3) 拉取目标 workspace 的 /providers 快照并更新模型下拉
+async function refreshProvidersOnSwitch(wsId) {
+  try {
+    S.providers = await invoke("list_cloud_providers");
+  } catch (_) {
+    S.providers = [];
+  }
+
+  // 目标 workspace 的 ConfigStore 可能未加载最新的全局配置（cloud providers 在
+  // 其他 workspace 通过 config/set scope:0 写入全局文件时只触发了那个 workspace 的
+  // autoReload）。用第一个 provider 的 api_key 做一次幂等 config/set 来触发 reload。
+  if (S.providers.length > 0 && S.serverInfo) {
+    var trigger = S.providers[0];
+    try {
+      await api("POST", "/v1/workspaces/" + wsId + "/config/set", {
+        scope: 0,
+        key: "providers." + trigger.key + ".api_key",
+        value: trigger.api_key || ""
+      });
+    } catch (_) {}
+  }
+
+  // 重置服务端快照（旧快照属于上一个 workspace），重新拉取目标 workspace 的 provider 列表
+  S.serverProviders = [];
+  S.serverProvidersLoaded = false;
+  await refreshServerProviders();
+  updateModelDropdown();
 }
 
 // ===== 工作区下拉列表 =====
