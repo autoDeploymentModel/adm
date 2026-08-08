@@ -212,7 +212,6 @@ const EN = {
   "查看模型": "View Model",
   "关闭模型": "Stop Model",
   "生成图片": "Generate Image",
-  "工具调用": "Tool Calling",
   "推理": "Reasoning",
   "图片识别": "Vision",
   " · 需内存 ": " · RAM: ",
