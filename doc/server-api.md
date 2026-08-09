@@ -76,10 +76,11 @@ GUI 客户端需根据运行平台选择合适的传输方式连接 server。
 
 | HTTP 状态码 | 触发条件 |
 |-------------|----------|
-| `400 Bad Request` | 请求体解析失败、Agent 未初始化、缺少路径参数、无效的权限操作、未知命令、无效的 client_id |
-| `404 Not Found` | 工作区不存在、LSP 客户端不存在、客户端未挂载 |
-| `409 Conflict` | 工作区正在关闭中 |
+| `400 Bad Request` | 请求体解析失败、Agent 未初始化、缺少路径参数、缺少 `client_id` 或 `client_id` 非 UUID 格式、无效的权限操作、未知命令、无效的 client_id |
+| `404 Not Found` | 工作区不存在、LSP 客户端不存在 |
+| `409 Conflict` | 工作区正在关闭中、客户端未挂载（无活跃 SSE 流）、服务器非空闲（有活跃会话）、客户端已被回收 |
 | `500 Internal Server Error` | 其他未预期错误 |
+| `503 Service Unavailable` | 服务器正在关闭中 |
 
 ---
 
@@ -102,7 +103,7 @@ GUI 客户端通过 `GET /v1/workspaces/{id}/events` 订阅 Server-Sent Events�
 }
 ```
 
-其中外层 `type`/`payload` 是 `pubsub.Event`，内层 `type`/`payload` 是具体事件数据。
+其中外层 `type`/`payload` 是 `pubsub.Payload`，内层 `type`/`payload` 是具体事件数据。
 
 ### 事件类型一览
 
@@ -155,6 +156,37 @@ GUI 客户端通过 `GET /v1/workspaces/{id}/events` 订阅 Server-Sent Events�
 
 **关联策略**：优先用 `run_id` 关联（当客户端发送消息时设置了 `run_id`），否则退化为 `session_id` 关联。
 
+#### AgentEvent（Agent 事件）
+
+Agent 运行过程中产生的事件，包括错误、响应和摘要通知。
+
+```json
+{
+  "type": "agent_event",
+  "payload": {
+    "type": "updated",
+    "payload": {
+      "type": "error",
+      "message": { ... },
+      "error": "错误信息（仅 type=error 时有值）",
+      "run_id": "运行ID（可选，用于精确关联）",
+      "session_id": "会话ID（摘要事件时使用）",
+      "session_title": "会话标题",
+      "progress": "进度描述",
+      "done": false
+    }
+  }
+}
+```
+
+`AgentEvent.type` 取值：
+
+| 值 | 说明 |
+|----|------|
+| `error` | Agent 运行出错（`error` 字段携带错误文本，`run_id` 可用于关联具体请求） |
+| `response` | Agent 响应 |
+| `summarize` | 会话摘要事件（携带 `session_id`、`session_title`、`progress`、`done`） |
+
 #### PermissionRequest（权限请求）
 
 当 Agent 执行需要用户授权的操作时，会通过此事件通知 GUI 弹出权限确认对话框。
@@ -177,6 +209,93 @@ GUI 客户端通过 `GET /v1/workspaces/{id}/events` 订阅 Server-Sent Events�
   }
 }
 ```
+
+#### LSPEvent（LSP 事件）
+
+LSP 客户端状态或诊断变更通知。
+
+```json
+{
+  "type": "lsp_event",
+  "payload": {
+    "type": "created",
+    "payload": {
+      "type": "state_changed",
+      "name": "gopls",
+      "state": 2,
+      "error": "",
+      "diagnostic_count": 3
+    }
+  }
+}
+```
+
+`LSPEvent.type` 取值：
+
+| 值 | 说明 |
+|----|------|
+| `state_changed` | LSP 服务器状态变更 |
+| `diagnostics_changed` | 诊断信息变更 |
+
+`LSPEvent.state` 为整数类型（`lsp.ServerState`），取值见 [LSP 接口](#61-列出-lsp-客户端)。
+
+#### MCPEvent（MCP 事件）
+
+MCP 客户端状态或工具/资源列表变更通知。
+
+```json
+{
+  "type": "mcp_event",
+  "payload": {
+    "type": "created",
+    "payload": {
+      "type": "state_changed",
+      "name": "filesystem",
+      "state": "connected",
+      "error": "",
+      "tool_count": 5,
+      "prompt_count": 2,
+      "resource_count": 10
+    }
+  }
+}
+```
+
+`MCPEvent.type` 取值：
+
+| 值 | 说明 |
+|----|------|
+| `state_changed` | MCP 客户端状态变更 |
+| `tools_list_changed` | 工具列表变更 |
+| `prompts_list_changed` | Prompt 列表变更 |
+| `resources_list_changed` | Resource 列表变更 |
+
+`MCPEvent.state` 为字符串类型（`MCPState`），取值：`disabled`、`starting`、`connected`、`error`。
+
+#### SkillsEvent（Skill 事件）
+
+Skill 发现状态变更通知。
+
+```json
+{
+  "type": "skills_event",
+  "payload": {
+    "type": "created",
+    "payload": {
+      "states": [
+        {
+          "name": "skill名称",
+          "path": "/path/to/skill.md",
+          "state": 0,
+          "error": ""
+        }
+      ]
+    }
+  }
+}
+```
+
+`SkillState.state` 为整数类型（`SkillDiscoveryState`），取值：`0`=正常、`1`=错误。
 
 ---
 
@@ -258,11 +377,46 @@ POST /v1/control
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `command` | string | 是 | 控制命令，目前仅支持 `"shutdown"` |
+| `command` | string | 是 | 控制命令，支持 `"shutdown"` 和 `"shutdown_if_idle"` |
+
+**`command` 取值说明**：
+
+| 值 | 说明 |
+|----|------|
+| `shutdown` | 请求关闭服务器。仅当服务器空闲（无活跃会话）时才会执行关闭，否则返回 `409` |
+| `shutdown_if_idle` | 仅在服务器空闲时关闭。行为与 `shutdown` 相同，但旧版服务器会拒绝此命令（返回 `400`），可用于探测服务器是否支持空闲检测 |
+
+> **注意**：两种命令均经过空闲检测。`shutdown_if_idle` 的存在是为了让客户端可以探测服务器是否支持此检查——不支持该功能的服务器会返回 `400`（未知命令），而非关闭并中断其他会话。
 
 **响应**：`200 OK`（无响应体）
 
-**错误**：`400` - 未知命令
+**错误**：
+- `400` - 未知命令
+- `409` - 服务器非空闲（存在活跃会话，无法关闭）
+
+---
+
+### 1.5 回收客户端
+
+```
+DELETE /v1/clients/{client_id}
+```
+
+回收指定客户端，释放其持有的所有资源（如当前会话绑定、SSE 流等）。
+
+GUI 客户端在退出时应调用此接口，确保服务器端清理客户端状态。
+
+**路径参数**：
+
+| 参数 | 说明 |
+|------|------|
+| `client_id` | 客户端 ID（UUID 格式） |
+
+**响应**：`200 OK`（无响应体）
+
+**错误**：
+- `400` - 无效的 client_id
+- `409` - 客户端已被回收
 
 ---
 
@@ -353,6 +507,10 @@ DELETE /v1/workspaces/{id}?client_id={client_id}
 | `client_id` | string (UUID) | 是 | 客户端标识 |
 
 **响应**：`200 OK`（无响应体）
+
+**错误**：
+- `400` - 缺少 `client_id` 或格式无效
+- `409` - 工作区正在关闭中
 
 ---
 
@@ -902,6 +1060,8 @@ POST /v1/workspaces/{id}/config/model
 | `model.temperature` | *float64 | 否 | 采样温度 |
 | `model.top_p` | *float64 | 否 | Top-p |
 | `model.top_k` | *int64 | 否 | Top-k |
+| `model.frequency_penalty` | *float64 | 否 | 频率惩罚 |
+| `model.presence_penalty` | *float64 | 否 | 存在惩罚 |
 | `model.provider_options` | map | 否 | 提供商特定选项 |
 
 **响应**：`200 OK`（无响应体）
@@ -969,7 +1129,7 @@ GET /v1/workspaces/{id}/lsps
 {
   "gopls": {
     "name": "gopls",
-    "state": "connected",
+    "state": 2,
     "error": "",
     "diagnostic_count": 3,
     "connected_at": "2025-07-26T10:00:00Z"
@@ -977,7 +1137,24 @@ GET /v1/workspaces/{id}/lsps
 }
 ```
 
-LSP `state` 取值：`disabled`、`starting`、`connected`、`error`
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `name` | string | LSP 客户端名称 |
+| `state` | int | LSP 服务器状态（整数，见下表） |
+| `error` | string | 错误信息（无错误时为空字符串） |
+| `diagnostic_count` | int | 诊断信息数量 |
+| `connected_at` | string | 连接时间（ISO 8601） |
+
+LSP `state` 取值（`lsp.ServerState`，序列化为整数）：
+
+| 值 | 常量名 | 说明 |
+|----|--------|------|
+| `0` | `StateUnstarted` | 未启动 |
+| `1` | `StateStarting` | 启动中 |
+| `2` | `StateReady` | 已就绪 |
+| `3` | `StateError` | 错误 |
+| `4` | `StateStopped` | 已停止 |
+| `5` | `StateDisabled` | 已禁用 |
 
 ---
 
@@ -1333,7 +1510,24 @@ GET /v1/workspaces/{id}/mcp/states
 }
 ```
 
-MCP `state` 取值：`disabled`、`starting`、`connected`、`error`
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `name` | string | MCP 客户端名称 |
+| `state` | string | MCP 客户端状态（字符串，见下表） |
+| `error` | string | 错误信息（无错误时为空字符串） |
+| `tool_count` | int | 工具数量 |
+| `prompt_count` | int | Prompt 数量 |
+| `resource_count` | int | Resource 数量 |
+| `connected_at` | string | 连接时间（ISO 8601） |
+
+MCP `state` 取值（`proto.MCPState`，序列化为字符串）：
+
+| 值 | 说明 |
+|----|------|
+| `disabled` | 已禁用 |
+| `starting` | 启动中 |
+| `connected` | 已连接 |
+| `error` | 错误 |
 
 ---
 
@@ -1531,11 +1725,49 @@ interface PermissionRequest {
   id: string;
   session_id: string;
   tool_call_id: string;
-  tool_name: string;             // bash | edit | write | multiedit | download | fetch | view | ls
+  tool_name: string;             // bash | edit | write | multiedit | download | fetch | agentic_fetch | view | ls
   description: string;
   action: string;
   params: any;                   // 根据工具名反序列化为具体类型
   path: string;
+}
+```
+
+### PermissionNotification 结构
+
+```typescript
+interface PermissionNotification {
+  tool_call_id: string;
+  granted: boolean;
+  denied: boolean;
+}
+```
+
+### AgentEvent 结构
+
+```typescript
+interface AgentEvent {
+  type: "error" | "response" | "summarize";
+  message: Message;              // 关联的消息（可能为零值）
+  error?: string;                // 错误文本（仅 type=error 时有值）
+  run_id?: string;               // 运行 ID（用于关联具体请求）
+  session_id?: string;           // 会话 ID（摘要事件时使用）
+  session_title?: string;        // 会话标题
+  progress?: string;             // 进度描述（摘要事件）
+  done?: boolean;                // 是否完成（摘要事件）
+}
+```
+
+### RunComplete 结构
+
+```typescript
+interface RunComplete {
+  session_id: string;
+  run_id?: string;               // 运行 ID（用于关联请求）
+  message_id: string;
+  text?: string;                 // 最终文本输出
+  error?: string;                // 错误信息（非空表示运行出错）
+  cancelled?: boolean;           // 是否被取消
 }
 ```
 
@@ -1553,15 +1785,64 @@ interface MCPClientInfo {
 }
 ```
 
+### MCPEvent 结构
+
+```typescript
+interface MCPEvent {
+  type: "state_changed" | "tools_list_changed" | "prompts_list_changed" | "resources_list_changed";
+  name: string;
+  state: "disabled" | "starting" | "connected" | "error";
+  error?: string;
+  tool_count?: number;
+  prompt_count?: number;
+  resource_count?: number;
+}
+```
+
 ### LSPClientInfo 结构
 
 ```typescript
 interface LSPClientInfo {
   name: string;
-  state: "disabled" | "starting" | "connected" | "error";
+  state: number;                 // 0=unstarted, 1=starting, 2=ready, 3=error, 4=stopped, 5=disabled
   error?: string;
   diagnostic_count?: number;
   connected_at: string;          // ISO 8601 时间
+}
+```
+
+### LSPEvent 结构
+
+```typescript
+interface LSPEvent {
+  type: "state_changed" | "diagnostics_changed";
+  name: string;
+  state: number;                 // 0=unstarted, 1=starting, 2=ready, 3=error, 4=stopped, 5=disabled
+  error?: string;
+  diagnostic_count?: number;
+}
+```
+
+### SkillsEvent 结构
+
+```typescript
+interface SkillsEvent {
+  states: SkillState[];
+}
+
+interface SkillState {
+  name: string;
+  path: string;
+  state: number;                 // 0=normal, 1=error
+  error?: string;
+}
+```
+
+### ConfigChanged 结构
+
+```typescript
+interface ConfigChanged {
+  workspace_id: string;
 }
 ```
 
@@ -1587,6 +1868,18 @@ interface ModelInfo {
   can_reason?: boolean;
   cost_per_1m_in?: number;
   cost_per_1m_out?: number;
+  cost_per_1m_in_cached?: number;
+  cost_per_1m_out_cached?: number;
+  options?: ModelInfoOptions;
+}
+
+interface ModelInfoOptions {
+  provider_options?: Record<string, any>;
+  temperature?: number;
+  top_p?: number;
+  top_k?: number;
+  frequency_penalty?: number;
+  presence_penalty?: number;
 }
 
 interface SelectedModel {
@@ -1597,6 +1890,8 @@ interface SelectedModel {
   temperature?: number;
   top_p?: number;
   top_k?: number;
+  frequency_penalty?: number;
+  presence_penalty?: number;
   provider_options?: Record<string, any>;
 }
 ```
@@ -1616,13 +1911,16 @@ enum Scope {
 
 ### B.1 客户端标识 (client_id)
 
-以下接口**必须**提供 `client_id` 查询参数（UUID 格式）：
+以下接口**必须**提供 `client_id`（UUID 格式，服务端会校验格式）：
 
-- `DELETE /v1/workspaces/{id}`
-- `POST /v1/workspaces/{id}/current-session`
-- `GET /v1/workspaces/{id}/events`
+- `DELETE /v1/clients/{client_id}` — 路径参数
+- `DELETE /v1/workspaces/{id}?client_id=...` — 查询参数
+- `POST /v1/workspaces/{id}/current-session?client_id=...` — 查询参数
+- `GET /v1/workspaces/{id}/events?client_id=...` — 查询参数
 
-GUI 启动时应生成一个全局唯一的 `client_id` 并在整个生命周期中复用。
+如果 `client_id` 缺失或不是有效的 UUID，服务器返回 `400 Bad Request`。
+
+GUI 启动时应生成一个全局唯一的 `client_id` 并在整个生命周期中复用。退出时应调用 `DELETE /v1/clients/{client_id}` 以释放服务器端资源。
 
 ### B.2 典型 GUI 工作流
 
@@ -1639,6 +1937,8 @@ GUI 启动时应生成一个全局唯一的 `client_id` 并在整个生命周期
 10.   [SSE] permission_request 事件         → 弹出权限确认对话框
 11. POST /v1/workspaces/{id}/permissions/grant → 用户授权/拒绝
 12.   [SSE] run_complete 事件               → 标记本轮对话结束
+...
+13. DELETE /v1/clients/{client_id}         → GUI 退出时回收客户端
 ```
 
 ### B.3 SSE 事件处理要点
@@ -1647,6 +1947,7 @@ GUI 启动时应生成一个全局唯一的 `client_id` 并在整个生命周期
 2. **断线重连**：SSE 连接断开后需自动重连，重连后重新获取会话状态（`GET /sessions/{sid}/messages`）以补全可能缺失的消息。
 3. **多客户端同步**：多个 GUI 客户端可同时连接同一工作区，通过 SSE 事件保持状态同步。`attached_clients` 字段反映当前查看某会话的客户端数量。
 4. **RunComplete 关联**：使用 `run_id` 精确关联请求与完成事件，特别是在会话繁忙时排队多个请求的场景。
+5. **AgentEvent 错误关联**：`agent_event` 事件中的 `error` 类型也携带 `run_id`，可用于将运行时错误关联到具体请求。
 
 ### B.4 权限处理流程
 
@@ -1658,71 +1959,84 @@ GUI 启动时应生成一个全局唯一的 `client_id` 并在整个生命周期
   → [SSE] permission_notification 事件确认处理结果
 ```
 
-### B.5 API 端点汇总表
+### B.5 服务器关闭流程
+
+```
+GUI 准备退出或升级：
+  → POST /v1/control { "command": "shutdown_if_idle" }
+  → 200 OK: 服务器空闲，已开始关闭
+  → 409: 服务器非空闲（有活跃会话），拒绝关闭
+  → 400: 服务器不支持空闲检测（旧版本）
+```
+
+> **注意**：`shutdown` 和 `shutdown_if_idle` 均经过空闲检测。两者的区别仅在于旧版服务器的行为：旧版会直接执行 `shutdown`（可能中断活跃会话），但对 `shutdown_if_idle` 返回 `400`（未知命令）。
+
+### B.6 API 端点汇总表
 
 | # | 方法 | 路径 | 说明 |
 |---|------|------|------|
 | 1 | GET | `/v1/health` | 健康检查 |
 | 2 | GET | `/v1/version` | 版本信息 |
 | 3 | GET | `/v1/config` | 全局配置 |
-| 4 | POST | `/v1/control` | 控制命令 |
-| 5 | GET | `/v1/workspaces` | 列出工作区 |
-| 6 | POST | `/v1/workspaces` | 创建工作区 |
-| 7 | DELETE | `/v1/workspaces/{id}` | 删除工作区 |
-| 8 | GET | `/v1/workspaces/{id}` | 获取工作区 |
-| 9 | POST | `/v1/workspaces/{id}/current-session` | 设置当前会话 |
-| 10 | GET | `/v1/workspaces/{id}/config` | 工作区配置 |
-| 11 | GET | `/v1/workspaces/{id}/providers` | 可用 Providers |
-| 12 | GET | `/v1/workspaces/{id}/events` | SSE 事件流 |
-| 13 | GET | `/v1/workspaces/{id}/messages/user` | 所有用户消息 |
-| 14 | GET | `/v1/workspaces/{id}/sessions` | 列出会话 |
-| 15 | POST | `/v1/workspaces/{id}/sessions` | 创建会话 |
-| 16 | GET | `/v1/workspaces/{id}/sessions/{sid}` | 获取会话 |
-| 17 | PUT | `/v1/workspaces/{id}/sessions/{sid}` | 更新会话 |
-| 18 | DELETE | `/v1/workspaces/{id}/sessions/{sid}` | 删除会话 |
-| 19 | GET | `/v1/workspaces/{id}/sessions/{sid}/history` | 历史文件 |
-| 20 | GET | `/v1/workspaces/{id}/sessions/{sid}/messages` | 会话消息 |
-| 21 | GET | `/v1/workspaces/{id}/sessions/{sid}/messages/user` | 用户消息 |
-| 22 | GET | `/v1/workspaces/{id}/sessions/{sid}/filetracker/files` | 追踪文件 |
-| 23 | POST | `/v1/workspaces/{id}/filetracker/read` | 记录文件读取 |
-| 24 | GET | `/v1/workspaces/{id}/filetracker/lastread` | 最后读取时间 |
-| 25 | GET | `/v1/workspaces/{id}/lsps` | LSP 客户端列表 |
-| 26 | GET | `/v1/workspaces/{id}/lsps/{lsp}/diagnostics` | LSP 诊断 |
-| 27 | POST | `/v1/workspaces/{id}/lsps/start` | 启动 LSP |
-| 28 | POST | `/v1/workspaces/{id}/lsps/stop` | 停止所有 LSP |
-| 29 | GET | `/v1/workspaces/{id}/permissions/skip` | 获取跳过权限状态 |
-| 30 | POST | `/v1/workspaces/{id}/permissions/skip` | 设置跳过权限 |
-| 31 | POST | `/v1/workspaces/{id}/permissions/grant` | 授权权限请求 |
-| 31a | GET | `/v1/workspaces/{id}/agent/mode` | 获取 Agent 模式（Plan/执行） |
-| 31b | POST | `/v1/workspaces/{id}/agent/mode` | 设置 Agent 模式（Plan/执行） |
-| 32 | GET | `/v1/workspaces/{id}/agent` | Agent 信息 |
-| 33 | POST | `/v1/workspaces/{id}/agent` | 发送消息给 Agent |
-| 34 | POST | `/v1/workspaces/{id}/agent/init` | 初始化 Agent |
-| 35 | POST | `/v1/workspaces/{id}/agent/update` | 更新 Agent |
-| 36 | GET | `/v1/workspaces/{id}/agent/sessions/{sid}` | Agent 会话信息 |
-| 37 | POST | `/v1/workspaces/{id}/agent/sessions/{sid}/cancel` | 取消会话 |
-| 38 | GET | `/v1/workspaces/{id}/agent/sessions/{sid}/prompts/queued` | 排队状态 |
-| 39 | GET | `/v1/workspaces/{id}/agent/sessions/{sid}/prompts/list` | 排队列表 |
-| 40 | POST | `/v1/workspaces/{id}/agent/sessions/{sid}/prompts/clear` | 清除排队 |
-| 41 | POST | `/v1/workspaces/{id}/agent/sessions/{sid}/summarize` | 摘要会话 |
-| 42 | POST | `/v1/workspaces/{id}/agent/sessions/{sid}/undo` | 撤销上一轮 |
-| 43 | POST | `/v1/workspaces/{id}/agent/sessions/{sid}/shell` | 执行 Shell |
-| 44 | POST | `/v1/workspaces/{id}/config/set` | 设置配置字段 |
-| 45 | POST | `/v1/workspaces/{id}/config/remove` | 移除配置字段 |
-| 46 | POST | `/v1/workspaces/{id}/config/model` | 设置模型 |
-| 47 | POST | `/v1/workspaces/{id}/config/compact` | 设置 Compact 模式 |
-| 48 | POST | `/v1/workspaces/{id}/config/provider-key` | 设置 API Key |
-| 49 | GET | `/v1/workspaces/{id}/project/needs-init` | 检查项目初始化 |
-| 50 | POST | `/v1/workspaces/{id}/project/init` | 标记已初始化 |
-| 51 | GET | `/v1/workspaces/{id}/project/init-prompt` | 初始化提示 |
-| 52 | GET | `/v1/workspaces/{id}/skills` | Skills 列表 |
-| 53 | POST | `/v1/workspaces/{id}/skills/read` | 读取 Skill |
-| 54 | POST | `/v1/workspaces/{id}/mcp/refresh-tools` | 刷新 MCP 工具 |
-| 55 | POST | `/v1/workspaces/{id}/mcp/read-resource` | 读取 MCP 资源 |
-| 56 | POST | `/v1/workspaces/{id}/mcp/get-prompt` | 获取 MCP Prompt |
-| 57 | GET | `/v1/workspaces/{id}/mcp/states` | MCP 状态 |
-| 58 | POST | `/v1/workspaces/{id}/mcp/refresh-prompts` | 刷新 MCP Prompts |
-| 59 | POST | `/v1/workspaces/{id}/mcp/refresh-resources` | 刷新 MCP Resources |
-| 60 | POST | `/v1/workspaces/{id}/mcp/docker/enable` | 启用 Docker MCP |
-| 61 | POST | `/v1/workspaces/{id}/mcp/docker/disable` | 禁用 Docker MCP |
-| 62 | GET | `/v1/docs/` | Swagger 文档 |
+| 4 | POST | `/v1/control` | 控制命令（shutdown / shutdown_if_idle） |
+| 5 | DELETE | `/v1/clients/{client_id}` | 回收客户端 |
+| 6 | GET | `/v1/workspaces` | 列出工作区 |
+| 7 | POST | `/v1/workspaces` | 创建工作区 |
+| 8 | DELETE | `/v1/workspaces/{id}` | 删除工作区 |
+| 9 | GET | `/v1/workspaces/{id}` | 获取工作区 |
+| 10 | POST | `/v1/workspaces/{id}/current-session` | 设置当前会话 |
+| 11 | GET | `/v1/workspaces/{id}/config` | 工作区配置 |
+| 12 | GET | `/v1/workspaces/{id}/providers` | 可用 Providers |
+| 13 | GET | `/v1/workspaces/{id}/events` | SSE 事件流 |
+| 14 | GET | `/v1/workspaces/{id}/messages/user` | 所有用户消息 |
+| 15 | GET | `/v1/workspaces/{id}/sessions` | 列出会话 |
+| 16 | POST | `/v1/workspaces/{id}/sessions` | 创建会话 |
+| 17 | GET | `/v1/workspaces/{id}/sessions/{sid}` | 获取会话 |
+| 18 | PUT | `/v1/workspaces/{id}/sessions/{sid}` | 更新会话 |
+| 19 | DELETE | `/v1/workspaces/{id}/sessions/{sid}` | 删除会话 |
+| 20 | GET | `/v1/workspaces/{id}/sessions/{sid}/history` | 历史文件 |
+| 21 | GET | `/v1/workspaces/{id}/sessions/{sid}/messages` | 会话消息 |
+| 22 | GET | `/v1/workspaces/{id}/sessions/{sid}/messages/user` | 用户消息 |
+| 23 | GET | `/v1/workspaces/{id}/sessions/{sid}/filetracker/files` | 追踪文件 |
+| 24 | POST | `/v1/workspaces/{id}/filetracker/read` | 记录文件读取 |
+| 25 | GET | `/v1/workspaces/{id}/filetracker/lastread` | 最后读取时间 |
+| 26 | GET | `/v1/workspaces/{id}/lsps` | LSP 客户端列表 |
+| 27 | GET | `/v1/workspaces/{id}/lsps/{lsp}/diagnostics` | LSP 诊断 |
+| 28 | POST | `/v1/workspaces/{id}/lsps/start` | 启动 LSP |
+| 29 | POST | `/v1/workspaces/{id}/lsps/stop` | 停止所有 LSP |
+| 30 | GET | `/v1/workspaces/{id}/permissions/skip` | 获取跳过权限状态 |
+| 31 | POST | `/v1/workspaces/{id}/permissions/skip` | 设置跳过权限 |
+| 32 | POST | `/v1/workspaces/{id}/permissions/grant` | 授权权限请求 |
+| 33 | GET | `/v1/workspaces/{id}/agent/mode` | 获取 Agent 模式（Plan/执行） |
+| 34 | POST | `/v1/workspaces/{id}/agent/mode` | 设置 Agent 模式（Plan/执行） |
+| 35 | GET | `/v1/workspaces/{id}/agent` | Agent 信息 |
+| 36 | POST | `/v1/workspaces/{id}/agent` | 发送消息给 Agent |
+| 37 | POST | `/v1/workspaces/{id}/agent/init` | 初始化 Agent |
+| 38 | POST | `/v1/workspaces/{id}/agent/update` | 更新 Agent |
+| 39 | GET | `/v1/workspaces/{id}/agent/sessions/{sid}` | Agent 会话信息 |
+| 40 | POST | `/v1/workspaces/{id}/agent/sessions/{sid}/cancel` | 取消会话 |
+| 41 | GET | `/v1/workspaces/{id}/agent/sessions/{sid}/prompts/queued` | 排队状态 |
+| 42 | GET | `/v1/workspaces/{id}/agent/sessions/{sid}/prompts/list` | 排队列表 |
+| 43 | POST | `/v1/workspaces/{id}/agent/sessions/{sid}/prompts/clear` | 清除排队 |
+| 44 | POST | `/v1/workspaces/{id}/agent/sessions/{sid}/summarize` | 摘要会话 |
+| 45 | POST | `/v1/workspaces/{id}/agent/sessions/{sid}/undo` | 撤销上一轮 |
+| 46 | POST | `/v1/workspaces/{id}/agent/sessions/{sid}/shell` | 执行 Shell |
+| 47 | POST | `/v1/workspaces/{id}/config/set` | 设置配置字段 |
+| 48 | POST | `/v1/workspaces/{id}/config/remove` | 移除配置字段 |
+| 49 | POST | `/v1/workspaces/{id}/config/model` | 设置模型 |
+| 50 | POST | `/v1/workspaces/{id}/config/compact` | 设置 Compact 模式 |
+| 51 | POST | `/v1/workspaces/{id}/config/provider-key` | 设置 API Key |
+| 52 | GET | `/v1/workspaces/{id}/project/needs-init` | 检查项目初始化 |
+| 53 | POST | `/v1/workspaces/{id}/project/init` | 标记已初始化 |
+| 54 | GET | `/v1/workspaces/{id}/project/init-prompt` | 初始化提示 |
+| 55 | GET | `/v1/workspaces/{id}/skills` | Skills 列表 |
+| 56 | POST | `/v1/workspaces/{id}/skills/read` | 读取 Skill |
+| 57 | POST | `/v1/workspaces/{id}/mcp/refresh-tools` | 刷新 MCP 工具 |
+| 58 | POST | `/v1/workspaces/{id}/mcp/read-resource` | 读取 MCP 资源 |
+| 59 | POST | `/v1/workspaces/{id}/mcp/get-prompt` | 获取 MCP Prompt |
+| 60 | GET | `/v1/workspaces/{id}/mcp/states` | MCP 状态 |
+| 61 | POST | `/v1/workspaces/{id}/mcp/refresh-prompts` | 刷新 MCP Prompts |
+| 62 | POST | `/v1/workspaces/{id}/mcp/refresh-resources` | 刷新 MCP Resources |
+| 63 | POST | `/v1/workspaces/{id}/mcp/docker/enable` | 启用 Docker MCP |
+| 64 | POST | `/v1/workspaces/{id}/mcp/docker/disable` | 禁用 Docker MCP |
+| 65 | GET | `/v1/docs/` | Swagger 文档 |
