@@ -448,12 +448,24 @@ function bindEvents() {
     input.multiple = true;
     // 仅支持图片 + 文本类附件（与 attach.js 白名单一致）；其余格式由 addPendingFiles 提示"暂不支持"
     input.accept = "image/*,.txt,.log,.md,.markdown,.json,.csv,.xml,.yaml,.yml,.ini,.conf,.env,.sql,.js,.mjs,.ts,.py,.go,.rs,.java,.c,.h,.cpp,.hpp,.cs,.php,.rb,.sh,.bat,.ps1,.html,.css,.scss";
+    // 必须挂到 DOM 上，否则 macOS WKWebView 可能因 GC 回收游离元素导致 onchange 不触发
+    input.style.display = "none";
+    document.body.appendChild(input);
+    var done = false;
+    function cleanup() {
+      if (done) return;
+      done = true;
+      document.body.removeChild(input);
+    }
     input.onchange = function() {
       var files = input.files;
       if (files && files.length > 0) {
         addPendingFiles(files);
       }
+      cleanup();
     };
+    // 用户取消选择时 onchange 不触发，用失焦兜底清理
+    input.addEventListener("blur", cleanup);
     input.click();
   });
 
