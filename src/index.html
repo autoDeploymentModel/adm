@@ -115,7 +115,8 @@
 
     #home-btn,
     #settings-btn,
-    #agent-btn {
+    #agent-btn,
+    #skills-btn {
       cursor: pointer;
       font-size: 13px;
       padding: 2px 10px;
@@ -140,13 +141,15 @@
 
     #home-btn:hover,
     #settings-btn:hover,
-    #agent-btn:hover {
+    #agent-btn:hover,
+    #skills-btn:hover {
       color: var(--c-accent);
     }
 
     #home-btn.active,
     #settings-btn.active,
-    #agent-btn.active {
+    #agent-btn.active,
+    #skills-btn.active {
       background: rgba(var(--c-accent-rgb), 0.20);
       color: var(--c-text-hi);
       border-radius: 6px;
@@ -154,7 +157,8 @@
     }
     #home-btn.active .btn-icon,
     #settings-btn.active .btn-icon,
-    #agent-btn.active .btn-icon {
+    #agent-btn.active .btn-icon,
+    #skills-btn.active .btn-icon {
       color: var(--c-accent);
     }
 
@@ -304,6 +308,10 @@
         <span class="btn-icon">&#129302;</span>
         <span class="btn-text" data-i18n="Agent">Agent</span>
       </div>
+      <div id="skills-btn" onclick="location.hash='#/skills'">
+        <span class="btn-icon">🧩</span>
+        <span class="btn-text" data-i18n="技能管理">技能管理</span>
+      </div>
       <div id="hw-items">
         <div class="hw-item">
           <span class="hw-label" data-i18n="内存">内存</span>
@@ -381,7 +389,7 @@
 
     // ===== 导航激活态 =====
     function setActiveNav(id) {
-      ["home-btn", "settings-btn", "agent-btn"].forEach(function (b) {
+      ["home-btn", "settings-btn", "agent-btn", "skills-btn"].forEach(function (b) {
         const el = document.getElementById(b);
         if (el) el.classList.toggle("active", b === id);
       });
@@ -715,6 +723,7 @@
       "/image":    { load: () => import("./views/model_image.js"),    nav: "home-btn" },
       "/settings": { load: () => import("./views/settings.js"),       nav: "settings-btn" },
       "/agent":    { load: () => import("./views/agent.js"),          nav: "agent-btn" },
+      "/skills":   { load: () => import("./views/skills.js"),         nav: "skills-btn" },
     };
 
     let currentView = null;

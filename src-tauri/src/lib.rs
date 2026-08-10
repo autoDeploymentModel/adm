@@ -3,7 +3,7 @@ mod common;
 mod pages;
 
 use app_state::AppState;
-use pages::{agent, index, model_list, model_image, settings, ilink};
+use pages::{agent, index, model_list, model_image, settings, ilink, skills};
 
 use tauri::Manager;
 use tauri::menu::{Menu, MenuItem};
@@ -224,6 +224,12 @@ pub fn run() {
             ilink::unbind_ilink,
             ilink::set_ilink_follow,
             ilink::set_ilink_current_session,
+            // skills.rs - 技能管理
+            skills::fetch_skill_store,
+            skills::install_skill,
+            skills::install_skill_from_zip,
+            skills::uninstall_skill,
+            skills::list_installed_skills,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

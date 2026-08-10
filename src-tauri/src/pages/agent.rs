@@ -1618,7 +1618,8 @@ fn api_log_snippet(s: &str, max: usize) -> String {
 /// forward_sse_events 转发，在这两处落盘即可完整复盘对话中断问题。
 /// 行格式：`{epoch_ms} {HH:MM:SS.mmm UTC} {内容}`，与 admAgent.log 对时时
 /// 本地时间 = UTC + 本机时区偏移。
-fn api_debug_log<F: FnOnce() -> String>(line: F) {
+/// pub(crate)：供 skills.rs 等其他页面模块复用同一日志通道。
+pub(crate) fn api_debug_log<F: FnOnce() -> String>(line: F) {
     if !LOG_ENABLED.load(Ordering::Relaxed) {
         return;
     }
