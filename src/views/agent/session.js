@@ -6,6 +6,7 @@ import { escapeHtml, formatTime } from "./utils.js";
 import { showError, showConfirm, showInfo, reportError, exitManualScrollMode, clearErrorNotices, updateContextUsage, updateStatusBar, updateSendButton } from "./ui.js";
 import { renderMessages, renderTodos } from "./render.js";
 import { resetPermissionState } from "./permission.js";
+import { log } from "./log.js";
 
 // 同步当前会话 ID 给微信 Bridge（跟随模式下微信消息以此为目标会话）；fire-and-forget
 export function syncWxFollowSession() {
@@ -200,6 +201,7 @@ function handleConvAction(action, convId) {
 }
 
 export async function selectConversation(convId) {
+  log.debug("SESSION", "selectConversation convId=" + (convId || "").slice(0, 8));
   if (convId !== S.currentConvId) { resetPermissionState(); exitManualScrollMode(); clearErrorNotices(); }
   store.setCurrentConvId(S.serverInfo.workspace_id, convId);
   syncWxFollowSession();

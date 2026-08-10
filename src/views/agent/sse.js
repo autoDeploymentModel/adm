@@ -166,6 +166,13 @@ function handleSSEEvent(payload, ctx) {
       handleSessionSSEEvent(innerType, actualData);
       break;
     case "run_complete":
+      // 防御：子 Agent（agent 工具嵌套调用）的 run_complete 携带复合 session_id
+      //（格式 `{parentMsgId}$$call_{toolCallId}`）且 run_id 为空，
+      // 绝不能让它误触发父运行的收尾逻辑。
+      if (typeof actualData.session_id === "string" && actualData.session_id.indexOf("$$call_") !== -1) {
+        console.log("[agent] 忽略子 Agent 的 run_complete:", actualData.session_id);
+        break;
+      }
       // SSE 是 workspace 级事件流；只让当前运行自己的完成事件收尾发送态，
       // 避免同 workspace 其它会话/排队任务的 run_complete 提前结束当前运行。
       // 用 store 处理前的 activeRun 做判定：store.completeRun 可能已把

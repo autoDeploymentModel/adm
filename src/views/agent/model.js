@@ -4,6 +4,7 @@ import { S, invoke, store } from "./store.js";
 import { api } from "./api.js";
 import { escapeHtml, formatTokens, slugifyModelId, normalizeReasoningEffort } from "./utils.js";
 import { reportError, updateContextUsage } from "./ui.js";
+import { log } from "./log.js";
 
 // 重载服务端 Agent 配置。/agent/update 报 "agent configuration is missing" 说明 coordinator
 // 已被一次失败的 /agent/init 置空（如曾切到服务端未加载的 provider），此时改调
@@ -22,7 +23,7 @@ export async function reloadAgentConfig() {
 // ===== 模型切换 =====
 // 切换模型：保存设置 → 通知服务端重新加载 → 刷新 agentInfo → 更新 UI
 export async function switchModel(providerKey, displayName, ctxLen) {
-  console.log("[agent] 切换模型:", providerKey, displayName);
+  log.info("MODEL", "switchModel provider=" + providerKey + " name=" + displayName + " ctxLen=" + (ctxLen || "?"));
   S.settings.agent_default_provider = providerKey;
   if (ctxLen && S.serverInfo && S.serverInfo.workspace_id) store.setContextUsage(S.serverInfo.workspace_id, S.contextUsage.used, ctxLen, S.contextUsage.estimated);
 

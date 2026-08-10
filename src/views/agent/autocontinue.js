@@ -6,6 +6,7 @@ import { S, store } from "./store.js";
 import { api } from "./api.js";
 import { generateRunId } from "./utils.js";
 import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, reportError } from "./ui.js";
+import { log } from "./log.js";
 
 // 单个任务（一次手动发送）最多自动续跑轮数（硬熔断）
 var MAX_AUTO_ROUNDS = 10;
@@ -26,6 +27,7 @@ export function setAutoContinueEnabled(enabled) {
 // 手动发送成功后调用：绑定本任务的续跑目标会话并清零计数
 export function armAutoContinue(sessionId) {
   S.autoContinue = { armedSession: sessionId, rounds: 0, lastIncomplete: -1, noProgress: 0 };
+  log.debug("AUTOC", "arm session=" + (sessionId || "").slice(0, 8));
 }
 
 // 手动取消 / 运行出错 / 任务完成时调用
@@ -41,11 +43,12 @@ export async function maybeAutoContinue(data, runStats) {
   // 只续跑本客户端自己发起的任务；后台会话（如微信 Bot）不受影响
   if (!ac || !ac.armedSession || !sid || sid !== ac.armedSession) return;
   // 用户已切走会话 → 不在其背后静默烧 token，直接解除
-  if (sid !== S.currentConvId) { resetAutoContinue(); return; }
+  if (sid !== S.currentConvId) { log.debug("AUTOC", "skip: 用户已切走会话"); resetAutoContinue(); return; }
   // Plan 模式下不续跑：没有 edit/todos 工具，残留 todos 永远完不成，续跑只会空转
   // 重置 armed 状态，避免残留会话 ID 被后续外部 run_complete（如微信 Bot）误触发续跑
-  if (S.settings && S.settings.agent_plan_mode) { resetAutoContinue(); return; }
-  if (!isAutoContinueEnabled() || S.isSending || !S.serverInfo) return;
+  if (S.settings && S.settings.agent_plan_mode) { log.debug("AUTOC", "skip: Plan 模式"); resetAutoContinue(); return; }
+  if (!isAutoContinueEnabled()) { log.debug("AUTOC", "skip: 功能关闭"); return; }
+  if (S.isSending || !S.serverInfo) { log.debug("AUTOC", "skip: isSending=" + S.isSending); return; }
 
   // 取最新会话快照判定 todos（session SSE 可能晚于 run_complete，主动拉一次）
   var sess;
@@ -57,7 +60,7 @@ export async function maybeAutoContinue(data, runStats) {
   }
   var todos = Array.isArray(sess.todos) ? sess.todos : [];
   var incomplete = todos.filter(function(t) { return t.status !== "completed"; }).length;
-  if (todos.length === 0 || incomplete === 0) { resetAutoContinue(); return; }
+  if (todos.length === 0 || incomplete === 0) { log.debug("AUTOC", "skip: todos 全完成或为空"); resetAutoContinue(); return; }
 
   // 期间用户已手动发新消息 / 状态被重置
   if (S.autoContinue !== ac || ac.armedSession !== sid) return;
@@ -84,7 +87,7 @@ export async function maybeAutoContinue(data, runStats) {
   }
   ac.lastIncomplete = incomplete;
   ac.rounds++;
-  console.log("[agent] 自动续跑 第 " + ac.rounds + " 轮, 剩余 todos: " + incomplete + ", 无进展轮数: " + ac.noProgress);
+  log.info("AUTOC", "续跑第 " + ac.rounds + "/" + MAX_AUTO_ROUNDS + " 轮, 剩余 todos: " + incomplete + ", 无进展轮数: " + ac.noProgress);
   await sendContinuePrompt(sid);
 }
 

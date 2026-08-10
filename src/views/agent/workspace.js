@@ -54,6 +54,7 @@ export async function switchToWorkspace(wsId, wsPath) {
     // 刷新服务端数据：后台运行可能已更新会话标题、上下文用量、Agent 信息
     loadConversations();
     refreshAgentInfo();
+    loadTools();
   } else {
     // 首次进入该 workspace：初始化
     clearSendSafetyTimer();

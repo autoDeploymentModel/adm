@@ -5,6 +5,13 @@
 export const invoke = window.__adm_invoke;
 export const listen = window.__adm_listen;
 
+// store.js 不能直接 import log.js（log.js 用 window.__adm_invoke 不依赖 store，
+// 但为避免未来循环依赖风险，直接内联写日志）
+function _log(level, cat, msg) {
+  try { invoke("agent_debug_log", { line: "[" + cat + "][" + level + "] " + msg }).catch(function() {}); } catch (_) {}
+  console.log("[agent][" + cat + "] " + msg);
+}
+
 // ===== 每个 workspace 的独立状态 =====
 class WorkspaceState {
   constructor() {
@@ -203,6 +210,7 @@ class Store {
   startRun(wsId, sessionId, runId) {
     var ws = this.workspaces.get(wsId);
     if (!ws) return;
+    _log("debug", "STORE", "startRun ws=" + wsId.slice(0, 8) + " session=" + (sessionId || "").slice(0, 8) + " run=" + runId);
     ws.isSending = true;
     ws.activeRun = { workspaceId: wsId, sessionId: sessionId, runId: runId };
     ws.queuedRun = null;
@@ -233,9 +241,11 @@ class Store {
     var ws = this.workspaces.get(wsId);
     if (!ws) return;
     if (ws.queuedRun) {
+      _log("debug", "STORE", "completeRun ws=" + wsId.slice(0, 8) + " → 排队运行接管");
       ws.activeRun = ws.queuedRun;
       ws.queuedRun = null;
     } else {
+      _log("debug", "STORE", "completeRun ws=" + wsId.slice(0, 8) + " → isSending=false");
       ws.isSending = false;
       ws.activeRun = null;
       // 非接管：清理 runStats。active ws 的 maybeAutoContinue 用的是
@@ -251,6 +261,7 @@ class Store {
   cancelRun(wsId) {
     var ws = this.workspaces.get(wsId);
     if (!ws) return;
+    _log("warn", "STORE", "cancelRun ws=" + wsId.slice(0, 8));
     ws.isSending = false;
     ws.activeRun = null;
     ws.queuedRun = null;
@@ -336,6 +347,14 @@ class Store {
         this.handleSessionEvent(wsId, innerType, actualData);
         break;
       case "run_complete":
+        // 子 Agent（agent 工具嵌套调用）的 run_complete 携带复合 session_id
+        //（格式 `{parentMsgId}$$call_{toolCallId}`）且 run_id 为空，
+        // 绝不能让它误触发父运行的 completeRun（会清空 isSending/activeRun）。
+        var rcSession = actualData.session_id || "";
+        if (typeof rcSession === "string" && rcSession.indexOf("$$call_") !== -1) {
+          _log("debug", "STORE", "handleSSEEvent 跳过子 Agent run_complete session=" + rcSession.slice(0, 20) + "...");
+          break;
+        }
         this.completeRun(wsId);
         break;
     }

@@ -1518,11 +1518,24 @@ async fn forward_sse_events(
                     else if let Some(d) = line.strip_prefix("data: ") { event_data = d.to_string(); }
                 }
                 if !event_data.is_empty() {
+                    // 子 Agent（agent 工具嵌套调用）的 SSE 事件携带复合 session_id
+                    //（格式 `{parentMsgId}$$call_{toolCallId}`），前端不处理。
+                    // 但仍需写日志（run_complete / agent_event 等关键事件），方便排查
+                    // 子 Agent 出错问题；只是不转发到前端，避免 SSE 带宽浪费和日志洪泛。
+                    let is_sub_agent = event_data.contains("$$call_");
                     let payload: serde_json::Value = serde_json::from_str(&event_data)
                         .unwrap_or(serde_json::json!({ "raw": event_data }));
                     // 只写关键事件；流式增量/快照等噪音返回 None 不落盘。
-                    api_debug_log(|| summarize_sse_event(&payload).unwrap_or_default());
-                    let _ = app.emit("agent-sse-event", serde_json::json!({ "type": event_type, "data": payload, "workspace_id": workspace_id }));
+                    if is_sub_agent {
+                        // 子 Agent 事件只记关键节点（run_complete/agent_event/error），不记流式噪音
+                        let ev_type = payload.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                        if ev_type == "run_complete" || ev_type == "agent_event" {
+                            api_debug_log(|| summarize_sse_event(&payload).unwrap_or_default());
+                        }
+                    } else {
+                        api_debug_log(|| summarize_sse_event(&payload).unwrap_or_default());
+                        let _ = app.emit("agent-sse-event", serde_json::json!({ "type": event_type, "data": payload, "workspace_id": workspace_id }));
+                    }
                 }
             }
         }
@@ -1612,6 +1625,44 @@ fn api_log_snippet(s: &str, max: usize) -> String {
     flat.chars().take(max).collect()
 }
 
+/// 将 JSON Value 中包含敏感关键词的 key（api_key/secret/password/token）的值替换为 "***"，
+/// 用于 HTTP 请求体日志脱敏，避免 API Key 等凭据明文写入 adm_api_debug.log。
+fn mask_sensitive_json(value: &serde_json::Value) -> String {
+    let mut v = value.clone();
+    mask_sensitive_in_place(&mut v);
+    api_log_snippet(&v.to_string(), 800)
+}
+fn mask_sensitive_in_place(value: &mut serde_json::Value) {
+    const SENSITIVE: &[&str] = &["api_key", "apikey", "secret", "password", "token"];
+    match value {
+        serde_json::Value::Object(map) => {
+            let keys_to_mask: Vec<String> = map.keys()
+                .filter(|k| {
+                    let lower = k.to_lowercase();
+                    SENSITIVE.iter().any(|sk| lower.contains(sk))
+                })
+                .cloned()
+                .collect();
+            for k in keys_to_mask {
+                if let Some(v) = map.get_mut(&k) {
+                    if !matches!(v, serde_json::Value::Null | serde_json::Value::Bool(_)) {
+                        *v = serde_json::Value::String("***".to_string());
+                    }
+                }
+            }
+            for (_, v) in map.iter_mut() {
+                mask_sensitive_in_place(v);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                mask_sensitive_in_place(v);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// 写一条 admAgent API 交互日志。开关关闭时一次 atomic load 即返回（闭包
 /// 不执行，无格式化开销）。与 devtools 控制台的 [agent] API / SSE 日志对应：
 /// 所有前端请求都经 agent_http_request 代理、所有 SSE 事件都经
@@ -1684,8 +1735,13 @@ fn summarize_sse_event(payload: &serde_json::Value) -> Option<String> {
         // 的流式增量（一轮上百条 thinking 是主噪音）。能看出“这轮到底产出了
         // 哪些消息”——全程只一条 assistant 无 tool = 叙述性 stop。
         "message" => {
-            if inner != "created" { return None; }
-            Some(format!("< message created role={} id={}", field("role"), field("id")))
+            if inner == "created" {
+                Some(format!("< message created role={} id={}", field("role"), field("id")))
+            } else if inner == "deleted" {
+                Some(format!("< message deleted id={}", field("id")))
+            } else {
+                None
+            }
         }
         // 权限请求 / 结果：Plan/Yolo 下一般直通，出现即值得记。
         "permission_request" => Some(format!("< permission_request tool={} session={}", field("tool_name"), field("session_id"))),
@@ -1740,7 +1796,7 @@ pub async fn agent_http_request(
         api_debug_log(|| format!(
             "HTTP > {} {}{}",
             method.to_uppercase(), path,
-            body.as_ref().map(|b| format!(" body={}", api_log_snippet(&b.to_string(), 800))).unwrap_or_default()
+            body.as_ref().map(|b| format!(" body={}", mask_sensitive_json(b))).unwrap_or_default()
         ));
     }
     let client = build_client(&AgentTransport::default_host(), Duration::from_secs(5))
