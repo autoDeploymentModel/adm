@@ -959,6 +959,23 @@ async function refreshData() {
   // 6. 重绘两个 tab（商店卡片需按最新 installed 刷新，修复「已装仍显示安装」）
   renderMine();
   renderStore();
+
+  // 7. 通知 agent server 重新发现技能：服务端技能列表是 workspace 创建时的
+  //    快照，安装/卸载不会自动刷新，必须显式 reload，否则 Agent 页 Skill 栏
+  //    看不到新增、卸载的仍然残留。reload 成功会发布 skills_event，
+  //    Agent 页 SSE 收到后自动刷新工具列表。
+  notifySkillsReload();
+}
+
+// 触发 agent server 重新发现技能（fire-and-forget，不阻塞 UI 渲染）
+async function notifySkillsReload() {
+  if (!state.mineWsId) return;
+  try {
+    await api("POST", "/v1/workspaces/" + state.mineWsId + "/skills/reload");
+    apiLog("info", "已通知服务端重新发现技能 ws=" + state.mineWsId);
+  } catch (e) {
+    apiLog("warn", "通知服务端刷新技能失败: " + e);
+  }
 }
 
 function renderMine() {
