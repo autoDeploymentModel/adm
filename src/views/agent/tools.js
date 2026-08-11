@@ -1,6 +1,6 @@
 // 工具面板（Skill / LSP / MCP）
 import { t as _t } from "../../i18n.js";
-import { S } from "./store.js";
+import { S, invoke } from "./store.js";
 import { api } from "./api.js";
 
 // ===== 工具列表 =====
@@ -18,12 +18,13 @@ export async function loadTools() {
     error:     { label: _t("错误"),   color: "red" },
   };
 
-  // 并行请求四个端点（工作区详情用于 skill 状态快照）
+  // 并行请求四个端点（工作区详情用于 skill 状态快照），外加本地磁盘扫描兜底
   var results = await Promise.allSettled([
     api("GET", "/v1/workspaces/" + wsId + "/skills"),
     api("GET", "/v1/workspaces/" + wsId + "/mcp/states"),
     api("GET", "/v1/workspaces/" + wsId + "/lsps"),
     api("GET", "/v1/workspaces/" + wsId),
+    invoke("list_installed_skills"),
   ]);
 
   // Skill 状态快照 map: name → {state, error}（state: 0=正常 1=错误）
@@ -71,6 +72,24 @@ export async function loadTools() {
         status: status.label,
         statusColor: status.color,
         title: status.title,
+      });
+    });
+  }
+
+  // 磁盘扫描兜底合并：server 的 skill 列表是 workspace 创建时的发现快照，
+  // 技能管理页安装的全局/项目技能不会触发服务端重新发现，需以磁盘为准补齐，
+  // 否则切回 Agent 页 Skill 栏看不到刚安装的技能。
+  if (results[4].status === "fulfilled" && Array.isArray(results[4].value)) {
+    var knownNames = {};
+    skillTools.forEach(function (tool) { knownNames[tool.name] = true; });
+    results[4].value.forEach(function (s) {
+      if (!s || !s.name || knownNames[s.name]) return;
+      knownNames[s.name] = true;
+      skillTools.push({
+        name: s.name,
+        status: _t("已加载"),
+        statusColor: "green",
+        title: "",
       });
     });
   }
