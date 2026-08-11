@@ -4,9 +4,15 @@ import { S, invoke, store } from "./store.js";
 import { api } from "./api.js";
 import { escapeHtml, formatTime } from "./utils.js";
 import { showError, showConfirm, showInfo, reportError, exitManualScrollMode, clearErrorNotices, updateContextUsage, updateStatusBar, updateSendButton } from "./ui.js";
+import { getErrorMessage } from "./error.js";
 import { renderMessages, renderTodos } from "./render.js";
 import { resetPermissionState } from "./permission.js";
 import { log } from "./log.js";
+
+// 自动创建会话的连续失败计数：workspace 状态异常时（activeWsId 为 null、workspace 未注册），
+// store 各 setter 静默失败、currentConvId 恒为 null，loadConversations ↔ newConversation
+// 会递归无限创建会话；连续失败超过上限即熔断报错，避免刷爆服务端会话表
+var autoCreateStrikes = 0;
 
 // 同步当前会话 ID 给微信 Bridge（跟随模式下微信消息以此为目标会话）；fire-and-forget
 export function syncWxFollowSession() {
@@ -69,9 +75,19 @@ export async function loadConversations(restoreCurrent) {
     if (S.conversations.length > 0) {
       // 选中第一个会话
       await selectConversation(S.conversations[0].id);
+      if (S.currentConvId) autoCreateStrikes = 0;
     } else {
-      // 没有会话则自动创建一个
+      // 没有会话则自动创建一个；创建后 currentConvId 仍为 null（store 写入静默失败）
+      // 说明 workspace 状态异常，连续 3 次即熔断，防止无限创建会话
+      autoCreateStrikes++;
+      if (autoCreateStrikes > 3) {
+        autoCreateStrikes = 0;
+        console.error("[agent] 自动创建会话连续失败，中止循环: workspace 状态异常");
+        showError(_t("无法创建会话：工作区状态异常，请尝试切换工作区或重启应用"));
+        return;
+      }
       await newConversation();
+      if (S.currentConvId) autoCreateStrikes = 0;
     }
   }
 }
@@ -261,6 +277,31 @@ export async function selectConversation(convId) {
   } catch (e) {
     console.error("[agent] 加载会话失败:", convId, e);
     reportError(e, { prefix: _t("加载会话失败: ") });
+    // 会话在服务端已不存在（数据库被清理 / 跨 workspace 残留 ID）时，
+    // 立即清理无效 currentConvId 并从本地列表移除，否则后续发送消息
+    // 全部报 "failed to get session: sql: no rows in result set"
+    var errText = getErrorMessage(e);
+    var isGone = errText.indexOf("no rows") !== -1 || errText.indexOf("404") !== -1
+      || (e && (e.status === 404 || e.code === 404));
+    if (isGone) {
+      if (S.currentConvId === convId) {
+        store.setCurrentConvId(S.serverInfo.workspace_id, null);
+        store.setCurrentConv(S.serverInfo.workspace_id, null);
+        store.setMessages(S.serverInfo.workspace_id, []);
+        syncWxFollowSession();
+      }
+      var filtered = S.conversations.filter(function(c) { return c.id !== convId; });
+      store.setConversations(S.serverInfo.workspace_id, filtered);
+      renderConversationList();
+      if (filtered.length > 0) {
+        await selectConversation(filtered[0].id);
+      } else {
+        document.getElementById("agent-conv-title").textContent = _t("选择或创建一个会话");
+        renderMessages();
+        renderTodos([]);
+        updateSendButton();
+      }
+    }
   }
 }
 

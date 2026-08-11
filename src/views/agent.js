@@ -118,14 +118,27 @@ async function init() {
         }
       } catch (_) {
         S.workspaceInfo = { path: workdir, name: workdir.split(/[\\/]/).pop() };
+        // 兜底：workspace 列表/创建 API 失败时，激活 Rust 端默认 workspace，
+        // 保证 store.activeWsId 非 null。否则 store 各 setter（setCurrentConvId 等）
+        // 因 workspace 未注册而静默失败，loadConversations 会陷入无限创建会话的死循环
+        if (S.serverInfo && S.serverInfo.workspace_id) {
+          store.setActive(S.serverInfo.workspace_id);
+        }
       }
     } else {
       S.workspaceInfo = { path: "默认", name: _t("默认工作区") };
+      // 同上兜底：workdir 为空时也确保状态机有激活的 workspace
+      if (S.serverInfo && S.serverInfo.workspace_id) {
+        store.setActive(S.serverInfo.workspace_id);
+      }
     }
     updateWorkspaceSelector();
     updateStatusBar("ready", workdir, 0);
   } catch (_) {
     S.workspaceInfo = { path: "默认", name: _t("默认工作区") };
+    if (S.serverInfo && S.serverInfo.workspace_id) {
+      store.setActive(S.serverInfo.workspace_id);
+    }
   }
   if (seq !== S.initSeq) return;
 
