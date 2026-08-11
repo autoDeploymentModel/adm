@@ -981,10 +981,58 @@ pub fn get_platform_arch() -> String {
     std::env::consts::ARCH.to_string()
 }
 
-/// 获取已配置的 agent 工作目录（默认为空字符串）
+/// 平台默认工作目录：
+/// - Windows：软件安装目录（ADM.exe 所在目录）
+/// - macOS：用户主目录（$HOME）
+/// - 兜底：exe 所在目录
+fn platform_default_workdir() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(dir) = config::get_exe_dir() {
+            return dir;
+        }
+        // exe 目录获取失败时退回用户主目录
+    }
+    dirs::home_dir().unwrap_or_else(|| {
+        config::get_exe_dir().unwrap_or_else(|_| PathBuf::from("."))
+    })
+}
+
+/// 工作目录为空时初始化默认工作目录（幂等）：
+/// - Windows：软件安装目录
+/// - macOS：用户主目录
+/// 同步写入工作目录列表（默认项）与旧字段 agent_workdir，返回当前生效的工作目录。
+fn ensure_default_workdir(app: &tauri::AppHandle) -> String {
+    let existing = load_agent_workdir(app);
+    if !existing.is_empty() {
+        return existing;
+    }
+    // 旧字段为空但列表里有目录：以默认项补齐旧字段，不覆盖用户已有列表
+    let dirs = load_workdirs(app);
+    if !dirs.is_empty() {
+        let list_default = dirs
+            .iter()
+            .find(|d| d.is_default)
+            .or_else(|| dirs.first())
+            .map(|d| d.path.clone())
+            .unwrap_or_default();
+        if !list_default.is_empty() {
+            let _ = save_agent_workdir(app, &list_default);
+            return list_default;
+        }
+    }
+    let default_path = platform_default_workdir().to_string_lossy().to_string();
+    let _ = save_workdirs_internal(
+        app,
+        &[WorkDirEntry { path: default_path.clone(), is_default: true }],
+    );
+    default_path
+}
+
+/// 获取已配置的 agent 工作目录；为空时自动初始化平台默认工作目录
 #[tauri::command]
 pub async fn get_agent_workdir(app: tauri::AppHandle) -> Result<String, AppError> {
-    Ok(load_agent_workdir(&app))
+    Ok(ensure_default_workdir(&app))
 }
 
 /// 保存 agent 工作目录到配置文件
@@ -1055,9 +1103,10 @@ fn save_workdirs_internal(app: &tauri::AppHandle, dirs: &[WorkDirEntry]) -> Resu
     Ok(())
 }
 
-/// 获取工作目录列表（含迁移逻辑）
+/// 获取工作目录列表（含迁移逻辑；列表为空时自动初始化平台默认工作目录）
 #[tauri::command]
 pub async fn get_workdirs(app: tauri::AppHandle) -> Result<Vec<WorkDirEntry>, AppError> {
+    ensure_default_workdir(&app);
     Ok(load_workdirs(&app))
 }
 
