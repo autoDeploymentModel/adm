@@ -34,6 +34,9 @@ pub async fn save_settings(app: tauri::AppHandle, settings: Settings) -> Result<
     // 值变化时触发服务端重载；失败静默（vision 缺省回退内置 admImage-model）
     crate::pages::agent::sync_agent_vision_model(&app, &settings.agent_vision_model);
 
+    // 同步「代理配置」到 admAgent.json 顶层 agent_proxy，失败静默
+    crate::pages::agent::sync_agent_proxy(&app, &settings.agent_proxy);
+
     dbg_log!("[DEBUG] Config saved successfully to: {:?}", config_path);
     Ok(())
 }

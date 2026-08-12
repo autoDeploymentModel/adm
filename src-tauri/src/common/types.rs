@@ -117,6 +117,20 @@ pub language: String,
 /// 空或缺失 = 内置 admImage-model；同步写入 admAgent.json 顶层 agent_vision_model 供 vision 子命令读取
 #[serde(default)]
 pub agent_vision_model: String,
+/// HTTP 代理配置（同步写入 admAgent.json 顶层 agent_proxy，供 admAgent 读取并应用到 LLM 客户端和 HTTP 工具）
+#[serde(default)]
+pub agent_proxy: AgentProxyConfig,
+}
+
+/// 代理配置（仅 admAgent 使用，桌面端业务请求不走代理）
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct AgentProxyConfig {
+    /// 是否启用代理
+    #[serde(default)]
+    pub enabled: bool,
+    /// 代理地址，如 "http://127.0.0.1:7890" 或 "socks5://127.0.0.1:1080"
+    #[serde(default)]
+    pub url: String,
 }
 
 // ===== 自动更新相关结构 =====

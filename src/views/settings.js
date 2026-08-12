@@ -246,6 +246,7 @@ const template = `
       <div class="nav-item active" data-panel="launch-params" id="nav-launch-params">${_t("模型启动参数")}</div>
       <div class="nav-item" data-panel="appearance" id="nav-appearance">${_t("外观主题")}</div>
       <div class="nav-item" data-panel="wxbot" id="nav-wxbot">${_t("微信 Bot")}</div>
+      <div class="nav-item" data-panel="proxy" id="nav-proxy">${_t("网络代理")}</div>
       <div class="nav-item" data-panel="version" id="nav-version">${_t("系统版本号")}</div>
       <div class="nav-item" data-panel="about" id="nav-about">${_t("关于")}</div>
     </nav>
@@ -445,6 +446,27 @@ const template = `
         <div class="param-group">
           <div class="param-group-title">${_t("最近活动")}</div>
           <div id="wxbot-activity" style="font-size:12px;color:var(--c-text-3);line-height:1.8;max-height:200px;overflow-y:auto;background:var(--c-panel-2);border:1px solid var(--c-border);border-radius:6px;padding:10px 12px;">${_t("暂无活动")}</div>
+        </div>
+      </div>
+
+      <div id="panel-proxy" class="panel">
+        <div class="panel-title">${_t("网络代理")}</div>
+        <div class="param-group">
+          <div class="param-group-title">${_t("代理设置")}</div>
+          <div class="param-row">
+            <div class="param-label">${_t("启用代理")}<div class="param-key">agent_proxy.enabled</div></div>
+            <div class="param-input">
+              <div class="checkbox-wrap"><input type="checkbox" id="proxy_enabled"><span>${_t("为 admAgent 的 LLM 请求启用代理")}</span></div>
+              <div class="param-desc">${_t("仅影响 admAgent 跟大模型交互的请求，桌面端下载等不走代理")}</div>
+            </div>
+          </div>
+          <div class="param-row">
+            <div class="param-label">${_t("代理地址")}<div class="param-key">agent_proxy.url</div></div>
+            <div class="param-input">
+              <input type="text" id="proxy_url" placeholder="http://127.0.0.1:7890" style="max-width:400px;">
+              <div class="param-desc">${_t("支持 http / https / socks5 协议，如 http://127.0.0.1:7890")}</div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -723,6 +745,40 @@ function setupAutoSave() {
   for (var i = 0; i < paramIds.length; i++) {
     var el = document.getElementById(paramIds[i]);
     if (el) el.addEventListener("change", autoSave);
+  }
+}
+
+async function saveProxy() {
+  const proxy = {
+    enabled: document.getElementById("proxy_enabled").checked,
+    url: document.getElementById("proxy_url").value.trim(),
+  };
+  if (proxy.enabled) {
+    if (!proxy.url) {
+      showToast(_t("启用代理时请填写代理地址"), true);
+      return;
+    }
+    if (!/^(https?|socks5):\/\//i.test(proxy.url)) {
+      showToast(_t("代理地址需以 http://、https:// 或 socks5:// 开头"), true);
+      return;
+    }
+  }
+  try {
+    let s = await invoke()("load_settings");
+    s.agent_proxy = proxy;
+    await invoke()("save_settings", { settings: s });
+    showToast(_t("代理设置已保存"));
+  } catch (e) {
+    console.error("[settings] 保存代理设置失败:", e);
+    showToast(_t("保存失败: ") + e, true);
+  }
+}
+
+function setupProxyPanel() {
+  var ids = ["proxy_enabled", "proxy_url"];
+  for (var i = 0; i < ids.length; i++) {
+    var el = document.getElementById(ids[i]);
+    if (el) el.addEventListener("change", saveProxy);
   }
 }
 
@@ -1072,6 +1128,7 @@ export default {
     }
 
     setupAutoSave();
+    setupProxyPanel();
     setupWxbotPanel();
     renderThemeGrid();
 
@@ -1082,6 +1139,10 @@ export default {
         const params = settings.launch_params || settings.launchParams;
         if (settings && params) fillFormFromParams(params);
         applyCtxFloor();
+        // 代理设置回填
+        const proxy = settings.agent_proxy || {};
+        document.getElementById("proxy_enabled").checked = !!proxy.enabled;
+        document.getElementById("proxy_url").value = proxy.url || "";
       } catch (e) {
         console.error("加载设置失败:", e);
       }

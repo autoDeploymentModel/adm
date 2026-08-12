@@ -192,6 +192,18 @@ const EN = {
   "微信 Bot 已连接": "WeChat Bot connected",
   "微信 Bot: ": "WeChat Bot: ",
 
+  // ===== settings.js - 网络代理 =====
+  "网络代理": "Network Proxy",
+  "代理设置": "Proxy Settings",
+  "启用代理": "Enable Proxy",
+  "为 admAgent 的 LLM 请求启用代理": "Enable proxy for admAgent LLM requests",
+  "仅影响 admAgent 跟大模型交互的请求，桌面端下载等不走代理": "Only affects admAgent LLM requests; desktop downloads are not proxied",
+  "代理地址": "Proxy URL",
+  "支持 http / https / socks5 协议，如 http://127.0.0.1:7890": "Supports http / https / socks5, e.g. http://127.0.0.1:7890",
+  "代理设置已保存": "Proxy settings saved",
+  "启用代理时请填写代理地址": "Please enter a proxy URL when enabling the proxy",
+  "代理地址需以 http://、https:// 或 socks5:// 开头": "Proxy URL must start with http://, https:// or socks5://",
+
   // ===== model_list.js =====
   "模型列表": "Model List",
   "模型类型": "Model Type",
