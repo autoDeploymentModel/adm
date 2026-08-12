@@ -399,6 +399,13 @@ fn ensure_adm_agent_config(app: &tauri::AppHandle) -> Result<(), AppError> {
 
 /// 直接写入 JSON 到目标文件（非原子：避免 macOS 上 rename 失败）。
 /// 进程在写入过程中崩溃可能导致文件截断/损坏，但 config.json 可由调用方重建。
+/// 串行化对 admAgent.json 的「读-改-写」整文件操作。
+/// sync_agent_vision_model / sync_agent_proxy / sync_local_model_capabilities /
+/// add|delete|update_cloud_provider 可能并发执行，后写者基于旧快照整文件写回会
+/// 覆盖先写者的字段更新（如 vision 与代理互相丢更新）。
+/// 注意：std Mutex 不可重入 —— ensure_adm_agent_config 自身不加锁，由调用方持锁进入。
+static ADM_AGENT_CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn write_json_direct(path: &std::path::Path, value: &serde_json::Value) -> Result<(), AppError> {
     let json = serde_json::to_string_pretty(value)
         .map_err(|e| format!("序列化 admAgent 配置失败: {}", e))?;
@@ -419,7 +426,11 @@ fn write_json_direct(path: &std::path::Path, value: &serde_json::Value) -> Resul
 ///    失败静默：server 未运行时下次启动自然读到新配置。
 pub fn sync_local_model_capabilities(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = ensure_adm_agent_config(&app) {
+        let ensure_result = {
+            let _guard = ADM_AGENT_CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            ensure_adm_agent_config(&app)
+        };
+        if let Err(e) = ensure_result {
             eprintln!("[admAgent] 同步本地模型能力：写 admAgent.json 失败: {}", e);
             return;
         }
@@ -482,7 +493,11 @@ pub fn sync_agent_vision_model(app: &tauri::AppHandle, value: &str) {
     let value = value.to_string();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        let changed = match write_agent_vision_model(&value) {
+        let changed = {
+            let _guard = ADM_AGENT_CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            write_agent_vision_model(&value)
+        };
+        let changed = match changed {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("[admAgent] 同步多模态模型：写 admAgent.json 失败: {}", e);
@@ -561,8 +576,12 @@ pub fn sync_agent_proxy(app: &tauri::AppHandle, proxy: &crate::common::types::Ag
     let proxy = proxy.clone();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        api_debug_log(|| format!("Proxy: 同步代理配置 enabled={} url={}", proxy.enabled, proxy.url));
-        let changed = match write_agent_proxy(&proxy) {
+        let changed = {
+            let _guard = ADM_AGENT_CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            api_debug_log(|| format!("Proxy: 同步代理配置 enabled={} url={}", proxy.enabled, proxy.url));
+            write_agent_proxy(&proxy)
+        };
+        let changed = match changed {
             Ok(c) => c,
             Err(e) => {
                 api_debug_log(|| format!("Proxy ! 写 admAgent.json 失败: {}", e));
@@ -728,6 +747,7 @@ pub async fn add_cloud_provider(
     input: CloudProviderInput,
 ) -> Result<serde_json::Value, AppError> {
     // 1) 保证基础结构存在（含 local provider），避免后续被覆盖
+    let _guard = ADM_AGENT_CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     ensure_adm_agent_config(&app)?;
 
     let dir = adm_agent_config_dir()?;
@@ -889,6 +909,7 @@ pub async fn delete_cloud_provider(
     _app: tauri::AppHandle,
     key: String,
 ) -> Result<serde_json::Value, AppError> {
+    let _guard = ADM_AGENT_CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = adm_agent_config_dir()?;
     let path = dir.join("admAgent.json");
     if !path.exists() {
@@ -922,6 +943,7 @@ pub async fn update_cloud_provider(
     key: String,
     input: CloudProviderInput,
 ) -> Result<serde_json::Value, AppError> {
+    let _guard = ADM_AGENT_CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = adm_agent_config_dir()?;
     let path = dir.join("admAgent.json");
     if !path.exists() {
@@ -1407,6 +1429,14 @@ pub async fn start_agent_server(
         cmd.arg("server");
         if !workdir.is_empty() {
             cmd.arg("--cwd").arg(&workdir);
+        }
+        // macOS/Linux 上 Rust 默认配置目录（~/.config/admAgent）与 Go server 的
+        // GlobalConfigData（~/.local/share/admAgent）不一致，注入 ADMAGENT_GLOBAL_DATA
+        // 让 server 读写与桌面端同步（agent_proxy / agent_vision_model 等顶层字段）
+        // 相同的文件。Windows 两侧路径本就一致，无需注入。
+        #[cfg(not(target_os = "windows"))]
+        if let Ok(dir) = adm_agent_config_dir() {
+            cmd.env("ADMAGENT_GLOBAL_DATA", dir);
         }
         // 启动流程在健康检查/工作区创建阶段失败时自动终止子进程，避免错误路径留下孤儿。
         cmd.kill_on_drop(true);
