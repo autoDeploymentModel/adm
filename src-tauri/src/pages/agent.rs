@@ -552,6 +552,85 @@ fn write_agent_vision_model(value: &str) -> Result<bool, AppError> {
     Ok(true)
 }
 
+/// 把 HTTP 代理配置写入 admAgent.json 顶层 agent_proxy 并触发服务端热重载。
+///
+/// admAgent 读取该字段后应用到 LLM 客户端和 Agent HTTP 工具的 Transport。
+/// 写入逻辑与 sync_agent_vision_model 相同：写文件 → POST /config/set 触发从磁盘全量重载。
+/// 失败静默：代理不生效只是回到直连，不影响主流程。
+pub fn sync_agent_proxy(app: &tauri::AppHandle, proxy: &crate::common::types::AgentProxyConfig) {
+    let proxy = proxy.clone();
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        api_debug_log(|| format!("Proxy: 同步代理配置 enabled={} url={}", proxy.enabled, proxy.url));
+        let changed = match write_agent_proxy(&proxy) {
+            Ok(c) => c,
+            Err(e) => {
+                api_debug_log(|| format!("Proxy ! 写 admAgent.json 失败: {}", e));
+                return;
+            }
+        };
+        if !changed {
+            api_debug_log(|| "Proxy: 配置未变化，跳过重载".to_string());
+            return;
+        }
+        api_debug_log(|| "Proxy: admAgent.json 已更新，触发服务端热重载".to_string());
+        let ws = {
+            let state = app.state::<AppState>();
+            let active = state.active_workspace_id.lock().map(|g| g.clone()).unwrap_or(None);
+            match active {
+                Some(ws_id) if !ws_id.is_empty() => ws_id,
+                _ => return,
+            }
+        };
+        let client = match build_client(&AgentTransport::default_host(), Duration::from_secs(3)) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let set_body = serde_json::json!({ "scope": 0, "key": "providers.local.name", "value": "Local" });
+        match tokio::time::timeout(
+            Duration::from_secs(10),
+            agent_http::send(&client, "POST", &format!("/v1/workspaces/{}/config/set", ws), Some(set_body)),
+        ).await {
+            Ok(Ok((st, _))) if (200..300).contains(&st) => {
+                api_debug_log(|| "Proxy: /config/set 热重载完成，代理配置已生效".to_string());
+            }
+            Ok(Ok((st, _))) => {
+                api_debug_log(|| format!("Proxy ! /config/set HTTP {}", st));
+            }
+            Ok(Err(e)) => {
+                api_debug_log(|| format!("Proxy ! /config/set 失败: {}", e));
+            }
+            Err(_) => {
+                api_debug_log(|| "Proxy ! /config/set 超时".to_string());
+            }
+        }
+    });
+}
+
+/// 把 agent_proxy 写入 admAgent.json 顶层。
+/// 返回是否真的发生了变更（供调用方决定是否触发服务端重载）。
+fn write_agent_proxy(proxy: &crate::common::types::AgentProxyConfig) -> Result<bool, AppError> {
+    let dir = adm_agent_config_dir()?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建 admAgent 配置目录失败: {}", e))?;
+    let path = dir.join("admAgent.json");
+    // 文件可能被 admAgent server 并发写入而短暂为空，解析失败时回退到默认配置而非报错
+    let mut config: serde_json::Value = if path.exists() {
+        let s = std::fs::read_to_string(&path).unwrap_or_default();
+        serde_json::from_str(&s).unwrap_or_else(|_| {
+            build_adm_agent_config(DEFAULT_CONTEXT_WINDOW, DEFAULT_PORT, false, false)
+        })
+    } else {
+        build_adm_agent_config(DEFAULT_CONTEXT_WINDOW, DEFAULT_PORT, false, false)
+    };
+    let target = serde_json::json!({ "enabled": proxy.enabled, "url": proxy.url });
+    if config.get("agent_proxy") == Some(&target) {
+        return Ok(false);
+    }
+    config["agent_proxy"] = target;
+    write_json_direct(&path, &config)?;
+    Ok(true)
+}
+
 // ===== 添加云端模型 Provider =====
 
 /// 把一个云端模型名称转成 admAgent.json providers 下的 JSON key（仅保留 ASCII 字母数字，转小写）。
