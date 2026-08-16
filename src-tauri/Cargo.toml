@@ -28,6 +28,8 @@ base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sysinfo = "0.33"
+# 调试日志时间戳用本地时间格式化（std 无本地时区 API）
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls", "json"] }
 tokio = { version = "1", features = ["full"] }
 # admAgent server 本地传输（Unix socket / Windows named pipe）：reqwest 不支持，

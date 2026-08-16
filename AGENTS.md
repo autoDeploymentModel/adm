@@ -99,4 +99,4 @@
   - `SSE =` / `SSE !` — SSE 连接/断开
   - `< message created` / `< run_complete` / `< agent_event` — SSE 事件转发
   - `UpdateModels:` / `readyWg:` — admAgent 服务端诊断日志
-  日志格式：`{epoch_ms} {HH:MM:SS.mmmZ} {类型标记} {内容}`，由 Rust 端统一格式化。调试模式开关：设置→调试模式（`config.json` 的 `debug_logging` 字段）。
+  日志格式：`{epoch_ms} {HH:MM:SS.mmm 本地时间} {类型标记} {内容}`，由 Rust 端统一格式化。调试模式开关：设置→调试模式（`config.json` 的 `debug_logging` 字段）。

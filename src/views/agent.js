@@ -11,7 +11,7 @@ import { updateStatusBar, updateContextUsage, updateModeToggle, updateSendButton
 import { loadConversations, renderConversationList, selectConversation, newConversation } from "./agent/session.js";
 import { syncWorkingIndicator } from "./agent/render.js";
 import { sendMessage } from "./agent/send.js";
-import { setupSSEListener } from "./agent/sse.js";
+import { setupSSEListener, cancelScheduledLoadTools } from "./agent/sse.js";
 import { syncModeToServer } from "./agent/permission.js";
 import { loadTools, renderToolsList } from "./agent/tools.js";
 import { switchModel, refreshServerProviders, resolveAgentModel, updateModelDropdown, updateModelBtn } from "./agent/model.js";
@@ -751,6 +751,8 @@ export default {
     // 停止 SSE 监听
     if (S.sseListener) { try { S.sseListener(); } catch (_) {} S.sseListener = null; }
     if (S.sseErrorUnlisten) { try { S.sseErrorUnlisten(); } catch (_) {} S.sseErrorUnlisten = null; }
+    // 取消挂起的工具列表刷新
+    cancelScheduledLoadTools();
     // 清除重连定时器
     if (S.sseReconnectTimer) { clearTimeout(S.sseReconnectTimer); S.sseReconnectTimer = null; }
     // 注意：这里不调 agent_unsubscribe_events。它是异步 fire-and-forget，快速切回时可能在新页面

@@ -1,5 +1,5 @@
 // 统一日志封装 — 所有前端调试日志通过 Rust 端 api_debug_log 写入 adm_api_debug.log
-// 格式: {epoch_ms} {HH:MM:SS.mmmZ} UI: [CATEGORY][level] message
+// 格式: {epoch_ms} {HH:MM:SS.mmm 本地时间} UI: [CATEGORY][level] message
 // Rust 端 api_debug_log 负责加时间戳，前端只传 [CATEGORY][level] message
 //
 // 不依赖 store.js：直接用 window.__adm_invoke 避免循环依赖
