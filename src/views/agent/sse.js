@@ -14,6 +14,59 @@ import { maybeAutoContinue, resetAutoContinue } from "./autocontinue.js";
 import { log } from "./log.js";
 
 // ===== SSE 事件 =====
+
+// 流式 message updated 增量是调试日志的噪音大户（每条 delta 连打 3 行 debug，
+// 一轮长输出可产生上万行）：聚合降频，每条消息第 1 次与此后每 50 次 updated
+// 才写日志；created/deleted/DROPPED 告警不受影响，仍全量记录。
+var MSG_DELTA_LOG_EVERY = 50;
+var msgDeltaCounts = {};
+function tickMessageDelta(msgId) {
+  if (Object.keys(msgDeltaCounts).length > 500) msgDeltaCounts = {}; // 防长期运行无限增长
+  var n = (msgDeltaCounts[msgId] = (msgDeltaCounts[msgId] || 0) + 1);
+  return n === 1 || n % MSG_DELTA_LOG_EVERY === 0;
+}
+// 当前这条增量事件是否应写日志（由外层监听器 tick 一次，内层 handler 只读）
+var curDeltaLogged = true;
+var lastLspEventLogTs = 0;
+
+// 工具状态事件（lsp/mcp/skills）合并刷新：1s 窗口内最多执行一次 loadTools，
+// 窗口结束时有新事件则补执行一次（尾随），连续事件流下既不超频也不漏掉最后一次。
+// 诊断事件是编辑文件期间的噪音大户（每次保存一次），而工具面板不显示诊断计数，
+// diagnostics_changed 在 case 分支里直接忽略，只有 state_changed 才需要刷新。
+var TOOLS_REFRESH_THROTTLE_MS = 1000;
+var toolsRefreshLast = 0;
+var toolsRefreshPending = false;
+var toolsRefreshTimer = null;
+
+function scheduleLoadTools() {
+  var now = Date.now();
+  if (now - toolsRefreshLast >= TOOLS_REFRESH_THROTTLE_MS) {
+    toolsRefreshLast = now;
+    toolsRefreshPending = false;
+    clearTimeout(toolsRefreshTimer);
+    toolsRefreshTimer = null;
+    loadTools();
+  } else {
+    toolsRefreshPending = true;
+    if (!toolsRefreshTimer) {
+      toolsRefreshTimer = setTimeout(function() {
+        toolsRefreshTimer = null;
+        if (toolsRefreshPending) {
+          toolsRefreshPending = false;
+          toolsRefreshLast = Date.now();
+          loadTools();
+        }
+      }, TOOLS_REFRESH_THROTTLE_MS - (now - toolsRefreshLast));
+    }
+  }
+}
+
+// 视图卸载时取消挂起的工具列表刷新（agent.js unmount 调用）
+export function cancelScheduledLoadTools() {
+  if (toolsRefreshTimer) { clearTimeout(toolsRefreshTimer); toolsRefreshTimer = null; }
+  toolsRefreshPending = false;
+}
+
 export async function setupSSEListener() {
   console.log("[agent] setupSSEListener() workspace:", S.serverInfo ? S.serverInfo.workspace_id : "unknown");
   if (S.sseListener) { try { S.sseListener(); } catch (_) {} S.sseListener = null; }
@@ -38,7 +91,19 @@ export async function setupSSEListener() {
       var eventWsId = payload && payload.workspace_id;
       var rawData0 = payload.data || payload;
       var evType0 = rawData0.type || payload.type || "";
-      log.debug("SSE", "event: " + evType0 + " ws: " + eventWsId + " activeWs: " + S.activeWsId + " currentConv: " + S.currentConvId);
+      var isDelta = evType0 === "message" && rawData0.payload && rawData0.payload.type === "updated";
+      var skipLog = false;
+      if (isDelta) {
+        curDeltaLogged = tickMessageDelta(((rawData0.payload || {}).payload || {}).id || "");
+        skipLog = !curDeltaLogged;
+      } else if (evType0 === "lsp_event") {
+        // LSP 诊断事件常成串爆发（编辑文件期间每秒多条），同样节流：5 秒最多 1 条
+        skipLog = Date.now() - lastLspEventLogTs < 5000;
+        if (!skipLog) lastLspEventLogTs = Date.now();
+      }
+      if (!skipLog) {
+        log.debug("SSE", "event: " + evType0 + " ws: " + eventWsId + " activeWs: " + S.activeWsId + " currentConv: " + S.currentConvId);
+      }
 
       // 统一走 Store：自动处理跨 workspace 一致性
       // 非当前 tab 的事件更新对应 workspace 状态池
@@ -136,7 +201,9 @@ function handleSSEEvent(payload, ctx) {
 
   switch (eventType) {
     case "message":
-      log.debug("SSE", "message: " + innerType + " role: " + actualData.role + " session: " + actualData.session_id + " currentConv: " + S.currentConvId + " match: " + (!actualData.session_id || actualData.session_id === S.currentConvId));
+      if (innerType !== "updated" || curDeltaLogged) {
+        log.debug("SSE", "message: " + innerType + " role: " + actualData.role + " session: " + actualData.session_id + " currentConv: " + S.currentConvId + " match: " + (!actualData.session_id || actualData.session_id === S.currentConvId));
+      }
       // 只有实际运行会话的消息才能续期其安全计时器，其他会话事件不得干扰
       if (S.isSending && S.activeRun && (!actualData.session_id || actualData.session_id === S.activeRun.sessionId)) {
         startSendSafetyTimer();
@@ -159,7 +226,9 @@ function handleSSEEvent(payload, ctx) {
         log.warn("SSE", "message DROPPED (session mismatch): " + actualData.session_id + " vs " + S.currentConvId);
         break;
       }
-      log.debug("SSE", "message PASSED to handler: " + innerType + " role: " + actualData.role + " id: " + actualData.id);
+      if (innerType !== "updated" || curDeltaLogged) {
+        log.debug("SSE", "message PASSED to handler: " + innerType + " role: " + actualData.role + " id: " + actualData.id);
+      }
       handleMessageSSEEvent(innerType, actualData);
       break;
     case "session":
@@ -266,8 +335,10 @@ function handleSSEEvent(payload, ctx) {
     case "skills_event":
     case "mcp_event":
     case "lsp_event":
-      // 工具状态变更，刷新工具列表
-      loadTools();
+      // 工具状态变更，节流合并刷新工具列表（1s 窗口）；
+      // lsp 诊断计数变化（每次编辑/保存触发）对工具面板无意义，直接忽略
+      if (eventType === "lsp_event" && actualData.type === "diagnostics_changed") break;
+      scheduleLoadTools();
       break;
   }
 }

@@ -1825,8 +1825,7 @@ fn mask_sensitive_in_place(value: &mut serde_json::Value) {
 /// 不执行，无格式化开销）。与 devtools 控制台的 [agent] API / SSE 日志对应：
 /// 所有前端请求都经 agent_http_request 代理、所有 SSE 事件都经
 /// forward_sse_events 转发，在这两处落盘即可完整复盘对话中断问题。
-/// 行格式：`{epoch_ms} {HH:MM:SS.mmm UTC} {内容}`，与 admAgent.log 对时时
-/// 本地时间 = UTC + 本机时区偏移。
+/// 行格式：`{epoch_ms} {HH:MM:SS.mmm 本地时间} {内容}`。
 /// pub(crate)：供 skills.rs 等其他页面模块复用同一日志通道。
 pub(crate) fn api_debug_log<F: FnOnce() -> String>(line: F) {
     if !LOG_ENABLED.load(Ordering::Relaxed) {
@@ -1843,10 +1842,9 @@ pub(crate) fn api_debug_log<F: FnOnce() -> String>(line: F) {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis())
                 .unwrap_or(0);
-            let secs = ms / 1000;
             let _ = writeln!(
-                f, "{} {:02}:{:02}:{:02}.{:03}Z {}",
-                ms, (secs / 3600) % 24, (secs / 60) % 60, secs % 60, ms % 1000,
+                f, "{} {} {}",
+                ms, chrono::Local::now().format("%H:%M:%S%.3f"),
                 content
             );
         }
