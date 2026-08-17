@@ -1,9 +1,7 @@
-.\llama-server.exe --help
 ----- common params -----
 
 -h,    --help, --usage                  print usage and exit
 --version                               show version and build info
---license                               show source code license and dependencies
 -cl,   --cache-list                     show list of models in cache
 --completion-bash                       print source-able bash completion script for llama.cpp
 -t,    --threads N                      number of CPU threads to use during generation (default: -1)
@@ -84,16 +82,27 @@
                                         (env: LLAMA_ARG_CACHE_TYPE_V)
 -dt,   --defrag-thold N                 KV cache defragmentation threshold (DEPRECATED)
                                         (env: LLAMA_ARG_DEFRAG_THOLD)
---rpc SERVERS                           comma-separated list of RPC servers (host:port)
-                                        (env: LLAMA_ARG_RPC)
---mlock                                 force system to keep model in RAM rather than swapping or compressing
+--mlock                                 DEPRECATED in favor of `--load-mode`: force system to keep model in
+                                        RAM rather than swapping or compressing
                                         (env: LLAMA_ARG_MLOCK)
---mmap, --no-mmap                       whether to memory-map model. (if mmap disabled, slower load but may
-                                        reduce pageouts if not using mlock) (default: enabled)
+--mmap, --no-mmap                       DEPRECATED in favor of `--load-mode`: whether to memory-map model. (if
+                                        mmap disabled, slower load but may reduce pageouts if not using mlock)
                                         (env: LLAMA_ARG_MMAP)
 -dio,  --direct-io, -ndio, --no-direct-io
-                                        use DirectIO if available. (default: disabled)
+                                        DEPRECATED in favor of `--load-mode`: use DirectIO if available
                                         (env: LLAMA_ARG_DIO)
+-lm,   --load-mode MODE                 model loading mode (default: auto)
+                                        - auto: mmap, unless a device does not support it
+                                        - none: no special loading mode
+                                        - mmap: memory-map model (if mmap disabled, slower load but may reduce
+                                        pageouts if not using mlock)
+                                        - mlock: force system to keep model in RAM rather than swapping or
+                                        compressing
+                                        - mmap+mlock: mmap + force system to keep model in RAM rather than
+                                        swapping or compressing
+                                        - dio: use DirectIO if available
+
+                                        (env: LLAMA_ARG_LOAD_MODE)
 --numa TYPE                             attempt optimizations that help on some NUMA systems
                                         - distribute: spread execution evenly over all nodes
                                         - isolate: only spawn threads on CPUs on the node that execution
@@ -182,24 +191,19 @@
 -hff,  --hf-file FILE                   Hugging Face model file. If specified, it will override the quant in
                                         --hf-repo (default: unused)
                                         (env: LLAMA_ARG_HF_FILE)
--hfv,  -hfrv, --hf-repo-v <user>/<model>[:quant]
-                                        Hugging Face model repository for the vocoder model (default: unused)
-                                        (env: LLAMA_ARG_HF_REPO_V)
--hffv, --hf-file-v FILE                 Hugging Face model file for the vocoder model (default: unused)
-                                        (env: LLAMA_ARG_HF_FILE_V)
 -hft,  --hf-token TOKEN                 Hugging Face access token (default: value from HF_TOKEN environment
                                         variable)
                                         (env: HF_TOKEN)
 --log-disable                           Log disable
 --log-file FNAME                        Log to file
-                                        (env: LLAMA_LOG_FILE)
+                                        (env: LLAMA_ARG_LOG_FILE)
 --log-colors [on|off|auto]              Set colored logging ('on', 'off', or 'auto', default: 'auto')
                                         'auto' enables colors when output is to a terminal
-                                        (env: LLAMA_LOG_COLORS)
+                                        (env: LLAMA_ARG_LOG_COLORS)
 -v,    --verbose, --log-verbose         Set verbosity level to infinity (i.e. log all messages, useful for
                                         debugging)
 --offline                               Offline mode: forces use of cache, prevents network access
-                                        (env: LLAMA_OFFLINE)
+                                        (env: LLAMA_ARG_OFFLINE)
 -lv,   --verbosity, --log-verbosity N   Set the verbosity threshold. Messages with a higher verbosity will be
                                         ignored. Values:
                                          - 0: generic output
@@ -210,7 +214,7 @@
                                          - 5: debug
                                         (default: 3)
 
-                                        (env: LLAMA_LOG_VERBOSITY)
+                                        (env: LLAMA_ARG_LOG_VERBOSITY)
 --log-prefix, --no-log-prefix           Enable prefix in log messages
                                         (env: LLAMA_ARG_LOG_PREFIX)
 --log-timestamps, --no-log-timestamps   Enable timestamps in log messages
@@ -248,16 +252,14 @@
 --xtc-probability N                     xtc probability (default: 0.00, 0.0 = disabled)
 --xtc-threshold N                       xtc threshold (default: 0.10, 1.0 = disabled)
 --typical, --typical-p N                locally typical sampling, parameter p (default: 1.00, 1.0 = disabled)
---repeat-last-n N                       last n tokens to consider for penalize (default: 64, 0 = disabled, -1
-                                        = ctx_size)
+--repeat-last-n N                       last n tokens to consider for penalize (default: 64, 0 = disabled)
 --repeat-penalty N                      penalize repeat sequence of tokens (default: 1.00, 1.0 = disabled)
 --presence-penalty N                    repeat alpha presence penalty (default: 0.00, 0.0 = disabled)
 --frequency-penalty N                   repeat alpha frequency penalty (default: 0.00, 0.0 = disabled)
 --dry-multiplier N                      set DRY sampling multiplier (default: 0.00, 0.0 = disabled)
 --dry-base N                            set DRY sampling base value (default: 1.75)
 --dry-allowed-length N                  set allowed length for DRY sampling (default: 2)
---dry-penalty-last-n N                  set DRY penalty for the last n tokens (default: -1, 0 = disable, -1 =
-                                        context size)
+--dry-penalty-last-n N                  set DRY penalty for the last n tokens (default: 64, 0 = disable)
 --dry-sequence-breaker STRING           add sequence breaker for DRY sampling, clearing out default breakers
                                         ('\n', ':', '"', '*') in the process; use "none" to not use any
                                         sequence breakers
@@ -358,7 +360,7 @@
 --spec-draft-model, -md, --model-draft FNAME
                                         draft model for speculative decoding (default: unused)
                                         (env: LLAMA_ARG_SPEC_DRAFT_MODEL)
---spec-type none,draft-simple,draft-eagle3,draft-mtp,ngram-simple,ngram-map-k,ngram-map-k4v,ngram-mod,ngram-cache
+--spec-type none,draft-simple,draft-eagle3,draft-mtp,draft-dflash,draft-dspark,ngram-simple,ngram-map-k,ngram-map-k4v,ngram-mod,ngram-cache
                                         comma-separated list of types of speculative decoding to use (default:
                                         none)
 
@@ -407,9 +409,9 @@
                                         max number of context checkpoints to create per slot (default:
                                         32)[(more info)](https://github.com/ggml-org/llama.cpp/pull/15293)
                                         (env: LLAMA_ARG_CTX_CHECKPOINTS)
--cpent, --checkpoint-every-n-tokens N   create a checkpoint every n tokens during prefill (processing), -1 to
-                                        disable (default: 8192)
-                                        (env: LLAMA_ARG_CHECKPOINT_EVERY_NT)
+-cms,  --checkpoint-min-step N          minimum spacing between context checkpoints in tokens (default: 8192,
+                                        0 = no minimum)
+                                        (env: LLAMA_ARG_CHECKPOINT_MIN_SPACING_NT)
 -cram, --cache-ram N                    set the maximum cache size in MiB (default: 8192, -1 - no limit, 0 -
                                         disable)[(more
                                         info)](https://github.com/ggml-org/llama.cpp/pull/16391)
@@ -419,8 +421,8 @@
                                         enabled if number of slots is auto)
                                         (env: LLAMA_ARG_KV_UNIFIED)
 --cache-idle-slots, --no-cache-idle-slots
-                                        save and clear idle slots on new task (default: enabled, requires
-                                        unified KV and cache-ram)
+                                        save idle slots to the prompt cache on new task, and clear them when
+                                        using unified KV (default: enabled, requires cache-ram)
                                         (env: LLAMA_ARG_CACHE_IDLE_SLOTS)
 --context-shift, --no-context-shift     whether to use context shift on infinite text generation (default:
                                         disabled)
@@ -456,6 +458,9 @@
 --image-max-tokens N                    maximum number of tokens each image can take, only used by vision
                                         models with dynamic resolution (default: read from model)
                                         (env: LLAMA_ARG_IMAGE_MAX_TOKENS)
+--mtmd-batch-max-tokens N               maximum number of image tokens per batch when encoding images
+                                        (default: 1024)
+                                        (env: LLAMA_ARG_MTMD_BATCH_MAX_TOKENS)
 -a,    --alias STRING                   set model name aliases, comma-separated (to be used by API)
                                         (env: LLAMA_ARG_ALIAS)
 --tags STRING                           set model tags, comma-separated (informational, not used for routing)
@@ -471,35 +476,70 @@
                                         (env: LLAMA_ARG_REUSE_PORT)
 --path PATH                             path to serve static files from (default: )
                                         (env: LLAMA_ARG_STATIC_PATH)
+--cors-origins ORIGINS                  comma-separated list of allowed origins for CORS (default: *)
+                                        if set to special value 'localhost', reflect the Origin header only if
+                                        it is localhost
+                                        (env: LLAMA_ARG_CORS_ORIGINS)
+--cors-methods METHODS                  comma-separated list of allowed methods for CORS (default: GET, POST,
+                                        DELETE, OPTIONS)
+                                        (env: LLAMA_ARG_CORS_METHODS)
+--cors-headers HEADERS                  comma-separated list of allowed headers for CORS (default: *)
+                                        (env: LLAMA_ARG_CORS_HEADERS)
+--cors-credentials, --no-cors-credentials
+                                        whether to allow credentials for CORS (default: enabled)
+                                        note: if this is enabled and --cors-origins is set to * (default), the
+                                        Origin header will be echoed back, and credentials will always be
+                                        allowed
+                                        (env: LLAMA_ARG_CORS_CREDENTIALS)
 --api-prefix PREFIX                     prefix path the server serves from, without the trailing slash
                                         (default: )
                                         (env: LLAMA_ARG_API_PREFIX)
---webui-config JSON                     [DEPRECATED: use --ui-config] JSON that provides default WebUI
-                                        settings (overrides WebUI defaults)
-                                        (env: LLAMA_ARG_WEBUI_CONFIG)
---ui-config JSON                        JSON that provides default UI settings (overrides UI defaults)
+--ui-config, --webui-config JSON        JSON that provides default UI settings (overrides UI defaults)
                                         (env: LLAMA_ARG_UI_CONFIG)
---webui-config-file PATH                [DEPRECATED: use --ui-config-file] JSON file that provides default
-                                        WebUI settings (overrides WebUI defaults)
-                                        (env: LLAMA_ARG_WEBUI_CONFIG_FILE)
---ui-config-file PATH                   JSON file that provides default UI settings (overrides UI defaults)
+--ui-config-file, --webui-config-file PATH
+                                        JSON file that provides default UI settings (overrides UI defaults)
                                         (env: LLAMA_ARG_UI_CONFIG_FILE)
---webui-mcp-proxy, --no-webui-mcp-proxy
-                                        [DEPRECATED: use --ui-mcp-proxy/--no-ui-mcp-proxy] experimental:
-                                        whether to enable MCP CORS proxy
-                                        (env: LLAMA_ARG_WEBUI_MCP_PROXY)
---ui-mcp-proxy, --no-ui-mcp-proxy       experimental: whether to enable MCP CORS proxy - do not enable in
+--ui-mcp-proxy, --webui-mcp-proxy, --no-ui-mcp-proxy, --no-webui-mcp-proxy
+                                        experimental: whether to enable MCP CORS proxy - do not enable in
                                         untrusted environments (default: disabled)
                                         (env: LLAMA_ARG_UI_MCP_PROXY)
 --tools TOOL1,TOOL2,...                 experimental: whether to enable built-in tools for AI agents - do not
                                         enable in untrusted environments (default: no tools)
                                         specify "all" to enable all tools
                                         available tools: read_file, file_glob_search, grep_search,
-                                        exec_shell_command, write_file, edit_file, apply_diff, get_datetime
+                                        exec_shell_command, write_file, edit_file, get_datetime, get_info
+                                        note: for security reasons, this will limit --cors-origins to
+                                        localhost by default
                                         (env: LLAMA_ARG_TOOLS)
---webui, --no-webui                     [DEPRECATED: use --ui/--no-ui] whether to enable the Web UI
-                                        (env: LLAMA_ARG_WEBUI)
---ui,  --no-ui                          whether to enable the Web UI (default: enabled)
+--tools-runtime OPTION                  experimental: run tools in a separate runtime environment (default:
+                                        none, use host environment)
+                                        available options:
+                                        'docker:<image>', 'podman:<image>': spin up a new container and reuse
+                                        it for all invocations, clean up on server exit
+                                        'docker-container:<id>', 'podman-container:<id>': use an existing
+                                        container by ID, won't stop on server exit
+                                        'ssh:<target>': run tools on a remote POSIX host over SSH, key-based
+                                        auth and a trusted host key are required
+
+                                        (env: LLAMA_ARG_TOOLS_RUNTIME)
+--mcp-servers-config PATH               experimental: path to JSON file with MCP server definitions
+                                        (Cursor-compatible format) - do not enable in untrusted environments
+                                        (default: none)
+                                        note: for security reasons, this will limit --cors-origins to
+                                        localhost by default
+                                        (env: LLAMA_ARG_MCP_SERVERS_CONFIG)
+--mcp-servers-json JSON                 experimental: inline JSON with MCP server definitions
+                                        (Cursor-compatible format) - do not enable in untrusted environments
+                                        (default: none)
+                                        note: for security reasons, this will limit --cors-origins to
+                                        localhost by default
+                                        (env: LLAMA_ARG_MCP_SERVERS_JSON)
+-ag,   --agent, -no-ag, --no-agent      whether to enable CORS proxy and all built-in tools - do not enable in
+                                        untrusted environments (default: disabled)
+                                        note: for security reasons, this will limit --cors-origins to
+                                        localhost by default
+                                        (env: LLAMA_ARG_AGENT)
+--ui,  --webui, --no-ui, --no-webui     whether to enable the Web UI (default: enabled)
                                         (env: LLAMA_ARG_UI)
 --embedding, --embeddings               restrict to only support embedding use case; use only with dedicated
                                         embedding models (default: disabled)
@@ -509,16 +549,20 @@
 --api-key KEY                           API key to use for authentication, multiple keys can be provided as a
                                         comma-separated list (default: none)
                                         (env: LLAMA_API_KEY)
---api-key-file FNAME                    path to file containing API keys (default: none)
+--api-key-file FNAME                    path to file containing API keys, one per line; lines starting with a
+                                        hash are treated as comments (default: none)
+                                        (env: LLAMA_ARG_API_KEY_FILE)
 --ssl-key-file FNAME                    path to file a PEM-encoded SSL private key
                                         (env: LLAMA_ARG_SSL_KEY_FILE)
 --ssl-cert-file FNAME                   path to file a PEM-encoded SSL certificate
                                         (env: LLAMA_ARG_SSL_CERT_FILE)
 --chat-template-kwargs STRING           sets additional params for the json template parser, must be a valid
                                         json object string, e.g. '{"key1":"value1","key2":"value2"}'
-                                        (env: LLAMA_CHAT_TEMPLATE_KWARGS)
--to,   --timeout N                      server read/write timeout in seconds (default: 600)
+                                        (env: LLAMA_ARG_CHAT_TEMPLATE_KWARGS)
+-to,   --timeout N                      server read/write timeout in seconds (default: 3600)
                                         (env: LLAMA_ARG_TIMEOUT)
+--sse-ping-interval N                   server SSE ping interval in seconds (-1 = disabled, default: 30)
+                                        (env: LLAMA_ARG_SSE_PING_INTERVAL)
 --threads-http N                        number of threads used to process HTTP requests (default: -1)
                                         (env: LLAMA_ARG_THREADS_HTTP)
 --cache-prompt, --no-cache-prompt       whether to enable prompt caching (default: enabled)
@@ -561,12 +605,25 @@
 -rea,  --reasoning [on|off|auto]        Use reasoning/thinking in the chat ('on', 'off', or 'auto', default:
                                         'auto' (detect from template))
                                         (env: LLAMA_ARG_REASONING)
+--reasoning-effort LEVEL                reasoning effort level given to the chat template: 'default' to keep
+                                        the template default,
+                                        or a level such as 'minimal', 'low', 'medium', 'high', 'xhigh' or
+                                        'max' (default: default)
+                                        (env: LLAMA_ARG_REASONING_EFFORT)
 --reasoning-budget N                    token budget for thinking: -1 for unrestricted, 0 for immediate end,
                                         N>0 for token budget (default: -1)
                                         (env: LLAMA_ARG_THINK_BUDGET)
 --reasoning-budget-message MESSAGE      message injected before the end-of-thinking tag when reasoning budget
                                         is exhausted (default: none)
                                         (env: LLAMA_ARG_THINK_BUDGET_MESSAGE)
+--reasoning-preserve, --no-reasoning-preserve
+                                        preserve reasoning trace in the full history, not just the last
+                                        assistant message (default: template default)
+                                        compatible with certain templates having 'supports_preserve_reasoning'
+                                        capability
+                                        example:
+                                        https://docs.z.ai/guides/capabilities/thinking-mode#preserved-thinking
+                                        (env: LLAMA_ARG_REASONING_PRESERVE)
 --chat-template JINJA_TEMPLATE          set custom jinja chat template (default: template taken from model's
                                         metadata)
                                         if suffix/prefix are specified, template will be disabled
@@ -576,12 +633,12 @@
                                         bailing, bailing-think, bailing2, chatglm3, chatglm4, chatml,
                                         command-r, deepseek, deepseek-ocr, deepseek2, deepseek3, exaone-moe,
                                         exaone3, exaone4, falcon3, gemma, gigachat, glmedge, gpt-oss, granite,
-                                        granite-4.0, grok-2, hunyuan-dense, hunyuan-moe, hunyuan-vl, kimi-k2,
-                                        llama2, llama2-sys, llama2-sys-bos, llama2-sys-strip, llama3, llama4,
-                                        megrez, minicpm, mistral-v1, mistral-v3, mistral-v3-tekken,
-                                        mistral-v7, mistral-v7-tekken, monarch, openchat, orion,
-                                        pangu-embedded, phi3, phi4, rwkv-world, seed_oss, smolvlm, solar-open,
-                                        vicuna, vicuna-orca, yandex, zephyr
+                                        granite-4.0, granite-4.1, grok-2, hunyuan-dense, hunyuan-moe,
+                                        hunyuan-vl, kimi-k2, llama2, llama2-sys, llama2-sys-bos,
+                                        llama2-sys-strip, llama3, llama4, megrez, minicpm, mistral-v1,
+                                        mistral-v3, mistral-v3-tekken, mistral-v7, mistral-v7-tekken, monarch,
+                                        openchat, orion, pangu-embedded, phi3, phi4, rwkv-world, seed_oss,
+                                        smolvlm, solar-open, vicuna, vicuna-orca, yandex, zephyr
                                         (env: LLAMA_ARG_CHAT_TEMPLATE)
 --chat-template-file JINJA_TEMPLATE_FILE
                                         set custom jinja chat template file (default: template taken from
@@ -593,12 +650,12 @@
                                         bailing, bailing-think, bailing2, chatglm3, chatglm4, chatml,
                                         command-r, deepseek, deepseek-ocr, deepseek2, deepseek3, exaone-moe,
                                         exaone3, exaone4, falcon3, gemma, gigachat, glmedge, gpt-oss, granite,
-                                        granite-4.0, grok-2, hunyuan-dense, hunyuan-moe, hunyuan-vl, kimi-k2,
-                                        llama2, llama2-sys, llama2-sys-bos, llama2-sys-strip, llama3, llama4,
-                                        megrez, minicpm, mistral-v1, mistral-v3, mistral-v3-tekken,
-                                        mistral-v7, mistral-v7-tekken, monarch, openchat, orion,
-                                        pangu-embedded, phi3, phi4, rwkv-world, seed_oss, smolvlm, solar-open,
-                                        vicuna, vicuna-orca, yandex, zephyr
+                                        granite-4.0, granite-4.1, grok-2, hunyuan-dense, hunyuan-moe,
+                                        hunyuan-vl, kimi-k2, llama2, llama2-sys, llama2-sys-bos,
+                                        llama2-sys-strip, llama3, llama4, megrez, minicpm, mistral-v1,
+                                        mistral-v3, mistral-v3-tekken, mistral-v7, mistral-v7-tekken, monarch,
+                                        openchat, orion, pangu-embedded, phi3, phi4, rwkv-world, seed_oss,
+                                        smolvlm, solar-open, vicuna, vicuna-orca, yandex, zephyr
                                         (env: LLAMA_ARG_CHAT_TEMPLATE_FILE)
 --skip-chat-parsing, --no-skip-chat-parsing
                                         force a pure content parser, even if a Jinja template is specified;
@@ -619,8 +676,8 @@
                                         /lora-adapters) (default: disabled)
 --sleep-idle-seconds SECONDS            number of seconds of idleness after which the server will sleep
                                         (default: -1; -1 = disabled)
--mv,   --model-vocoder FNAME            vocoder model for audio generation (default: unused)
---tts-use-guide-tokens                  Use guide tokens to improve TTS word recall
+--log-prompts-dir PATH                  Log prompts to directory (auto-created if not present; only used for
+                                        debugging, default: disabled)
 --embd-gemma-default                    use default EmbeddingGemma model (note: can download weights from the
                                         internet)
 --fim-qwen-1.5b-default                 use default Qwen 2.5 Coder 1.5B (note: can download weights from the
