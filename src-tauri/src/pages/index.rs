@@ -330,7 +330,7 @@ pub async fn check_update(app: tauri::AppHandle) -> Result<UpdateCheckResult, Ap
             match get_llamacpp_version(app.clone()).await {
                 Ok(local_ver) => {
                     llamacpp_local_version = Some(local_ver.clone());
-                    if local_ver != *remote_ver {
+                    if compare_versions(&local_ver, remote_ver) != std::cmp::Ordering::Equal {
                         llamacpp_needs_update = true;
                         let hardware = detect_hardware_for_llamacpp();
                         if let Ok(url) = get_llamacpp_download_url(&hardware) {

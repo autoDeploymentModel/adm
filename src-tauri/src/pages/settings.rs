@@ -105,7 +105,9 @@ pub async fn get_llamacpp_version(app: tauri::AppHandle) -> Result<String, AppEr
                         after_version
                     };
                     if !clean_part.is_empty() {
-                        return Ok(clean_part.to_string());
+                        // 只提取 semver 部分（如 "0.1.0"），去掉 "(build ...)" 后缀
+                        let semver = clean_part.split_whitespace().next().unwrap_or(clean_part);
+                        return Ok(semver.to_string());
                     }
                 }
             }
