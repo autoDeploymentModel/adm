@@ -378,9 +378,7 @@ pub async fn start_model(
         "model-log",
         serde_json::json!({
             "model_id": &model_id,
-            "line": format!("[DEBUG] params: ctx={:?} ngl={:?} threads={:?} fa={:?} temp={:?} port={:?} host={:?} spec_type={:?}",
-                params.ctx_size, params.n_gpu_layers, params.threads, params.flash_attn,
-                params.temperature, params.port, params.host, params.spec_type),
+            "line": format!("[DEBUG] params: ctx={:?} port={:?}", params.ctx_size, params.port),
             "source": "stdout",
         }),
     )
@@ -412,177 +410,43 @@ pub async fn start_model(
     }
     *state.model_supports_images.lock().unwrap_or_else(|e| e.into_inner()) = vision_enabled;
 
-    // 推理能力：--reasoning 为 on/true/1 或 auto（自动检测）时视为模型支持推理。
-    // auto 下 llama-server 按模型格式自动启用，能出推理内容即具备该能力，故与 on 同等对待；
-    // 未设置时（None）与 llama-server 的 auto 行为一致，同样视为支持。
+    // 推理能力：UI 已不再暴露推理开关，按 llama-server 默认 auto 行为处理
+    // （llama-server 按模型格式自动启用，能出推理内容即具备该能力）
     // 同步记录到 AppState 供 Agent 配置（admAgent.json 的 can_reason）使用。
-    let reasoning_supported = match params.reasoning.as_deref().map(|s| s.to_lowercase()) {
-        Some(s) => matches!(s.as_str(), "on" | "true" | "1" | "auto"),
-        None => true,
-    };
     *state
         .model_supports_reasoning
         .lock()
-        .unwrap_or_else(|e| e.into_inner()) = reasoning_supported;
+        .unwrap_or_else(|e| e.into_inner()) = true;
 
+    // 上下文大小（UI 唯一允许调整的参数），0 = 不传，使用模型自带上下文
     if let Some(ctx) = params.ctx_size {
-        args.extend(["-c".to_string(), ctx.to_string()]);
-    }
-    if let Some(n) = params.n_predict {
-        args.extend(["-n".to_string(), n.to_string()]);
-    }
-    if let Some(b) = params.batch_size {
-        args.extend(["-b".to_string(), b.to_string()]);
-    }
-    if let Some(ub) = params.ubatch_size {
-        args.extend(["-ub".to_string(), ub.to_string()]);
-    }
-    if let Some(ngl) = &params.n_gpu_layers {
-        // 转换前端传来的特殊值：all → 99，auto → 不传参数
-        let ngl_lower = ngl.to_lowercase();
-        if ngl_lower == "auto" {
-            // "auto" 表示自动决定，不传 -ngl 参数让 llama-server 自行判断
-        } else if ngl_lower == "all" {
-            // "all" 表示全部加载到 GPU，使用 99
-            args.extend(["-ngl".to_string(), "99".to_string()]);
-        } else if ngl.parse::<i32>().is_ok() {
-            // 数字值直接传递
-            args.extend(["-ngl".to_string(), ngl.clone()]);
-        } else {
-            // 无法识别的值，记录警告并不传参数
-            app.emit(
-                "model-log",
-                serde_json::json!({
-                    "model_id": &model_id,
-                    "line": format!("[WARN] 无法识别的 GPU 层数值: {}，已跳过 -ngl 参数", ngl),
-                    "source": "stdout",
-                }),
-            )
-            .ok();
-        }
-    }
-    if let Some(t) = params.threads {
-        args.extend(["-t".to_string(), t.to_string()]);
-    }
-    if let Some(tb) = params.threads_batch {
-        args.extend(["-tb".to_string(), tb.to_string()]);
-    }
-    if let Some(fa) = &params.flash_attn {
-        // llama-server 的 -fa 接受 on/off/auto，auto 时默认使用 on
-        match fa.to_lowercase().as_str() {
-            "on" | "true" | "1" | "auto" => args.extend(["-fa".to_string(), "on".to_string()]),
-            "off" | "false" | "0" => args.extend(["-fa".to_string(), "off".to_string()]),
-            _ => {
-                // 无法识别的值，默认使用 on
-                args.extend(["-fa".to_string(), "on".to_string()]);
-                app.emit(
-                    "model-log",
-                    serde_json::json!({
-                        "model_id": &model_id,
-                        "line": format!("[WARN] 无法识别的 Flash Attention 值: {}，已使用默认值 on", fa),
-                        "source": "stdout",
-                    }),
-                )
-                .ok();
-            }
-        }
-    }
-    if let Some(ctk) = &params.cache_type_k {
-        args.extend(["-ctk".to_string(), ctk.clone()]);
-    }
-    if let Some(ctv) = &params.cache_type_v {
-        args.extend(["-ctv".to_string(), ctv.clone()]);
-    }
-    if let Some(true) = params.mlock {
-        args.push("--mlock".to_string());
-    }
-    if let Some(false) = params.mmap {
-        args.push("--no-mmap".to_string());
-    }
-    if let Some(temp) = params.temperature {
-        args.extend(["--temp".to_string(), temp.to_string()]);
-    }
-    if let Some(topk) = params.top_k {
-        args.extend(["--top-k".to_string(), topk.to_string()]);
-    }
-    if let Some(topp) = params.top_p {
-        args.extend(["--top-p".to_string(), topp.to_string()]);
-    }
-    if let Some(minp) = params.min_p {
-        args.extend(["--min-p".to_string(), minp.to_string()]);
-    }
-    if let Some(rp) = params.repeat_penalty {
-        args.extend(["--repeat-penalty".to_string(), rp.to_string()]);
-    }
-    if let Some(rln) = params.repeat_last_n {
-        args.extend(["--repeat-last-n".to_string(), rln.to_string()]);
-    }
-    if let Some(dm) = params.dry_multiplier {
-        args.extend(["--dry-multiplier".to_string(), dm.to_string()]);
-    }
-    if let Some(dal) = params.dry_allowed_length {
-        args.extend(["--dry-allowed-length".to_string(), dal.to_string()]);
-    }
-    if let Some(dpln) = params.dry_penalty_last_n {
-        args.extend(["--dry-penalty-last-n".to_string(), dpln.to_string()]);
-    }
-    if let Some(pp) = params.presence_penalty {
-        args.extend(["--presence-penalty".to_string(), pp.to_string()]);
-    }
-    if let Some(fp) = params.frequency_penalty {
-        args.extend(["--frequency-penalty".to_string(), fp.to_string()]);
-    }
-    if let Some(r) = &params.reasoning {
-        // llama-server 的 --reasoning 接受 on/off/auto，auto 时不传参数
-        match r.to_lowercase().as_str() {
-            "on" | "true" | "1" => args.extend(["--reasoning".to_string(), "on".to_string()]),
-            "off" | "false" | "0" => args.extend(["--reasoning".to_string(), "off".to_string()]),
-            "auto" => {
-                // "auto" 表示自动决定，不传 --reasoning 参数让 llama-server 自行判断
-            }
-            _ => {
-                // 无法识别的值，不传参数
-                app.emit(
-                    "model-log",
-                    serde_json::json!({
-                        "model_id": &model_id,
-                        "line": format!("[WARN] 无法识别的 reasoning 值: {}，已跳过 --reasoning 参数", r),
-                        "source": "stdout",
-                    }),
-                )
-                .ok();
-            }
+        if ctx > 0 {
+            args.extend(["-c".to_string(), ctx.to_string()]);
         }
     }
 
     // MTP (Multi-Token Prediction) auto-detection
-    if let Some(spec_type) = &params.spec_type {
-        if spec_type != "none" {
-            if let Some(n) = params.spec_draft_n_max {
-                args.extend(["--spec-draft-n-max".to_string(), n.to_string()]);
-            }
-            args.extend(["--spec-type".to_string(), spec_type.clone()]);
-        }
-    } else if model_id.to_lowercase().contains("mtp") {
-            args.extend(["--spec-draft-n-max".to_string(), "2".to_string()]);
-            args.extend(["--spec-type".to_string(), "draft-mtp".to_string()]);
-            app.emit(
-                "model-log",
-                serde_json::json!({
-                    "model_id": &model_id,
-                    "line": "[DEBUG] MTP auto-detection: triggered (model_id contains 'MTP')",
-                    "source": "stdout",
-                }),
-            )
-            .ok();
-        }
+    if model_id.to_lowercase().contains("mtp") {
+        args.extend(["--spec-draft-n-max".to_string(), "2".to_string()]);
+        args.extend(["--spec-type".to_string(), "draft-mtp".to_string()]);
+        app.emit(
+            "model-log",
+            serde_json::json!({
+                "model_id": &model_id,
+                "line": "[DEBUG] MTP auto-detection: triggered (model_id contains 'MTP')",
+                "source": "stdout",
+            }),
+        )
+        .ok();
+    }
 
-    let port = params.port.unwrap_or(5678);
+    // 监听端口
+    let port: u16 = params.port.unwrap_or(5678);
     args.extend(["--port".to_string(), port.to_string()]);
 
-    if let Some(host) = &params.host {
-        args.extend(["--host".to_string(), host.clone()]);
-    }
+    // 监听地址（默认 127.0.0.1 仅本地）
+    let host = params.host.clone().unwrap_or_else(|| "127.0.0.1".to_string());
+    args.extend(["--host".to_string(), host]);
 
     args.push("--verbose".to_string());
 

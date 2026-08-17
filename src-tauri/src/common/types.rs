@@ -23,34 +23,10 @@ pub struct ModelStatus {
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct LaunchParams {
     pub ctx_size: Option<i32>,
-    pub n_predict: Option<i32>,
-    pub batch_size: Option<i32>,
-    pub ubatch_size: Option<i32>,
-    pub n_gpu_layers: Option<String>,
-    pub threads: Option<i32>,
-    pub threads_batch: Option<i32>,
-    pub flash_attn: Option<String>,
-    pub cache_type_k: Option<String>,
-    pub cache_type_v: Option<String>,
-    pub mlock: Option<bool>,
-    pub mmap: Option<bool>,
-    pub temperature: Option<f64>,
-    pub top_k: Option<i32>,
-    pub top_p: Option<f64>,
-    pub min_p: Option<f64>,
-    pub repeat_penalty: Option<f64>,
-    pub repeat_last_n: Option<i32>,
-    pub dry_multiplier: Option<f64>,
-    pub dry_allowed_length: Option<i32>,
-    pub dry_penalty_last_n: Option<i32>,
-    pub presence_penalty: Option<f64>,
-    pub frequency_penalty: Option<f64>,
-    pub reasoning: Option<String>,
-    pub spec_draft_n_max: Option<i32>,
-    pub spec_type: Option<String>,
+    /// 监听端口（仅作为历史配置兼容入口；UI 已不再允许修改，后端始终使用 5678）
     pub port: Option<u16>,
+    /// 监听地址，如 "127.0.0.1" / "0.0.0.0"
     pub host: Option<String>,
-    pub preset_mode: Option<String>,
 }
 
 

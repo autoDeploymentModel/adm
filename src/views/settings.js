@@ -254,124 +254,34 @@ const template = `
       <div id="panel-launch-params" class="panel active">
         <div class="panel-title">${_t("模型启动参数")}</div>
 
-        <div class="param-group" style="margin-bottom: 28px;">
-          <div class="param-group-title">${_t("推荐模式")}</div>
-          <div class="param-row">
-            <div class="param-label">${_t("选择模式")}<div class="param-key">${_t("快速配置")}</div></div>
-            <div class="param-input">
-              <select id="preset_mode">
-                <option value="default">${_t("默认（日常聊天）")}</option>
-                <option value="creative">${_t("创意写作")}</option>
-                <option value="code">${_t("写代码 / 编程（推荐）")}</option>
-              </select>
-              <div class="param-desc">${_t("选择后自动填充并保存采样参数，可手动微调后自动保存")}</div>
-            </div>
-          </div>
-        </div>
-
         <div class="param-group">
           <div class="param-group-title">${_t("基础参数")}</div>
           <div class="param-row">
             <div class="param-label">${_t("上下文大小")}<div class="param-key">-c, --ctx-size</div></div>
-            <div class="param-input"><input type="number" id="ctx_size" value="25600" min="0"><div class="param-desc" id="ctx-floor-hint"></div></div>
+            <div class="param-input"><input type="number" id="ctx_size" value="25600" min="0"><div class="param-desc">${_t("仅修改此参数；其它参数已固定为 llama-server 默认值，留 0 表示使用模型自带上下文")}</div></div>
           </div>
-          <div class="param-row">
-            <div class="param-label">${_t("预测 token 数")}<div class="param-key">-n, --n-predict</div></div>
-            <div class="param-input"><input type="number" id="n_predict" value="-1"><div class="param-desc">${_t("-1 表示无限")}</div></div>
-          </div>
-          <div class="param-row">
-            <div class="param-label">${_t("批处理大小")}<div class="param-key">-b, --batch-size</div></div>
-            <div class="param-input"><input type="number" id="batch_size" value="2048" min="1"></div>
-          </div>
-          <div class="param-row">
-            <div class="param-label">${_t("微批次大小")}<div class="param-key">-ub, --ubatch-size</div></div>
-            <div class="param-input"><input type="number" id="ubatch_size" value="512" min="1"></div>
-          </div>
-        </div>
-
-        <div class="param-group">
-          <div class="param-group-title">${_t("GPU 参数")}</div>
-          <div class="param-row">
-            <div class="param-label">${_t("GPU 层数")}<div class="param-key">-ngl, --n-gpu-layers</div></div>
-            <div class="param-input">
-              <select id="n_gpu_layers">
-                <option value="auto">${_t("auto (自动)")}</option>
-                <option value="all">${_t("all (全部)")}</option>
-                <option value="0">${_t("0 (仅 CPU)")}</option>
-                <option value="1">1</option>
-                <option value="10">10</option>
-                <option value="20">20</option>
-                <option value="30">30</option>
-                <option value="40">40</option>
-                <option value="50">50</option>
-                <option value="custom">${_t("自定义")}</option>
-              </select>
-            </div>
-          </div>
-          <div class="param-row" id="custom_ngl_row" style="display:none;">
-            <div class="param-label">${_t("自定义 GPU 层数")}</div>
-            <div class="param-input"><input type="number" id="n_gpu_layers_custom" value="0" min="0"></div>
-          </div>
-        </div>
-
-        <div class="param-group">
-          <div class="param-group-title">${_t("性能参数")}</div>
-          <div class="param-row">
-            <div class="param-label">${_t("线程数")}<div class="param-key">-t, --threads</div></div>
-            <div class="param-input"><input type="number" id="threads" value="" placeholder="${_t("自动")}"><div class="param-desc">${_t("留空为自动")}</div></div>
-          </div>
-          <div class="param-row">
-            <div class="param-label">${_t("批处理线程数")}<div class="param-key">-tb, --threads-batch</div></div>
-            <div class="param-input"><input type="number" id="threads_batch" value="" placeholder="${_t("同线程数")}"></div>
-          </div>
-          <div class="param-row">
-            <div class="param-label">Flash Attention<div class="param-key">-fa, --flash-attn</div></div>
-            <div class="param-input">
-              <select id="flash_attn"><option value="on">on</option><option value="off">off</option></select>
-            </div>
-          </div>
-          <div class="param-row">
-            <div class="param-label">${_t("KV 缓存类型 K")}<div class="param-key">-ctk, --cache-type-k</div></div>
-            <div class="param-input">
-              <select id="cache_type_k"><option value="f16">f16</option><option value="f32">f32</option><option value="q8_0">q8_0</option><option value="q4_0">q4_0</option><option value="q4_1">q4_1</option><option value="q5_0">q5_0</option><option value="q5_1">q5_1</option></select>
-            </div>
-          </div>
-          <div class="param-row">
-            <div class="param-label">${_t("KV 缓存类型 V")}<div class="param-key">-ctv, --cache-type-v</div></div>
-            <div class="param-input">
-              <select id="cache_type_v"><option value="f16">f16</option><option value="f32">f32</option><option value="q8_0">q8_0</option><option value="q4_0">q4_0</option><option value="q4_1">q4_1</option><option value="q5_0">q5_0</option><option value="q5_1">q5_1</option></select>
-            </div>
-          </div>
-          <div class="param-row">
-            <div class="param-label">${_t("内存锁定")}<div class="param-key">--mlock</div></div>
-            <div class="param-input"><div class="checkbox-wrap"><input type="checkbox" id="mlock"><span>${_t("强制模型驻留 RAM")}</span></div></div>
-          </div>
-          <div class="param-row">
-            <div class="param-label">${_t("内存映射")}<div class="param-key">--mmap</div></div>
-            <div class="param-input"><div class="checkbox-wrap"><input type="checkbox" id="mmap" checked><span>${_t("启用内存映射")}</span></div></div>
-          </div>
-        </div>
-
-        <div class="param-group">
-          <div class="param-group-title">${_t("采样参数")}</div>
-          <div class="param-row"><div class="param-label">${_t("温度")}<div class="param-key">--temp</div></div><div class="param-input"><input type="number" id="temperature" value="0.8" step="0.05" min="0"></div></div>
-          <div class="param-row"><div class="param-label">Top-K<div class="param-key">--top-k</div></div><div class="param-input"><input type="number" id="top_k" value="40" min="0"></div></div>
-          <div class="param-row"><div class="param-label">Top-P<div class="param-key">--top-p</div></div><div class="param-input"><input type="number" id="top_p" value="0.95" step="0.01" min="0" max="1"></div></div>
-          <div class="param-row"><div class="param-label">Min-P<div class="param-key">--min-p</div></div><div class="param-input"><input type="number" id="min_p" value="0.05" step="0.01" min="0" max="1"></div></div>
-          <div class="param-row"><div class="param-label">${_t("重复惩罚")}<div class="param-key">--repeat-penalty</div></div><div class="param-input"><input type="number" id="repeat_penalty" value="1.1" step="0.05" min="0"></div></div>
-          <div class="param-row"><div class="param-label">${_t("重复窗口")}<div class="param-key">--repeat-last-n</div></div><div class="param-input"><input type="number" id="repeat_last_n" value="-1" step="1"><div class="param-desc">${_t("重复惩罚的上下文窗口大小，-1 表示使用 ctx_size")}</div></div></div>
-          <div class="param-row"><div class="param-label">${_t("DRY 乘数")}<div class="param-key">--dry-multiplier</div></div><div class="param-input"><input type="number" id="dry_multiplier" value="0.8" step="0.05" min="0"><div class="param-desc">${_t("DRY 采样乘数，0.0 表示禁用")}</div></div></div>
-          <div class="param-row"><div class="param-label">${_t("DRY 允许长度")}<div class="param-key">--dry-allowed-length</div></div><div class="param-input"><input type="number" id="dry_allowed_length" value="2" step="1" min="1"><div class="param-desc">${_t("DRY 采样允许的重复长度，代码模式建议设为 1")}</div></div></div>
-          <div class="param-row"><div class="param-label">${_t("DRY 惩罚窗口")}<div class="param-key">--dry-penalty-last-n</div></div><div class="param-input"><input type="number" id="dry_penalty_last_n" value="-1" step="1"><div class="param-desc">${_t("DRY 惩罚的最后 n 个 token，-1 表示使用上下文大小")}</div></div></div>
-          <div class="param-row"><div class="param-label">${_t("存在惩罚")}<div class="param-key">--presence-penalty</div></div><div class="param-input"><input type="number" id="presence_penalty" value="0.0" step="0.05" min="0"><div class="param-desc">${_t("重复 alpha 存在惩罚，0.0 表示禁用")}</div></div></div>
-          <div class="param-row"><div class="param-label">${_t("频率惩罚")}<div class="param-key">--frequency-penalty</div></div><div class="param-input"><input type="number" id="frequency_penalty" value="0.0" step="0.05" min="0"><div class="param-desc">${_t("重复 alpha 频率惩罚，0.0 表示禁用")}</div></div></div>
-          <div class="param-row"><div class="param-label">${_t("推理/思考")}<div class="param-key">--reasoning</div></div><div class="param-input"><select id="reasoning"><option value="auto">${_t("auto (自动检测)")}</option><option value="on">${_t("on (开启)")}</option><option value="off">${_t("off (关闭)")}</option></select><div class="param-desc">${_t("控制模型是否启用推理/思考模式")}</div></div></div>
         </div>
 
         <div class="param-group">
           <div class="param-group-title">${_t("服务参数")}</div>
-          <div class="param-row"><div class="param-label">${_t("监听端口")}<div class="param-key">--port</div></div><div class="param-input"><input type="number" id="port" value="5678" min="1" max="65535"></div></div>
-          <div class="param-row"><div class="param-label">${_t("监听地址")}<div class="param-key">--host</div></div><div class="param-input"><select id="host"><option value="127.0.0.1">${_t("127.0.0.1 (本地)")}</option><option value="0.0.0.0">${_t("0.0.0.0 (所有接口)")}</option></select></div></div>
+          <div class="param-row">
+            <div class="param-label">${_t("监听端口")}<div class="param-key">--port</div></div>
+            <div class="param-input"><input type="number" id="port" value="5678" min="1" max="65535"></div>
+          </div>
+          <div class="param-row">
+            <div class="param-label">${_t("监听地址")}<div class="param-key">--host</div></div>
+            <div class="param-input">
+              <select id="host">
+                <option value="127.0.0.1">${_t("127.0.0.1 (本地)")}</option>
+                <option value="0.0.0.0">${_t("0.0.0.0 (所有接口)")}</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="param-row" style="margin-top:16px;">
+          <div class="param-label"></div>
+          <div class="param-input"><span style="font-size:12px;color:var(--c-text-3);">${_t("其余启动参数（GPU 层、线程、采样、KV 缓存、推理等）已固定为 llama-server 默认值，如需调整请直接修改 doc/llamacpp.txt 列出的参数。")}</span></div>
         </div>
 
         <button class="btn-reset" id="reset-btn">${_t("恢复默认")}</button>
@@ -541,13 +451,7 @@ const template = `
 </div>
 `;
 
-const PRESET_MODES = {
-  default: { ctx_size: 25600, temperature: 1.0, top_k: 20, top_p: 0.95, min_p: 0.0, repeat_penalty: 1.0, repeat_last_n: -1, dry_multiplier: 0.0, dry_allowed_length: 2, dry_penalty_last_n: -1, presence_penalty: 1.5, frequency_penalty: 0.0, reasoning: "auto" },
-  creative: { ctx_size: 25600, temperature: 1.0, top_k: 20, top_p: 0.95, min_p: 0.0, repeat_penalty: 1.0, repeat_last_n: -1, dry_multiplier: 0.0, dry_allowed_length: 2, dry_penalty_last_n: -1, presence_penalty: 1.5, frequency_penalty: 0.0, reasoning: "auto" },
-  code: { ctx_size: 128000, temperature: 0.6, top_k: 20, top_p: 0.95, min_p: 0.0, repeat_penalty: 1.0, repeat_last_n: -1, dry_multiplier: 0.0, dry_allowed_length: 2, dry_penalty_last_n: -1, presence_penalty: 0.0, frequency_penalty: 0.0, reasoning: "off" },
-};
-
-const MODE_MIN_CTX = { default: 25600, creative: 25600, code: 128000 };
+const DEFAULT_CTX_SIZE = 25600;
 
 const invoke = () => window.__adm_invoke;
 
@@ -575,131 +479,29 @@ function showToast(message, isError) {
   setTimeout(() => toast.remove(), 3000);
 }
 
-function fillSamplingFromPreset(preset) {
-  document.getElementById("ctx_size").value = preset.ctx_size;
-  applyCtxFloor();
-  document.getElementById("temperature").value = preset.temperature;
-  document.getElementById("top_k").value = preset.top_k;
-  document.getElementById("top_p").value = preset.top_p;
-  document.getElementById("min_p").value = preset.min_p;
-  document.getElementById("repeat_penalty").value = preset.repeat_penalty;
-  document.getElementById("repeat_last_n").value = preset.repeat_last_n;
-  document.getElementById("dry_multiplier").value = preset.dry_multiplier;
-  document.getElementById("dry_allowed_length").value = preset.dry_allowed_length;
-  document.getElementById("dry_penalty_last_n").value = preset.dry_penalty_last_n;
-  document.getElementById("presence_penalty").value = preset.presence_penalty;
-  document.getElementById("frequency_penalty").value = preset.frequency_penalty;
-  document.getElementById("reasoning").value = preset.reasoning;
-}
-
-function applyCtxFloor() {
-  const mode = document.getElementById("preset_mode").value;
-  const floor = MODE_MIN_CTX[mode] || 1;
-  const ctxEl = document.getElementById("ctx_size");
-  ctxEl.min = floor;
-  const v = parseInt(ctxEl.value) || 0;
-  if (v < floor) {
-    ctxEl.value = floor;
-    showToast(_t("当前模式上下文大小不能低于 ") + floor, false);
-  }
-  const hint = document.getElementById("ctx-floor-hint");
-  if (hint) hint.textContent = floor > 1 ? (_t("当前模式最小 ") + floor) : "";
-}
-
-async function onPresetModeChange() {
-  const mode = document.getElementById("preset_mode").value;
-  const preset = PRESET_MODES[mode];
-  if (!preset) return;
-  fillSamplingFromPreset(preset);
-  await saveParams();
-}
-
 function getParamsFromForm() {
-  const nglSelect = document.getElementById("n_gpu_layers").value;
-  let nglValue = nglSelect;
-  if (nglSelect === "custom") nglValue = document.getElementById("n_gpu_layers_custom").value;
-  const threadsVal = document.getElementById("threads").value;
-  const threadsBatchVal = document.getElementById("threads_batch").value;
-  let ctxSize = parseInt(document.getElementById("ctx_size").value) || 0;
-  const ctxFloor = MODE_MIN_CTX[document.getElementById("preset_mode").value] || 1;
-  if (ctxSize < ctxFloor) ctxSize = ctxFloor;
+  const ctxVal = parseInt(document.getElementById("ctx_size").value) || 0;
+  const portEl = document.getElementById("port");
+  const hostEl = document.getElementById("host");
   return {
-    ctx_size: ctxSize,
-    n_predict: parseInt(document.getElementById("n_predict").value) || -1,
-    batch_size: parseInt(document.getElementById("batch_size").value) || 2048,
-    ubatch_size: parseInt(document.getElementById("ubatch_size").value) || 512,
-    n_gpu_layers: nglValue,
-    threads: threadsVal ? parseInt(threadsVal) : null,
-    threads_batch: threadsBatchVal ? parseInt(threadsBatchVal) : null,
-    flash_attn: document.getElementById("flash_attn").value,
-    cache_type_k: document.getElementById("cache_type_k").value,
-    cache_type_v: document.getElementById("cache_type_v").value,
-    mlock: document.getElementById("mlock").checked,
-    mmap: document.getElementById("mmap").checked,
-    temperature: parseFloat(document.getElementById("temperature").value) || 1.0,
-    top_k: parseInt(document.getElementById("top_k").value) || 20,
-    top_p: parseFloat(document.getElementById("top_p").value) || 0.95,
-    min_p: parseFloat(document.getElementById("min_p").value) || 0.0,
-    repeat_penalty: parseFloat(document.getElementById("repeat_penalty").value) || 1.0,
-    repeat_last_n: parseInt(document.getElementById("repeat_last_n").value) || -1,
-    dry_multiplier: parseFloat(document.getElementById("dry_multiplier").value) || 0.0,
-    dry_allowed_length: parseInt(document.getElementById("dry_allowed_length").value) || 2,
-    dry_penalty_last_n: parseInt(document.getElementById("dry_penalty_last_n").value) || -1,
-    presence_penalty: parseFloat(document.getElementById("presence_penalty").value) || 1.5,
-    frequency_penalty: parseFloat(document.getElementById("frequency_penalty").value) || 0.0,
-    reasoning: document.getElementById("reasoning").value,
-    port: parseInt(document.getElementById("port").value) || 5678,
-    host: document.getElementById("host").value,
-    preset_mode: document.getElementById("preset_mode").value,
+    ctx_size: ctxVal,
+    port: portEl ? (parseInt(portEl.value) || 5678) : 5678,
+    host: hostEl ? hostEl.value : "127.0.0.1",
   };
 }
 
 function fillFormFromParams(params) {
-  function getParam(key) { return params[key] ?? params[camelCase(key)]; }
-  function camelCase(snake) { return snake.replace(/_([a-z])/g, (_, c) => c.toUpperCase()); }
-  document.getElementById("ctx_size").value = getParam("ctx_size") ?? 25600;
-  document.getElementById("n_predict").value = getParam("n_predict") ?? -1;
-  document.getElementById("batch_size").value = getParam("batch_size") ?? 2048;
-  document.getElementById("ubatch_size").value = getParam("ubatch_size") ?? 512;
-  const nglValue = getParam("n_gpu_layers") ?? "auto";
-  const nglSelect = document.getElementById("n_gpu_layers");
-  const options = Array.from(nglSelect.options).map((o) => o.value);
-  if (options.includes(nglValue)) {
-    nglSelect.value = nglValue;
-    document.getElementById("custom_ngl_row").style.display = "none";
-  } else {
-    nglSelect.value = "custom";
-    document.getElementById("n_gpu_layers_custom").value = nglValue;
-    document.getElementById("custom_ngl_row").style.display = "flex";
-  }
-  document.getElementById("threads").value = getParam("threads") ?? "";
-  document.getElementById("threads_batch").value = getParam("threads_batch") ?? "";
-  document.getElementById("flash_attn").value = getParam("flash_attn") ?? "on";
-  document.getElementById("cache_type_k").value = getParam("cache_type_k") ?? "f16";
-  document.getElementById("cache_type_v").value = getParam("cache_type_v") ?? "f16";
-  document.getElementById("mlock").checked = getParam("mlock") ?? false;
-  document.getElementById("mmap").checked = getParam("mmap") !== false;
-  document.getElementById("temperature").value = getParam("temperature") ?? 1.0;
-  document.getElementById("top_k").value = getParam("top_k") ?? 20;
-  document.getElementById("top_p").value = getParam("top_p") ?? 0.95;
-  document.getElementById("min_p").value = getParam("min_p") ?? 0.0;
-  document.getElementById("repeat_penalty").value = getParam("repeat_penalty") ?? 1.0;
-  document.getElementById("repeat_last_n").value = getParam("repeat_last_n") ?? -1;
-  document.getElementById("dry_multiplier").value = getParam("dry_multiplier") ?? 0.0;
-  document.getElementById("dry_allowed_length").value = getParam("dry_allowed_length") ?? 2;
-  document.getElementById("dry_penalty_last_n").value = getParam("dry_penalty_last_n") ?? -1;
-  document.getElementById("presence_penalty").value = getParam("presence_penalty") ?? 1.5;
-  document.getElementById("frequency_penalty").value = getParam("frequency_penalty") ?? 0.0;
-  document.getElementById("reasoning").value = getParam("reasoning") ?? "auto";
-  document.getElementById("port").value = getParam("port") ?? 5678;
-  document.getElementById("host").value = getParam("host") ?? "127.0.0.1";
-  const presetMode = getParam("preset_mode") ?? "default";
-  document.getElementById("preset_mode").value = PRESET_MODES[presetMode] ? presetMode : "default";
+  const p = params || {};
+  document.getElementById("ctx_size").value = p.ctx_size ?? p.ctxSize ?? DEFAULT_CTX_SIZE;
+  const portEl = document.getElementById("port");
+  if (portEl) portEl.value = p.port ?? 5678;
+  const hostEl = document.getElementById("host");
+  if (hostEl) hostEl.value = p.host ?? "127.0.0.1";
 }
 
 async function saveParams() {
   const params = getParamsFromForm();
-  console.log("[settings] 保存参数:", JSON.stringify(params).substring(0, 200));
+  console.log("[settings] 保存参数:", JSON.stringify(params));
   try {
     // 加载完整设置，仅替换 launch_params，保留 agent_workdirs 等所有其他字段
     let s = await invoke()("load_settings");
@@ -714,38 +516,17 @@ async function saveParams() {
 }
 
 function resetParams() {
-  const defaults = {
-    ctx_size: 25600, n_predict: -1, batch_size: 2048, ubatch_size: 512,
-    n_gpu_layers: "auto", threads: null, threads_batch: null,
-    flash_attn: "on", cache_type_k: "f16", cache_type_v: "f16",
-    mlock: true, mmap: true, temperature: 1.0, top_k: 20, top_p: 0.95, min_p: 0.0,
-    repeat_penalty: 1.0, repeat_last_n: -1, dry_multiplier: 0.0, dry_allowed_length: 2,
-    dry_penalty_last_n: -1, presence_penalty: 1.5, frequency_penalty: 0.0, reasoning: "auto",
-    port: 5678, host: "127.0.0.1",
-  };
-  fillFormFromParams(defaults);
-  applyCtxFloor();
+  fillFormFromParams({ ctx_size: DEFAULT_CTX_SIZE });
   autoSave();
 }
 
 function autoSave() { saveParams(); }
 
 function setupAutoSave() {
-  var paramIds = [
-    "ctx_size", "n_predict", "batch_size", "ubatch_size",
-    "n_gpu_layers_custom", "threads", "threads_batch",
-    "flash_attn", "cache_type_k", "cache_type_v",
-    "mlock", "mmap",
-    "temperature", "top_k", "top_p", "min_p",
-    "repeat_penalty", "repeat_last_n",
-    "dry_multiplier", "dry_allowed_length", "dry_penalty_last_n",
-    "presence_penalty", "frequency_penalty",
-    "reasoning", "port", "host"
-  ];
-  for (var i = 0; i < paramIds.length; i++) {
-    var el = document.getElementById(paramIds[i]);
+  ["ctx_size", "port", "host"].forEach(function (id) {
+    var el = document.getElementById(id);
     if (el) el.addEventListener("change", autoSave);
-  }
+  });
 }
 
 async function saveProxy() {
@@ -1097,14 +878,6 @@ export default {
     document.querySelectorAll(".nav-item").forEach(function(el) {
       el.addEventListener("click", function() { switchPanel(el.dataset.panel); });
     });
-    document.getElementById("preset_mode").addEventListener("change", onPresetModeChange);
-    document.getElementById("n_gpu_layers").addEventListener("change", function() {
-      const customRow = document.getElementById("custom_ngl_row");
-      if (this.value === "custom") customRow.style.display = "flex";
-      else customRow.style.display = "none";
-      autoSave();
-    });
-    document.getElementById("ctx_size").addEventListener("change", function() { applyCtxFloor(); autoSave(); });
     document.getElementById("reset-btn").addEventListener("click", resetParams);
     document.getElementById("check-update-btn").addEventListener("click", checkUpdateNow);
     document.getElementById("delete-llamacpp-btn").addEventListener("click", deleteLlamacpp);
@@ -1138,7 +911,6 @@ export default {
         console.log("[settings] 加载设置成功, keys:", Object.keys(settings));
         const params = settings.launch_params || settings.launchParams;
         if (settings && params) fillFormFromParams(params);
-        applyCtxFloor();
         // 代理设置回填
         const proxy = settings.agent_proxy || {};
         document.getElementById("proxy_enabled").checked = !!proxy.enabled;

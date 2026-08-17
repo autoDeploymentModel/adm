@@ -250,13 +250,22 @@ fn load_ctx_size(app: &tauri::AppHandle) -> Option<i32> {
 }
 
 /// 从 ADM 配置文件（config.json）读取端口 port。
-/// 读取失败或字段缺失时返回 None，由调用方决定是否回退到默认值。
-fn load_port(app: &tauri::AppHandle) -> Option<u16> {
-    let data_dir = config::get_data_dir(Some(app)).ok()?;
+/// 读取失败、字段缺失或显式为 None 时返回 5678（llama-server 默认端口，UI 已不再允许修改）。
+fn load_port(app: &tauri::AppHandle) -> u16 {
+    let data_dir = match config::get_data_dir(Some(app)) {
+        Ok(d) => d,
+        Err(_) => return 5678,
+    };
     let config_path = data_dir.join("config.json");
-    let json = std::fs::read_to_string(&config_path).ok()?;
-    let settings: Settings = serde_json::from_str(&json).ok()?;
-    settings.launch_params.port
+    let json = match std::fs::read_to_string(&config_path) {
+        Ok(s) => s,
+        Err(_) => return 5678,
+    };
+    let settings: Settings = match serde_json::from_str(&json) {
+        Ok(s) => s,
+        Err(_) => return 5678,
+    };
+    settings.launch_params.port.unwrap_or(5678)
 }
 
 /// 根据上下文大小、端口、图片支持与推理支持标志构造完整的 admAgent.json 配置结构体。
@@ -321,7 +330,7 @@ fn ensure_adm_agent_config(app: &tauri::AppHandle) -> Result<(), AppError> {
         .filter(|v| *v > 0)
         .unwrap_or(DEFAULT_CONTEXT_WINDOW as i32) as u32;
 
-    let port = load_port(app).unwrap_or(DEFAULT_PORT);
+    let port = load_port(app);
 
     // 当前运行模型是否支持图片（start_model 时按 support_images + mmproj 实际加载写入）
     let supports_images = app
