@@ -1803,6 +1803,7 @@ fn mask_sensitive_in_place(value: &mut serde_json::Value) {
     const SENSITIVE: &[&str] = &["api_key", "apikey", "secret", "password", "token"];
     match value {
         serde_json::Value::Object(map) => {
+            // 1) 字段名本身含敏感词 → 直接遮蔽其值
             let keys_to_mask: Vec<String> = map.keys()
                 .filter(|k| {
                     let lower = k.to_lowercase();
@@ -1812,6 +1813,22 @@ fn mask_sensitive_in_place(value: &mut serde_json::Value) {
                 .collect();
             for k in keys_to_mask {
                 if let Some(v) = map.get_mut(&k) {
+                    if !matches!(v, serde_json::Value::Null | serde_json::Value::Bool(_)) {
+                        *v = serde_json::Value::String("***".to_string());
+                    }
+                }
+            }
+            // 2) config/set 场景：key 字段值含敏感词时，遮蔽同对象的 value 字段
+            //    body = {"scope":0,"key":"providers.xxx.api_key","value":"sk-..."}
+            let key_is_sensitive = map.get("key")
+                .and_then(|v| v.as_str())
+                .map(|s| {
+                    let lower = s.to_lowercase();
+                    SENSITIVE.iter().any(|sk| lower.contains(sk))
+                })
+                .unwrap_or(false);
+            if key_is_sensitive {
+                if let Some(v) = map.get_mut("value") {
                     if !matches!(v, serde_json::Value::Null | serde_json::Value::Bool(_)) {
                         *v = serde_json::Value::String("***".to_string());
                     }
