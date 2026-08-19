@@ -46,60 +46,70 @@ function getModelReadiness() {
   return null;
 }
 
-export async function sendMessage() {
-  log.debug("SEND", "sendMessage: isSending=" + S.isSending + " convId=" + S.currentConvId + " activeRun=" + (S.activeRun ? S.activeRun.sessionId : "null") + " queuedRun=" + (S.queuedRun ? S.queuedRun.sessionId : "null"));
-  // 仅当「当前 UI 会话就是正在运行的会话」时，点击发送 = 取消该运行；
-  // 若运行发生在其它会话（用户已切走），点击发送 = 给当前会话发新消息（服务端排队）
-  var isCurrentRun = S.isSending && S.activeRun && S.activeRun.sessionId === S.currentConvId;
-  var isCurrentQueued = !!(S.queuedRun && S.queuedRun.sessionId === S.currentConvId);
-  if (isCurrentRun || isCurrentQueued) {
-    if (isCurrentQueued) {
-      // 取消排队：清除当前会话已入队、尚未执行的消息；正在执行的其它会话不受影响
-      try {
-        await api("POST", "/v1/workspaces/" + S.queuedRun.workspaceId + "/agent/sessions/" + S.queuedRun.sessionId + "/prompts/clear");
-      } catch (e) {
-        reportError(e, { prefix: _t("取消排队失败: ") });
-        return;
-      }
-      var cancelWsId = S.queuedRun.workspaceId;
-      store.clearQueuedRun(cancelWsId);
-      // 若无其它运行则整体回到就绪态；若其它会话仍在执行则保持运行态
-      if (!S.activeRun) {
-        store.cancelRun(cancelWsId);
-        clearSendSafetyTimer();
-        updateStatusBar("ready", null, S.contextUsage.used);
-      }
-      updateSendButton();
-      renderConversationList();
-      return;
-    }
-    // 取消实际运行中的会话（即当前会话）
-    // 用户主动取消 → 同时解除自动续跑，避免取消后又被自动拉起
-    resetAutoContinue();
-    var activeRun = S.activeRun;
-    if (activeRun) {
-      try {
-        await api("POST", "/v1/workspaces/" + activeRun.workspaceId + "/agent/sessions/" + activeRun.sessionId + "/cancel");
-      } catch (e) {
-        reportError(e, { prefix: _t("取消失败: ") });
-        return;
-      }
-    }
-    if (S.queuedRun) {
-      // 取消当前运行后仍有排队运行：由排队运行接管（服务端队列 FIFO，取消后即轮到它）
-      log.debug("SEND", "sendMessage: 取消当前运行，排队运行接管: " + S.queuedRun.sessionId);
-      store.promoteQueuedRun(activeRun.workspaceId);
-      startSendSafetyTimer();
-      updateSendButton();
-      renderConversationList();
-      return;
-    }
-    store.cancelRun(activeRun.workspaceId);
-    updateSendButton();
-    updateStatusBar("ready", null, S.contextUsage.used);
-    clearSendSafetyTimer();
+// 停止当前会话的运行（独立「停止」按钮调用；发送按钮不再承担取消职责）
+export async function cancelCurrentRun() {
+  var activeRun = S.activeRun;
+  if (!S.isSending || !activeRun || activeRun.sessionId !== S.currentConvId) return;
+  // 用户主动取消 → 同时解除自动续跑，避免取消后又被自动拉起
+  resetAutoContinue();
+  try {
+    await api("POST", "/v1/workspaces/" + activeRun.workspaceId + "/agent/sessions/" + activeRun.sessionId + "/cancel");
+  } catch (e) {
+    reportError(e, { prefix: _t("取消失败: ") });
     return;
   }
+  // 取消当前运行前，先清理未落库的折叠插入临时气泡：停止后服务端会丢弃
+  // 排队中的折叠消息，不再产生 message-created 去重替换，残留气泡需就地移除
+  var foldTemps = S.messages.filter(function(m) { return m._fold; });
+  foldTemps.forEach(function(m) { store.deleteMessage(activeRun.workspaceId, m.id); });
+  if (S.queuedRun) {
+    // 取消当前运行后仍有排队运行：由排队运行接管（服务端队列 FIFO，取消后即轮到它）
+    log.debug("SEND", "cancelCurrentRun: 取消当前运行，排队运行接管: " + S.queuedRun.sessionId);
+    store.promoteQueuedRun(activeRun.workspaceId);
+    startSendSafetyTimer();
+    updateSendButton();
+    renderConversationList();
+    // 上面已删除丢弃的折叠临时气泡，必须重渲染消息区，避免残留「插入中」气泡
+    renderMessages();
+    return;
+  }
+  store.cancelRun(activeRun.workspaceId);
+  updateSendButton();
+  updateStatusBar("ready", null, S.contextUsage.used);
+  clearSendSafetyTimer();
+  renderMessages();
+}
+
+export async function sendMessage() {
+  log.debug("SEND", "sendMessage: isSending=" + S.isSending + " convId=" + S.currentConvId + " activeRun=" + (S.activeRun ? S.activeRun.sessionId : "null") + " queuedRun=" + (S.queuedRun ? S.queuedRun.sessionId : "null"));
+  // 当前会话「排队中」（消息已入队、等待其它会话运行完）→ 点击发送 = 取消排队；
+  // 若运行发生在其它会话（用户已切走），点击发送 = 给当前会话发新消息（服务端排队）
+  var isCurrentQueued = !!(S.queuedRun && S.queuedRun.sessionId === S.currentConvId);
+  if (isCurrentQueued) {
+    // 取消排队：清除当前会话已入队、尚未执行的消息；正在执行的其它会话不受影响
+    try {
+      await api("POST", "/v1/workspaces/" + S.queuedRun.workspaceId + "/agent/sessions/" + S.queuedRun.sessionId + "/prompts/clear");
+    } catch (e) {
+      reportError(e, { prefix: _t("取消排队失败: ") });
+      return;
+    }
+    var cancelWsId = S.queuedRun.workspaceId;
+    store.clearQueuedRun(cancelWsId);
+    // 若无其它运行则整体回到就绪态；若其它会话仍在执行则保持运行态
+    if (!S.activeRun) {
+      store.cancelRun(cancelWsId);
+      clearSendSafetyTimer();
+      updateStatusBar("ready", null, S.contextUsage.used);
+    }
+    updateSendButton();
+    renderConversationList();
+    return;
+  }
+  // 折叠插入（中途插入）：当前会话正在运行，再发送 = 不带 run_id 发给服务端，
+  // 服务端在下一步边界把它折叠进当前轮（不是排队等本轮结束、也不取消本轮）；
+  // 不重开 run、不改运行统计、不重设续跑预算，仅新增一条待插入的用户消息
+  var foldIn = !!(S.isSending && S.activeRun && S.activeRun.sessionId === S.currentConvId);
+  if (foldIn) log.debug("SEND", "sendMessage: 当前会话运行中 → 折叠插入（无 run_id）");
   if (!S.currentConvId) {
     var input = /** @type {HTMLTextAreaElement} */ (document.getElementById("agent-input"));
     var text = (input.value || "").trim();
@@ -155,29 +165,33 @@ export async function sendMessage() {
     }
   }
 
-  // 在发送前固定运行身份；后续切换会话/工作区不能改变超时检查和取消目标
+  // 在发送前固定运行身份；后续切换会话/工作区不能改变超时检查和停止目标
   var workspaceId = S.serverInfo.workspace_id;
   var sessionId = S.currentConvId;
-  var runId = generateRunId();
-  // 此刻工作区是否已被其它会话占用（本消息将排队等待）——用于发送成功后提示
-  var wasBusyOther = store.isBusy(workspaceId) && S.activeRun && S.activeRun.sessionId !== sessionId;
+  // 折叠插入不带 run_id：服务端把它折叠进当前轮，不产生独立 run 生命周期
+  var runId = foldIn ? null : generateRunId();
+  // 此刻工作区是否已被其它会话占用（本消息将排队等待）——用于发送成功后提示；
+  // 折叠插入复用当前运行的槽位，不进入排队/启动新 run
+  var wasBusyOther = !foldIn && store.isBusy(workspaceId) && S.activeRun && S.activeRun.sessionId !== sessionId;
   if (wasBusyOther) {
     store.setQueuedRun(workspaceId, sessionId, runId);
-  } else {
+  } else if (!foldIn) {
     store.startRun(workspaceId, sessionId, runId);
   }
   updateSendButton();
 
-  // 立即显示用户消息（使用临时 ID，以便 SSE 到来时去重替换）
+  // 立即显示用户消息（使用临时 ID，以便 SSE 到来时去重替换）；
+  // 折叠插入的临时气泡标记 _fold + _sessionId，渲染为「插入中」，等待服务端折叠时去重/替换；
+  // _sessionId 用于刷新/切会话合并且只在同一会话内保留（防止待插入气泡串进其它会话）
   var tempId = "temp-user-" + Date.now();
-  store.appendMessage(workspaceId, { id: tempId, role: "user", content: text, _temp: true, _attachments: filesToSend.length > 0 ? filesToSend.map(function(f) { return f.name; }) : null });
+  store.appendMessage(workspaceId, { id: tempId, role: "user", content: text, _temp: true, _fold: foldIn || undefined, _sessionId: sessionId, _attachments: filesToSend.length > 0 ? filesToSend.map(function(f) { return f.name; }) : null });
   renderMessages();
   input.value = "";
   autoResize(input);
   clearPendingFiles();
 
-  // 更新状态栏
-  updateStatusBar("busy", null, S.contextUsage.used);
+  // 更新状态栏：折叠插入不改动运行态（当前轮仍在跑），其余场景切到忙碌
+  if (!foldIn) updateStatusBar("busy", null, S.contextUsage.used);
 
   try {
     // POST /v1/workspaces/{id}/agent — fire-and-forget, 返回 202 Accepted (无响应体)
@@ -187,8 +201,9 @@ export async function sendMessage() {
     var body = {
       session_id: sessionId,
       prompt: text || _t("（用户发来附件，请查看并处理）"),
-      run_id: runId,
     };
+    // 折叠插入不带 run_id（服务端下一步边界折叠进当前轮）；独立轮次才带 run_id 关联生命周期
+    if (!foldIn) body.run_id = runId;
     if (attachments.length > 0) body.attachments = attachments;
     try {
       await api("POST", "/v1/workspaces/" + workspaceId + "/agent", body);
@@ -200,19 +215,24 @@ export async function sendMessage() {
       await api("POST", "/v1/workspaces/" + workspaceId + "/agent/init");
       await api("POST", "/v1/workspaces/" + workspaceId + "/agent", body);
     }
-    log.debug("SEND", "sendMessage: 消息已发送, runId=" + runId + " wsId=" + workspaceId + " sessionId=" + sessionId);
-    // 初始化本轮运行统计：供假完成检测（A）与自动续跑进度判定（C）使用
-    store.setRunStats(workspaceId, {
-      sessionId: sessionId,
-      prompt: text || _t("（用户发来附件，请查看并处理）"),
-      toolCalls: 0,
-      sideEffectCalls: 0,
-      sideEffectSuccess: 0,
-      seenMsgIds: {},
-      startedAt: Date.now(),
-    });
-    // 手动发送成功 → 武装自动续跑（重置轮数/进度计数，绑定本会话）
-    armAutoContinue(sessionId);
+    log.debug("SEND", "sendMessage: 消息已发送, runId=" + (runId || "(fold)") + " wsId=" + workspaceId + " sessionId=" + sessionId);
+    // 独立轮次才初始化本轮运行统计（假完成检测 + 自动续跑进度）并武装自动续跑；
+    // 折叠插入复用当前轮的统计与续跑状态，不重开
+    if (!foldIn) {
+      store.setRunStats(workspaceId, {
+        sessionId: sessionId,
+        prompt: text || _t("（用户发来附件，请查看并处理）"),
+        toolCalls: 0,
+        sideEffectCalls: 0,
+        sideEffectSuccess: 0,
+        seenMsgIds: {},
+        startedAt: Date.now(),
+      });
+      // 手动发送成功 → 武装自动续跑（重置轮数/进度计数，绑定本会话）
+      armAutoContinue(sessionId);
+    } else {
+      showInfo(_t("消息已发送，将在当前对话的下一步插入并继续处理"));
+    }
     // 排队场景提示：queuedRun 已在发送前设置（供指示器/按钮/列表标识用），此处仅提示与刷新
     if (wasBusyOther) {
       showInfo(_t("当前有会话正在运行，消息已排队，将在其完成后自动执行"));
@@ -221,7 +241,12 @@ export async function sendMessage() {
     startSendSafetyTimer();
     updateContextUsage();
   } catch (e) {
-    if (wasBusyOther) {
+    if (foldIn) {
+      // 折叠插入失败：不中断正在运行的当前轮，仅移除待插入的临时气泡并提示
+      store.deleteMessage(workspaceId, tempId);
+      renderMessages();
+      showError(_t("消息发送失败（未影响当前运行）: ") + getErrorMessage(e));
+    } else if (wasBusyOther) {
       store.clearQueuedRun(workspaceId);
       updateSendButton();
       renderConversationList();
@@ -231,7 +256,9 @@ export async function sendMessage() {
       clearSendSafetyTimer();
       updateStatusBar("ready", null, S.contextUsage.used);
     }
-    store.appendMessage(workspaceId, { role: "error", content: _t("发送失败: ") + getErrorMessage(e), type: "error" });
-    renderMessages();
+    if (!foldIn) {
+      store.appendMessage(workspaceId, { role: "error", content: _t("发送失败: ") + getErrorMessage(e), type: "error" });
+      renderMessages();
+    }
   }
 }

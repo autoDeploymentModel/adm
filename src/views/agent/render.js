@@ -203,6 +203,14 @@ function buildMessageNode(msg, key) {
     return null; // 无内容则跳过
   }
 
+  // 折叠插入的消息：本地临时气泡在真正插入当前轮之前标注「插入中」，便于用户确认已发出
+  if (msg._fold) {
+    var foldBadge = document.createElement("span");
+    foldBadge.className = "msg-fold-badge";
+    foldBadge.textContent = _t("插入中");
+    div.appendChild(foldBadge);
+  }
+
   // 消息元信息
   if (msg.model || msg.provider) {
     var meta = document.createElement("div");

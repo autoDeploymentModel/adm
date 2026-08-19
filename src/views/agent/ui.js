@@ -136,19 +136,20 @@ export function showCopyPasteMenu(e, targetInput) {
 export function updateSendButton() {
   var btn = document.getElementById("agent-send-btn");
   if (!btn) return;
-  // 按钮语义按会话归属：仅当「当前 UI 会话就是正在运行的会话」时显示取消，
-  // 运行在别的会话（用户切走）时按钮恢复为发送，避免误把发送当取消；
-  // 当前会话处于「排队中」（消息已入队等待执行）时显示取消排队
+  // 按钮语义按会话归属：
+  // - 当前会话「排队中」→ 显示「取消排队」（清除已入队、尚未开始的消息）
+  // - 当前会话「运行中」→ 恢复为「发送」（发送=折叠插入当前轮），停止走独立「停止」按钮
+  // - 其它情况 → 正常「发送」（工作区忙碌时服务端排队等待）
   var isCurrentRun = S.isSending && S.activeRun && S.activeRun.sessionId === S.currentConvId;
   var isCurrentQueued = !!(S.queuedRun && S.queuedRun.sessionId === S.currentConvId);
-  if (isCurrentRun) {
-    btn.textContent = _t("⏹ 取消");
-    btn.classList.add("cancel");
-    btn.title = _t("停止当前会话的运行");
-  } else if (isCurrentQueued) {
+  if (isCurrentQueued) {
     btn.textContent = _t("⏹ 取消排队");
     btn.classList.add("cancel");
     btn.title = _t("取消当前会话已排队、尚未开始的消息");
+  } else if (isCurrentRun) {
+    btn.textContent = _t("📤 发送");
+    btn.classList.remove("cancel");
+    btn.title = _t("当前会话正在运行：发送的消息将插入当前对话继续处理（可用独立停止按钮中断运行）");
   } else {
     btn.textContent = _t("📤 发送");
     btn.classList.remove("cancel");
@@ -161,6 +162,9 @@ export function updateSendButton() {
     var indicator = document.getElementById("agent-working-indicator");
     if (indicator) indicator.remove();
   }
+  // 独立「停止」按钮：仅当前会话正在运行时显示，用于中断运行（不折叠、不排队）
+  var stopBtn = document.getElementById("agent-stop-btn");
+  if (stopBtn) stopBtn.style.display = isCurrentRun ? "" : "none";
 }
 
 // ===== 模式切换 =====

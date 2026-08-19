@@ -2,6 +2,9 @@
 // 所有状态写入走 Store 细粒度方法；S 为只读视图（active workspace 快照），
 // 仅用于读取，禁止写入。invoke / listen 从这里导出供其他模块使用。
 
+// 临时消息内容匹配工具（utils.js 无任何导入，不存在循环依赖）
+import { stripSystemInfoText, getTextFromParts } from "./utils.js";
+
 export const invoke = window.__adm_invoke;
 export const listen = window.__adm_listen;
 
@@ -160,6 +163,54 @@ class Store {
     var ws = this.workspaces.get(wsId);
     if (!ws) return;
     ws.messages = arr;
+    this.workspacesObj[wsId] = ws.snapshot();
+    if (wsId === this.activeWsId) this.bindToS();
+  }
+
+  // 服务端消息覆盖 + 保留折叠插入的待落库气泡（_fold）：
+  // 折叠插入的消息在服务端下一步边界才会创建，切会话/切页面/刷新时若直接覆盖
+  // 会被抹掉；这里把本地仍在等待落库、且属于 convId 会话的 _fold 用户气泡按内容
+  // 去重后合并追加到末尾。仅保留 _fold（不复活普通发送/排队发送的 _temp 临时气泡），
+  // 且限定会话归属（防止把上一会话的待插入气泡串进当前会话列表）
+  setMessagesKeepPending(wsId, serverMsgs, convId) {
+    var ws = this.workspaces.get(wsId);
+    if (!ws) return;
+    var merged = (serverMsgs || []).slice();
+    var pendingFolds = [];
+    ws.messages.forEach(function(m) {
+      if (!m._temp || !m._fold || m.role !== "user") return;
+      if (convId && m._sessionId && m._sessionId !== convId) return;
+      var onServer = merged.some(function(sm) {
+        if (sm.role !== "user") return false;
+        var sText = (sm.content || getTextFromParts(sm.parts)) || "";
+        return m.content === stripSystemInfoText(sText);
+      });
+      if (!onServer) pendingFolds.push(m);
+    });
+    if (pendingFolds.length > 0) merged = merged.concat(pendingFolds);
+    ws.messages = merged;
+    this.workspacesObj[wsId] = ws.snapshot();
+    if (wsId === this.activeWsId) this.bindToS();
+  }
+
+  // 消息创建（SSE message-created）统一入口：
+  // 对用户消息先移除内容匹配的临时气泡（_temp/_fold），再追加正式消息。
+  // 前台路径 sse.js 的 handleMessageSSEEvent 仍有同逻辑去重（幂等），
+  // 这里保证后台 workspace 同样清理，避免「插入中」气泡与落库正式消息并存
+  upsertCreatedMessage(wsId, msgData) {
+    var ws = this.workspaces.get(wsId);
+    if (!ws) return;
+    if (msgData && msgData.role === "user") {
+      var serverText = (msgData.content || getTextFromParts(msgData.parts)) || "";
+      var stripped = stripSystemInfoText(serverText);
+      var tempIdx = ws.messages.findIndex(function(m) { return m._temp && m.role === "user" && m.content === stripped; });
+      if (tempIdx >= 0) {
+        ws.messages.splice(tempIdx, 1);
+      }
+    }
+    if (!ws.messages.some(function(m) { return m.id === msgData.id; })) {
+      ws.messages.push(msgData);
+    }
     this.workspacesObj[wsId] = ws.snapshot();
     if (wsId === this.activeWsId) this.bindToS();
   }
@@ -340,7 +391,7 @@ class Store {
 
     switch (eventType) {
       case "message":
-        if (innerType === "created") this.appendMessage(wsId, actualData);
+        if (innerType === "created") this.upsertCreatedMessage(wsId, actualData);
         else if (innerType === "updated") this.updateMessage(wsId, actualData);
         break;
       case "session":

@@ -255,10 +255,11 @@ export async function selectConversation(convId) {
     store.setCurrentConv(S.serverInfo.workspace_id, conv);
     document.getElementById("agent-conv-title").textContent = S.currentConv.title || _t("会话");
 
-    // 单独获取消息列表
+    // 单独获取消息列表（合并保留折叠插入的 _fold 等待气泡：消息在服务端尚未
+    // 创建，直接覆盖会被抹掉；setMessagesKeepPending 按内容去重后合并回来）
     var msgs = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions/" + convId + "/messages");
     if (!Array.isArray(msgs)) msgs = msgs.messages || [];
-    store.setMessages(S.serverInfo.workspace_id, msgs);
+    store.setMessagesKeepPending(S.serverInfo.workspace_id, msgs, convId);
     renderMessages();
 
     // 更新上下文用量（服务端重启后 context_tokens 不持久化会归 0，回退为本地估算）
@@ -339,13 +340,13 @@ export async function newConversation() {
   }
 }
 
-// 刷新当前会话的消息列表
+// 刷新当前会话的消息列表（合并保留本地待落库的临时气泡，见 selectConversation 说明）
 export async function refreshMessages() {
   if (!S.currentConvId || !S.serverInfo) return;
   try {
     var msgs = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions/" + S.currentConvId + "/messages");
     if (!Array.isArray(msgs)) msgs = msgs.messages || [];
-    store.setMessages(S.serverInfo.workspace_id, msgs);
+    store.setMessagesKeepPending(S.serverInfo.workspace_id, msgs, S.currentConvId);
     renderMessages();
   } catch (_) {}
 }

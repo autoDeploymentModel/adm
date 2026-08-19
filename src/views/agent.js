@@ -10,7 +10,7 @@ import { generateUUID, isMsgAreaAtBottom, autoResize, $input, normalizeReasoning
 import { updateStatusBar, updateContextUsage, updateModeToggle, updateSendButton, exitManualScrollMode, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showConfirm, showCopyPasteMenu, updateScrollBottomBtn, reportError } from "./agent/ui.js";
 import { loadConversations, renderConversationList, selectConversation, newConversation } from "./agent/session.js";
 import { syncWorkingIndicator } from "./agent/render.js";
-import { sendMessage } from "./agent/send.js";
+import { sendMessage, cancelCurrentRun } from "./agent/send.js";
 import { setupSSEListener, cancelScheduledLoadTools } from "./agent/sse.js";
 import { syncModeToServer } from "./agent/permission.js";
 import { loadTools, renderToolsList } from "./agent/tools.js";
@@ -615,6 +615,8 @@ function bindEvents() {
 
   // 发送
   document.getElementById("agent-send-btn").addEventListener("click", sendMessage);
+  // 独立「停止」按钮：当前会话运行中显示，中断运行（不折叠、不排队）
+  document.getElementById("agent-stop-btn").addEventListener("click", function() { cancelCurrentRun(); });
 
   // 右键菜单：消息区域 → 复制/粘贴
   var msgArea = document.getElementById("agent-msg-area");
