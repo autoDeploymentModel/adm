@@ -566,6 +566,18 @@ export const template = `
     margin-top: 4px;
   }
 
+  .msg-fold-badge {
+    display: inline-block;
+    font-size: 10px;
+    color: #f0ad4e;
+    border: 1px solid rgba(240,173,78,0.4);
+    border-radius: 4px;
+    padding: 0 4px;
+    margin-left: 6px;
+    vertical-align: middle;
+    line-height: 1.5;
+  }
+
   /* 输入框区域 */
   .input-area {
     flex-shrink: 0;
@@ -730,6 +742,22 @@ export const template = `
     transition: all 0.15s;
   }
   .toolbar-attach-btn:hover { background: rgba(255,255,255,0.15); color: #fff; }
+
+  .toolbar-stop-btn {
+    background: rgba(232,93,58,0.1);
+    border: 1px solid rgba(232,93,58,0.45);
+    color: #e85d3a;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+    transition: all 0.15s;
+  }
+  .toolbar-stop-btn:hover { background: rgba(232,93,58,0.2); color: #fff; }
 
   /* ===== 附件预览区 ===== */
   .attach-preview-area {
@@ -1347,6 +1375,7 @@ export const template = `
           <!-- ④ 附件与发送 -->
           <div class="toolbar-actions">
             <button class="toolbar-attach-btn" id="agent-attach-btn" title="${_t("添加附件")}">📎</button>
+            <button class="toolbar-stop-btn" id="agent-stop-btn" style="display:none" title="${_t("停止当前会话的运行")}">⏹ ${_t("停止")}</button>
             <button class="toolbar-send-btn" id="agent-send-btn">📤 ${_t("发送")}</button>
           </div>
         </div>
