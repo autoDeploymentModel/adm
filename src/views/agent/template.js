@@ -889,11 +889,11 @@ export const template = `
     width: 560px;
     max-width: 90%;
     max-height: 80vh;
-    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
     box-shadow: 0 8px 32px rgba(0,0,0,0.5);
   }
-  .settings-modal::-webkit-scrollbar { width: 6px; }
-  .settings-modal::-webkit-scrollbar-thumb { background: var(--c-border); border-radius: 3px; }
 
   .settings-header {
     padding: 14px 20px;
@@ -901,6 +901,7 @@ export const template = `
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-shrink: 0;
   }
 
   .settings-title {
@@ -921,7 +922,12 @@ export const template = `
 
   .settings-body {
     padding: 16px 20px;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
   }
+  .settings-body::-webkit-scrollbar { width: 6px; }
+  .settings-body::-webkit-scrollbar-thumb { background: var(--c-border); border-radius: 3px; }
 
   .param-group {
     margin-bottom: 20px;
