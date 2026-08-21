@@ -132,6 +132,10 @@ async function init() {
         store.setActive(S.serverInfo.workspace_id);
       }
     }
+    // 记录 path → wsId 映射，供 remove_workdir / validate_workdirs 清理状态池使用
+    if (S.workspaceInfo && S.workspaceInfo.id && S.workspaceInfo.path && S.workspaceInfo.path !== "默认") {
+      S.wsIdByPath[S.workspaceInfo.path] = S.workspaceInfo.id;
+    }
     updateWorkspaceSelector();
     updateStatusBar("ready", workdir, 0);
   } catch (_) {

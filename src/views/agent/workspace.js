@@ -43,6 +43,8 @@ export async function switchToWorkspace(wsId, wsPath) {
   // Store 统一处理：保存旧 workspace 状态 + 切换 activeWsId + 恢复目标 workspace
   store.setActive(wsId);
   S.workspaceInfo = { id: wsId, path: wsPath || "", name: wsPath ? wsPath.split(/[\\/]/).pop() : _t("默认工作区") };
+  // 记录 path → wsId 映射，供 remove_workdir / validate_workdirs 清理状态池使用
+  if (wsPath) S.wsIdByPath[wsPath] = wsId;
 
   if (!isFirstVisit) {
     // 恢复已保存的状态（store.setActive 已恢复，但 UI 需手动刷新）
@@ -209,6 +211,13 @@ async function renderWorkDirDropdown() {
         showConfirm(_t("确定要移除工作目录「") + d.path + _t("」吗？"), async function() {
           try {
             await invoke("remove_workdir", { path: d.path });
+            // 清理该 workspace 的状态池（会话/消息/运行状态），避免残留；
+            // 该路径日后重新添加时 store.workspaces.has 为 false 会走首次初始化
+            var removedWsId = S.wsIdByPath[d.path];
+            if (removedWsId) {
+              store.removeWorkspace(removedWsId);
+              delete S.wsIdByPath[d.path];
+            }
             closeWorkDirDropdown();
           } catch (err) {
             reportError(err, { prefix: _t("移除工作目录失败: ") });
@@ -296,6 +305,12 @@ export async function validateWorkDirs() {
     var removed = await invoke("validate_workdirs");
     if (removed && removed.length > 0) {
       removed.forEach(function(path) {
+        // 同步清理已失效目录的状态池条目
+        var staleWsId = S.wsIdByPath[path];
+        if (staleWsId) {
+          store.removeWorkspace(staleWsId);
+          delete S.wsIdByPath[path];
+        }
         console.warn("[agent] 工作目录不存在，已从配置移除:", path);
       });
     }

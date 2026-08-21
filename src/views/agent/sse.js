@@ -2,7 +2,6 @@
 import { t as _t } from "../../i18n.js";
 import { S, invoke, listen, store } from "./store.js";
 import { api } from "./api.js";
-import { getTextFromParts, stripSystemInfoText } from "./utils.js";
 import { getErrorMessage } from "./error.js";
 import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, reportError, updateContextUsage } from "./ui.js";
 import { renderMessages, renderTodos } from "./render.js";
@@ -107,7 +106,7 @@ export async function setupSSEListener() {
 
       // 统一走 Store：自动处理跨 workspace 一致性
       // 非当前 tab 的事件更新对应 workspace 状态池
-      // 当前 tab 的事件触发 emit → handleSSEEvent
+      // 当前 tab 的事件数据已在 store 更新，下方 handleSSEEvent 只做 UI 副作用
       //
       // store.handleSSEEvent 可能已执行 queued 接管（completeRun 把 activeRun
       // 切到排队运行、非接管时清空 runStats），handleSSEEvent 里的 mismatch
@@ -116,6 +115,7 @@ export async function setupSSEListener() {
       var prevActiveRun = S.activeRun;
       var prevQueuedRun = S.queuedRun;
       var prevRunStats = S.runStats;
+      var prevCurrentConvId = S.currentConvId;
       store.handleSSEEvent(eventWsId, payload);
 
       // 后台 workspace 运行出错时通知用户（active workspace 的错误由下方 handleSSEEvent 处理）
@@ -133,7 +133,7 @@ export async function setupSSEListener() {
 
       // 当前 tab 的事件继续走原有 UI 处理逻辑
       if (eventWsId === S.activeWsId) {
-        handleSSEEvent(payload, { prevActiveRun: prevActiveRun, prevQueuedRun: prevQueuedRun, prevRunStats: prevRunStats });
+        handleSSEEvent(payload, { prevActiveRun: prevActiveRun, prevQueuedRun: prevQueuedRun, prevRunStats: prevRunStats, prevCurrentConvId: prevCurrentConvId });
       }
     });
 
@@ -232,7 +232,7 @@ function handleSSEEvent(payload, ctx) {
       handleMessageSSEEvent(innerType, actualData);
       break;
     case "session":
-      handleSessionSSEEvent(innerType, actualData);
+      handleSessionSSEEvent(innerType, actualData, ctx);
       break;
     case "run_complete":
       // 防御：子 Agent（agent 工具嵌套调用）的 run_complete 携带复合 session_id
@@ -293,9 +293,6 @@ function handleSSEEvent(payload, ctx) {
         // 排队接管时仍有运行在队列中，状态栏保持运行中，不切回就绪
         if (!tookOverQueued) updateStatusBar("ready", null, S.contextUsage.used);
       }
-      // 本轮运行统计生命周期结束，清理避免跨轮残留；
-      // 排队接管时该统计属于排队中的会话（发送时已初始化），保留给其实际执行轮使用
-      if (!tookOverQueued) store.setRunStats(store.activeWsId, null);
       // 若切换模型时会话繁忙导致 /agent/update 未生效，本轮结束后立即重试重载
       if (S.pendingModelReload) {
         S.pendingModelReload = false;
@@ -347,42 +344,9 @@ function handleSSEEvent(payload, ctx) {
 function handleMessageSSEEvent(action, msgData) {
   // 统计本轮工具调用（增量按消息 id + parts 数去重），供假完成检测与续跑进度判定使用
   if (action !== "deleted") collectRunStats(msgData);
-  if (action === "created") {
-    // 用户消息：先按内容匹配并清理临时消息（无论正式消息是否已被 store 追加）。
-    // store.handleSSEEvent 先于本 handler 执行 appendMessage，正式消息可能已在列表中，
-    // 若在 existing 检查之后才清理临时消息，会因 existing 命中而跳过 → 临时+正式并存（短暂重复）。
-    // 注意不能用 updateMessage 替换：它按 msgData.id 查找（临时消息 id 是 temp-user-xxx），
-    // 找不到会走 else push，临时消息依然残留。
-    if (msgData.role === "user") {
-      // 服务端用户消息附带 <system_info> 附件引导块，与临时消息（纯正文）匹配前先剥离
-      var serverText = (msgData.content || getTextFromParts(msgData.parts)) || "";
-      var tempIdx = S.messages.findIndex(function(m) { return m._temp && m.role === "user" && m.content === stripSystemInfoText(serverText); });
-      if (tempIdx >= 0) {
-        store.deleteMessage(store.activeWsId, S.messages[tempIdx].id);
-      }
-    }
-    // 新消息创建 → 追加到消息列表（按 ID 去重）
-    var existing = S.messages.find(function(m) { return m.id === msgData.id; });
-    if (!existing) {
-      store.appendMessage(store.activeWsId, msgData);
-    }
-    renderMessages();
-  } else if (action === "updated") {
-    // 消息更新 → 找到对应消息并替换
-    var idx = S.messages.findIndex(function(m) { return m.id === msgData.id; });
-    if (idx >= 0) {
-      store.updateMessage(store.activeWsId, msgData);
-      renderMessages();
-    } else {
-      // 消息不在列表中 → 追加
-      store.appendMessage(store.activeWsId, msgData);
-      renderMessages();
-    }
-  } else if (action === "deleted") {
-    // 消息删除 → 从列表中移除
-    store.deleteMessage(store.activeWsId, msgData.id);
-    renderMessages();
-  }
+  // 数据更新统一由 store.handleSSEEvent 完成（created → upsertCreatedMessage，
+  // updated → updateMessage，deleted → deleteMessage，含临时气泡清理），此处只做 UI 刷新
+  renderMessages();
 }
 
 // ===== 本轮运行统计（续跑进度判定） =====
@@ -416,49 +380,31 @@ function collectRunStats(msgData) {
 }
 
 // 处理会话 SSE 事件
-function handleSessionSSEEvent(action, sessData) {
-  var wsId = store.activeWsId;
+function handleSessionSSEEvent(action, sessData, ctx) {
+  // 数据更新统一由 store.handleSessionEvent 完成（created 插入 / updated 替换并
+  // 同步 currentConv/contextUsage / deleted 清空会话与消息），此处只保留 UI 副作用。
+  // store 先于本 handler 执行（见 setupSSEListener），S 已是更新后的状态。
+  // deleted 时 store 已将 currentConvId 置 null，需用 ctx.prevCurrentConvId 判断
+  // 被删会话是否曾是当前会话，否则 UI 清理全部被跳过。
   if (action === "created") {
-    // 新会话创建
-    var existing = S.conversations.find(function(c) { return c.id === sessData.id; });
-    if (!existing) {
-      var newList = S.conversations.slice();
-      newList.unshift(sessData);
-      store.setConversations(wsId, newList);
-      renderConversationList();
-    }
+    renderConversationList();
   } else if (action === "updated") {
-    // 会话更新
-    var idx = S.conversations.findIndex(function(c) { return c.id === sessData.id; });
-    if (idx >= 0) {
-      var updatedList = S.conversations.slice();
-      updatedList[idx] = sessData;
-      store.setConversations(wsId, updatedList);
-      renderConversationList();
-    }
-    // 如果是当前会话，更新快照、标题、上下文和 Todo 面板
+    renderConversationList();
+    // 如果是当前会话，更新标题、上下文和 Todo 面板
     if (S.currentConvId === sessData.id) {
-      store.setCurrentConv(wsId, sessData);
       document.getElementById("agent-conv-title").textContent = sessData.title || _t("会话");
       // Session SSE 是完整快照；todos 使用 omitempty，字段缺失表示列表已清空，必须隐藏旧面板
       renderTodos(Array.isArray(sessData.todos) ? sessData.todos : []);
       // context_tokens 为 0 时（如仅改标题触发的更新）保留现有估算值，避免被清零
       if (sessData.context_tokens) {
-        store.setContextUsage(wsId, sessData.context_tokens, S.contextUsage.max, false);
         updateContextUsage();
       }
     }
   } else if (action === "deleted") {
-    // 会话删除
-    var filtered = S.conversations.filter(function(c) { return c.id !== sessData.id; });
-    store.setConversations(wsId, filtered);
     renderConversationList();
-    if (S.currentConvId === sessData.id) {
+    if ((ctx && ctx.prevCurrentConvId) === sessData.id) {
       resetPermissionState();
-      store.setCurrentConvId(wsId, null);
       syncWxFollowSession();
-      store.setCurrentConv(wsId, null);
-      store.setMessages(wsId, []);
       renderMessages();
       renderTodos([]);
       document.getElementById("agent-conv-title").textContent = _t("选择或创建一个会话");

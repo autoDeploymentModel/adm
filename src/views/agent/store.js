@@ -1,6 +1,16 @@
 // WorkspaceStateStore — 统一 Agent 状态管理
 // 所有状态写入走 Store 细粒度方法；S 为只读视图（active workspace 快照），
 // 仅用于读取，禁止写入。invoke / listen 从这里导出供其他模块使用。
+//
+// 重要：本 store 无事件通知机制（不 emit / 不 subscribe），
+// 写入方必须在写入后自行刷新对应 UI（renderMessages / renderConversationList /
+// updateContextUsage / updateStatusBar 等），切勿以为写 store 会自动刷界面。
+//
+// 快照语义：conversations / messages / currentConv / agentInfo / contextUsage 等
+// 对外只读字段一律以「浅拷贝 + Object.freeze」发布（ES 模块严格模式下，外部
+// 原地修改会直接抛 TypeError 而非静默污染）。runStats / activeRun / queuedRun
+// 例外：collectRunStats 需要原地累计 runStats，ui.js 用 === 比较 activeRun 的
+// 对象同一性，这三个字段保持内部引用共享，仅 store 内部与 sse.js 可操作。
 
 // 临时消息内容匹配工具（utils.js 无任何导入，不存在循环依赖）
 import { stripSystemInfoText, getTextFromParts } from "./utils.js";
@@ -14,6 +24,10 @@ function _log(level, cat, msg) {
   try { invoke("agent_debug_log", { line: "[" + cat + "][" + level + "] " + msg }).catch(function() {}); } catch (_) {}
   console.log("[agent][" + cat + "] " + msg);
 }
+
+// 快照冻结辅助：浅拷贝（数组 slice / 对象 assign）后冻结，外部只能读不能改
+function _frozen(arr) { return Object.freeze(arr.slice()); }
+function _frozenObj(obj) { return Object.freeze(Object.assign({}, obj)); }
 
 // ===== 每个 workspace 的独立状态 =====
 class WorkspaceState {
@@ -32,31 +46,35 @@ class WorkspaceState {
 
   snapshot() {
     return {
-      conversations: this.conversations,
+      // 只读字段：浅拷贝 + 冻结（外部原地修改会抛 TypeError）
+      conversations: _frozen(this.conversations),
       currentConvId: this.currentConvId,
-      currentConv: this.currentConv,
-      messages: this.messages,
+      currentConv: this.currentConv ? _frozenObj(this.currentConv) : null,
+      messages: _frozen(this.messages),
       isSending: this.isSending,
-      activeRun: this.activeRun,
-      queuedRun: this.queuedRun,
-      runStats: this.runStats,
-      contextUsage: { ...this.contextUsage },
-      agentInfo: this.agentInfo,
+      // 运行引用字段：浅拷贝隔离（不可冻结，见文件头注释）
+      activeRun: this.activeRun ? Object.assign({}, this.activeRun) : null,
+      queuedRun: this.queuedRun ? Object.assign({}, this.queuedRun) : null,
+      runStats: this.runStats ? Object.assign({}, this.runStats) : null,
+      contextUsage: _frozenObj(this.contextUsage),
+      agentInfo: this.agentInfo ? _frozenObj(this.agentInfo) : null,
     };
   }
 
   restore(snap) {
     if (!snap) return;
-    this.conversations = snap.conversations || [];
+    // 快照一律拷贝后再赋值：快照是冻结对象，直接引用会把冻结传染给内部状态
+    //（内部 upsertCreatedMessage 等仍需要 splice/push 原地操作）
+    this.conversations = snap.conversations ? snap.conversations.slice() : [];
     this.currentConvId = snap.currentConvId || null;
-    this.currentConv = snap.currentConv || null;
-    this.messages = snap.messages || [];
+    this.currentConv = snap.currentConv ? Object.assign({}, snap.currentConv) : null;
+    this.messages = snap.messages ? snap.messages.slice() : [];
     this.isSending = snap.isSending || false;
-    this.activeRun = snap.activeRun || null;
-    this.queuedRun = snap.queuedRun || null;
-    this.runStats = snap.runStats || null;
-    this.contextUsage = snap.contextUsage || { used: 0, max: 0, estimated: false };
-    this.agentInfo = snap.agentInfo || null;
+    this.activeRun = snap.activeRun ? Object.assign({}, snap.activeRun) : null;
+    this.queuedRun = snap.queuedRun ? Object.assign({}, snap.queuedRun) : null;
+    this.runStats = snap.runStats ? Object.assign({}, snap.runStats) : null;
+    this.contextUsage = snap.contextUsage ? Object.assign({}, snap.contextUsage) : { used: 0, max: 0, estimated: false };
+    this.agentInfo = snap.agentInfo ? Object.assign({}, snap.agentInfo) : null;
   }
 }
 
@@ -66,11 +84,7 @@ class Store {
     this.workspaces = new Map();
     this.activeWsId = null;
     this.workspacesObj = {};
-    this._listeners = new Set();
   }
-
-  subscribe(fn) { this._listeners.add(fn); return () => this._listeners.delete(fn); }
-  emit(type, wsId, payload) { for (const fn of this._listeners) fn({ type, wsId, payload }); }
 
   registerWorkspace(wsId) {
     if (!this.workspaces.has(wsId)) {
@@ -92,16 +106,18 @@ class Store {
   bindToS() {
     var ws = this.getActiveWs();
     if (!ws) return;
-    S.conversations = ws.conversations;
+    // 只读字段：浅拷贝 + 冻结（外部原地修改会抛 TypeError）
+    S.conversations = _frozen(ws.conversations);
     S.currentConvId = ws.currentConvId;
-    S.currentConv = ws.currentConv;
-    S.messages = ws.messages;
+    S.currentConv = ws.currentConv ? _frozenObj(ws.currentConv) : null;
+    S.messages = _frozen(ws.messages);
     S.isSending = ws.isSending;
+    // 运行引用字段：保持内部引用共享（collectRunStats 原地累计、ui.js === 同一性比较）
     S.activeRun = ws.activeRun;
     S.queuedRun = ws.queuedRun;
     S.runStats = ws.runStats;
-    S.contextUsage = ws.contextUsage;
-    S.agentInfo = ws.agentInfo;
+    S.contextUsage = _frozenObj(ws.contextUsage);
+    S.agentInfo = ws.agentInfo ? _frozenObj(ws.agentInfo) : null;
     S.workspaces = this.workspacesObj;
     S.activeWsId = this.activeWsId;
     if (S.serverInfo) S.serverInfo.workspace_id = this.activeWsId;
@@ -118,7 +134,6 @@ class Store {
     var saved = this.workspacesObj[wsId];
     if (saved && target) target.restore(saved);
     this.bindToS();
-    this.emit("activeChange", wsId, {});
   }
 
   // ===== 会话状态 =====
@@ -131,7 +146,6 @@ class Store {
     if (patch.messages !== undefined) ws.messages = patch.messages;
     this.workspacesObj[wsId] = ws.snapshot();
     if (wsId === this.activeWsId) this.bindToS();
-    this.emit("sessionChange", wsId, ws);
   }
 
   setConversations(wsId, list) {
@@ -140,7 +154,6 @@ class Store {
     ws.conversations = list;
     this.workspacesObj[wsId] = ws.snapshot();
     if (wsId === this.activeWsId) this.bindToS();
-    this.emit("conversationsChange", wsId, ws);
   }
 
   setCurrentConvId(wsId, id) {
@@ -195,8 +208,8 @@ class Store {
 
   // 消息创建（SSE message-created）统一入口：
   // 对用户消息先移除内容匹配的临时气泡（_temp/_fold），再追加正式消息。
-  // 前台路径 sse.js 的 handleMessageSSEEvent 仍有同逻辑去重（幂等），
-  // 这里保证后台 workspace 同样清理，避免「插入中」气泡与落库正式消息并存
+  // 前台/后台 workspace 的清理统一在此完成（sse.js 不再重复处理），
+  // 避免「插入中」气泡与落库正式消息并存
   upsertCreatedMessage(wsId, msgData) {
     var ws = this.workspaces.get(wsId);
     if (!ws) return;
@@ -221,6 +234,8 @@ class Store {
     if (!ws.messages.some(function(m) { return m.id === msg.id; })) {
       ws.messages.push(msg);
       this.workspacesObj[wsId] = ws.snapshot();
+      // 必须 bindToS：S.messages 是冻结拷贝，不与内部共享，不同步则 UI 读旧数组
+      if (wsId === this.activeWsId) this.bindToS();
     }
   }
 
@@ -231,6 +246,8 @@ class Store {
     if (idx >= 0) ws.messages[idx] = msg;
     else ws.messages.push(msg);
     this.workspacesObj[wsId] = ws.snapshot();
+    // 必须 bindToS：S.messages 是冻结拷贝，不同步则流式 updated 事件 UI 不更新
+    if (wsId === this.activeWsId) this.bindToS();
   }
 
   deleteMessage(wsId, msgId) {
@@ -267,7 +284,6 @@ class Store {
     ws.queuedRun = null;
     this.workspacesObj[wsId] = ws.snapshot();
     if (wsId === this.activeWsId) this.bindToS();
-    this.emit("runStart", wsId, ws);
   }
 
   setQueuedRun(wsId, sessionId, runId) {
@@ -306,7 +322,6 @@ class Store {
     }
     this.workspacesObj[wsId] = ws.snapshot();
     if (wsId === this.activeWsId) this.bindToS();
-    this.emit("runComplete", wsId, ws);
   }
 
   cancelRun(wsId) {
@@ -319,7 +334,6 @@ class Store {
     ws.runStats = null;
     this.workspacesObj[wsId] = ws.snapshot();
     if (wsId === this.activeWsId) this.bindToS();
-    this.emit("runCancel", wsId, ws);
   }
 
   clearQueuedRun(wsId) {
@@ -387,13 +401,13 @@ class Store {
     var actualData = eventPayloadInner.payload || eventPayloadInner || {};
 
     this.registerWorkspace(wsId);
-    var isActive = wsId === this.activeWsId;
 
     switch (eventType) {
-      case "message":
-        if (innerType === "created") this.upsertCreatedMessage(wsId, actualData);
-        else if (innerType === "updated") this.updateMessage(wsId, actualData);
-        break;
+    case "message":
+      if (innerType === "created") this.upsertCreatedMessage(wsId, actualData);
+      else if (innerType === "updated") this.updateMessage(wsId, actualData);
+      else if (innerType === "deleted") this.deleteMessage(wsId, (actualData && actualData.id) || "");
+      break;
       case "session":
         this.handleSessionEvent(wsId, innerType, actualData);
         break;
@@ -409,10 +423,6 @@ class Store {
         this.completeRun(wsId);
         break;
     }
-
-    if (isActive) {
-      this.emit("sseEvent", wsId, { eventType: eventType, innerType: innerType, actualData: actualData });
-    }
   }
 }
 
@@ -421,16 +431,16 @@ export const store = new Store();
 
 // S — 只读视图：始终反映 active workspace 的状态快照
 export const S = {
-  // workspace 状态（由 bindToS 从 active workspace 同步）
-  conversations: [],
+  // workspace 状态（由 bindToS 从 active workspace 同步；初始即冻结，绑定前不可写）
+  conversations: Object.freeze([]),
   currentConvId: null,
   currentConv: null,
-  messages: [],
+  messages: Object.freeze([]),
   isSending: false,
   activeRun: null,
   queuedRun: null,
   runStats: null,
-  contextUsage: { used: 0, max: 0, estimated: false },
+  contextUsage: Object.freeze({ used: 0, max: 0, estimated: false }),
   agentInfo: null,
   // 全局状态（直接读写，不走 workspace 隔离）
   unlisteners: [],
@@ -461,4 +471,7 @@ export const S = {
   sseReconnectTimer: null,
   workspaces: {},
   activeWsId: null,
+  // path → wsId 映射：工作目录删除（remove_workdir / validate_workdirs）时
+  // 用于清理对应 workspace 的状态池条目
+  wsIdByPath: {},
 };
