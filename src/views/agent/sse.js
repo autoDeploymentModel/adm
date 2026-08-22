@@ -3,7 +3,7 @@ import { t as _t } from "../../i18n.js";
 import { S, invoke, listen, store } from "./store.js";
 import { api } from "./api.js";
 import { getErrorMessage } from "./error.js";
-import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, reportError, updateContextUsage } from "./ui.js";
+import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showInfo, reportError, updateContextUsage } from "./ui.js";
 import { renderMessages, renderTodos } from "./render.js";
 import { loadConversations, refreshMessages, renderConversationList, selectConversation, syncWxFollowSession } from "./session.js";
 import { handlePermissionRequest, resetPermissionState } from "./permission.js";
@@ -281,7 +281,15 @@ function handleSSEEvent(payload, ctx) {
         // 运行出错时不自动续跑（避免在持续性错误上循环烧 token）
         resetAutoContinue();
       } else {
-        if (actualData && actualData.cancelled) {
+        if (actualData && actualData.empty_output) {
+          // 服务端标记：本轮正常结束但没有任何实际输出（正文/工具调用全无，
+          // 典型为模型把输出全部消耗在 reasoning 上）→ 明确提示而非静默消失
+          console.warn("[agent] run_complete empty_output:", JSON.stringify(actualData));
+          showWarning(_t("模型未产生有效输出（输出全部消耗在思考中），本轮已结束"));
+          updateStatusBar("error", null, S.contextUsage.used);
+          // 未产生任何输出时不自动续跑（避免继续空转烧 token）
+          resetAutoContinue();
+        } else if (actualData && actualData.cancelled) {
           showError(_t("本轮对话已取消"));
           resetAutoContinue();
         } else {
@@ -320,10 +328,16 @@ function handleSSEEvent(payload, ctx) {
       // 配置变更，刷新 Agent 信息
       break;
     case "agent_event":
-      // Agent 事件（错误/响应/摘要）：error 可能是字符串或对象，统一展示并留完整日志便于排查
+      // Agent 事件（错误/响应/摘要/思考中）：error 可能是字符串或对象，统一展示并留完整日志便于排查
       if (actualData && actualData.error) {
         console.warn("[agent] agent_event 错误:", JSON.stringify(actualData).substring(0, 500));
         reportError(actualData.error, { prefix: _t("Agent 错误: ") });
+      } else if (actualData && actualData.type === "thinking" && actualData.progress) {
+        // 模型长时间思考仍未产出可见内容：仅提示当前正在查看的会话，避免其它会话打扰
+        if (!actualData.session_id || actualData.session_id === S.currentConvId) {
+          log.debug("SSE", "agent_event thinking: " + actualData.progress);
+          showInfo(actualData.progress);
+        }
       }
       break;
     case "file":
