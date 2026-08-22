@@ -163,8 +163,80 @@ export function renderMarkdown(text) {
     return '<a href="' + safe + '" style="color:var(--c-accent);text-decoration:none;" target="_blank">' + text + '</a>';
   });
 
+  // GFM 表格：表头行 + 分隔行（|---|）+ 数据行 → <table>（放在换行转换之前，
+  // 单元格内文本此时已含 strong/em/code/a 等行内 HTML；跳过 <pre> 代码块内的 | 行）
+  html = renderTable(html);
+
   // 换行
   html = html.replace(/\n/g, "<br>");
 
   return html;
+}
+
+// 表格单元格拆分：剥掉首尾管道后按 | 切分，逐格去除两侧空白；
+// \| 为转义管道（如命令 a|b 或正则），切分前占位保护、切分后还原为字面 |
+/** @param {string} row @returns {string[]} */
+function tableCells(row) {
+  var r = row.trim();
+  if (r.charAt(0) === "|") r = r.slice(1);
+  if (r.charAt(r.length - 1) === "|") r = r.slice(0, -1);
+  r = r.replace(/\\\|/g, "\u0000");
+  return r.split("|").map(function(x) { return x.trim().replace(/\u0000/g, "|"); });
+}
+
+// 分隔行判定：只含 | - : 空白，且至少一个 -
+/** @param {string} line @returns {boolean} */
+function isTableSeparator(line) {
+  if (!/^\s*\|/.test(line) && !/\|\s*$/.test(line)) return false;
+  var body = line.replace(/^\s*\|?/, "").replace(/\|?\s*$/, "");
+  return body.indexOf("-") !== -1 && /^[\s:|-]*$/.test(body);
+}
+
+// 行内 HTML 转义后的文本里，分隔单元格中可能残留 | 等字符，需按原样拼接；
+// 对齐：分隔单元格首/尾 : 决定该列 left/center/right
+/** @param {string} html @returns {string} */
+function renderTable(html) {
+  var lines = html.split("\n");
+  var out = [];
+  var inCode = false; // <pre> 内不解析表格
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    if (/<pre/.test(line)) inCode = true;
+    if (inCode) {
+      out.push(line);
+      if (/<\/pre>/.test(line)) inCode = false;
+      continue;
+    }
+    if (i + 1 < lines.length && /^\s*\|/.test(line) && isTableSeparator(lines[i + 1])) {
+      var rows = [line];
+      var j = i + 2;
+      while (j < lines.length && /^\s*\|/.test(lines[j])) { rows.push(lines[j]); j++; }
+      var sepCells = tableCells(lines[i + 1]);
+      var head = tableCells(rows[0]);
+      var body = rows.slice(1);
+      var t = '<div class="agent-tbl-wrap"><table class="agent-tbl"><thead><tr>' +
+        head.map(function(c, idx) {
+          var al = sepCells[idx] || "";
+          var st = al.charAt(0) === ":" ? (al.charAt(al.length - 1) === ":" ? ' style="text-align:center;"' : ' style="text-align:left;"') : (al.charAt(al.length - 1) === ":" ? ' style="text-align:right;"' : "");
+          return "<th" + st + ">" + c + "</th>";
+        }).join("") + "</tr></thead>";
+      if (body.length) {
+        t += "<tbody>";
+        body.forEach(function(r) {
+          t += "<tr>" + tableCells(r).map(function(c, idx) {
+            var al = sepCells[idx] || "";
+            var st = al.charAt(0) === ":" ? (al.charAt(al.length - 1) === ":" ? ' style="text-align:center;"' : "") : (al.charAt(al.length - 1) === ":" ? ' style="text-align:right;"' : "");
+            return "<td" + st + ">" + c + "</td>";
+          }).join("") + "</tr>";
+        });
+        t += "</tbody>";
+      }
+      t += "</table></div>";
+      out.push(t);
+      i = j - 1; // 跳过已消费的表格行
+    } else {
+      out.push(line);
+    }
+  }
+  return out.join("\n");
 }
