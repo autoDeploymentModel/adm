@@ -578,6 +578,41 @@ export const template = `
     line-height: 1.5;
   }
 
+  /* Markdown 表格：溢出横向滚动，避免撑破气泡 */
+  .agent-tbl-wrap {
+    overflow-x: auto;
+    margin: 8px 0;
+    border: 1px solid var(--c-border);
+    border-radius: 6px;
+  }
+  .agent-tbl {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+    line-height: 1.5;
+    white-space: normal;
+  }
+  .agent-tbl th,
+  .agent-tbl td {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--c-border-soft);
+    text-align: left;
+    vertical-align: top;
+  }
+  .agent-tbl thead th {
+    background: var(--c-raise-2);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .agent-tbl tbody tr:last-child td { border-bottom: none; }
+  .agent-tbl tbody tr:hover { background: var(--c-raise); }
+  .agent-tbl code {
+    background: var(--c-bg-deep);
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 11px;
+  }
+
   /* 输入框区域 */
   .input-area {
     flex-shrink: 0;
