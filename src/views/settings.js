@@ -575,6 +575,8 @@ async function loadVersionInfo() {
     document.getElementById("v-llamacpp").textContent = version || _t("未知");
   } catch (e) {
     document.getElementById("v-llamacpp").textContent = _t("未安装或无法检测");
+    // 后端返回的错误信息已带中文提示（杀软拦截 / 超时 / 路径等），原样弹 toast
+    showToast(String(e), true);
   }
   try {
     const agentVersion = await invoke()("get_adm_agent_version");
