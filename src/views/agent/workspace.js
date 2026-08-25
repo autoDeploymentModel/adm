@@ -147,8 +147,7 @@ export function closeWorkDirDropdown() {
     document.removeEventListener("click", docCloseHandler);
     docCloseHandler = null;
   }
-  // 移除 scroll/resize 监听
-  window.removeEventListener("scroll", closeWorkDirDropdown, true);
+  // 移除 resize 监听（滚动/滚轮不关闭下拉，仅点击外部关闭）
   window.removeEventListener("resize", closeWorkDirDropdown);
 }
 
@@ -271,8 +270,7 @@ async function renderWorkDirDropdown() {
   docCloseHandler = function() { closeWorkDirDropdown(); };
   setTimeout(function() {
     document.addEventListener("click", docCloseHandler);
-    // scroll/resize 时也关闭下拉（position:absolute 不跟随页面滚动）
-    window.addEventListener("scroll", closeWorkDirDropdown, true);
+    // 窗口 resize 时关闭下拉；滚动/滚轮不关闭（保持展开直到点击外部）
     window.addEventListener("resize", closeWorkDirDropdown);
   }, 0);
 }
