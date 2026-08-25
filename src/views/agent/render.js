@@ -138,6 +138,7 @@ export function renderMessages() {
 
   // 手动模式：保留用户当前滚动位置；自动模式：滚到底部
   S.programmaticScroll = true;
+  S.lastProgrammaticScroll = Date.now();
   if (S.manualScrollMode) {
     area.scrollTop = prevScrollTop;
   } else {

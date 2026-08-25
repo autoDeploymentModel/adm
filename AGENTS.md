@@ -75,6 +75,11 @@
 - **Plan 模式 = 纯规划**：工具白名单（`config.ResolvePlanModeTools`）只含只读工具，**不含 edit/write/download/todos/MCP**；bash 在工具内部按只读命令白名单校验；计划以正文文本输出，todo 追踪只属于执行模式；todo-nudge 在 todos 工具不在目录时自动跳过。
 - **前端自动续跑**（`src/views/agent/autocontinue.js`）：本轮正常结束但 todos 未完成时自动发“继续”开新轮（每轮重置服务端 nudge 预算）；上限 10 轮、连续 2 轮无进展自动停；仅续跑本客户端发起的任务；Plan 模式、出错、取消、切走会话均不触发；开关存 localStorage（`agent_auto_continue`，默认开）。
 - **Agent 设置**：`agent_plan_mode` / `agent_default_provider` / `agent_reasoning_effort` / `agent_temperature` / `debug_logging` 存储在 `config.json`（Settings 结构体），前端通过 `load_settings` / `save_settings` 读写。
+- **网络代理链路**（设置→网络代理，仅影响 admAgent，桌面端下载不走代理）：
+  1. 前端 `settings.js` `saveProxy()` 校验（启用时 url 必填、须以 `http(s)://` 或 `socks5://` 开头）→ `save_settings` 写入 config.json 的 `agent_proxy`。
+  2. Rust `settings.rs:37` 调用 `agent.rs` `sync_agent_proxy`：`write_agent_proxy`（`agent.rs:640`）把 `{enabled,url}` 写入 admAgent.json 顶层 `agent_proxy`（原子写，值未变返回 false 跳过）→ 有变更时对当前 active workspace `POST /v1/workspaces/{ws}/config/set` 触发服务端**磁盘全量重载**（10s 超时，失败仅记日志退回直连）。
+  3. admAgent `ConfigStore.setConfig` 把代理同步到进程级 `httpproxy`（`internal/config/store.go:100-105`）；`httpproxy.ProxyFunc()` 作为 `Transport.Proxy` 回调**每次请求实时读取**状态，热重载即刻生效、无需重建 client/重启 server；本地/私网地址（127.0.0.1、LAN GPU 盒）自动绕过（`internal/httpproxy/proxy.go:50-81`）。
+  4. **生效范围**：LLM 客户端（`llm/client.go:107`）+ Agent 网络工具 fetch/web_fetch/download/web_search/sourcegraph/agentic_fetch（全部经 `SharedHTTPTransport`，`tools/fetch_helpers.go:38-48`）；**MCP HTTP/SSE 传输不走**（`mcp/init.go:538-581` 用 `http.DefaultTransport`，只认 `HTTP_PROXY` 环境变量）。注意：面板文案"仅影响 LLM 请求"比实际范围窄，工具类请求同样走代理。
 - **Windows**：`main.rs` 中的 `#![windows_subsystem = "windows"]` + `build.rs` 中的 `/SUBSYSTEM:WINDOWS` 隐藏控制台。
 
 ## 构建与发布
