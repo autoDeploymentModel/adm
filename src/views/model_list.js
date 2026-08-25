@@ -466,6 +466,39 @@ function formatBytes(bytes) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + sizes[i];
 }
 
+// 实时下载速度：>=1MB/s 显示 MB/s（如 1.2MB/s），否则显示 KB/s（如 100KB/s）
+function formatSpeed(bps) {
+  if (!(bps > 0)) return "";
+  const mb = bps / (1024 * 1024);
+  if (mb >= 1) {
+    const v = mb >= 10 ? Math.round(mb) : Math.round(mb * 10) / 10;
+    return v + "MB/s";
+  }
+  return Math.max(1, Math.round(bps / 1024)) + "KB/s";
+}
+
+// 按 模型ID:文件类型 追踪相邻两次进度事件的字节增量与时间差，算出瞬时速度（B/s）；
+// 采样间隔 <500ms 时跳过，避免高频事件导致速度数字跳动
+const dlSpeedTracker = {};
+const dlSpeedShown = {};
+function trackDownloadSpeed(key, downloaded) {
+  const now = Date.now();
+  const prev = dlSpeedTracker[key];
+  if (prev && now - prev.time < 500) return null;
+  dlSpeedTracker[key] = { bytes: downloaded, time: now };
+  if (!prev) return null;
+  const dt = (now - prev.time) / 1000;
+  const db = downloaded - prev.bytes;
+  if (dt <= 0 || db < 0) return null;
+  return db / dt;
+}
+function clearDownloadSpeed(modelId) {
+  const prefix = modelId + ":";
+  Object.keys(dlSpeedTracker).forEach(function(k) {
+    if (k.startsWith(prefix)) { delete dlSpeedTracker[k]; delete dlSpeedShown[k]; }
+  });
+}
+
 function getUrlFilename(url) {
   return url ? url.split('/').pop() : null;
 }
@@ -720,6 +753,7 @@ async function handleDownload(btn) {
   } catch (e) {
     console.error("[model_list] 下载失败:", e);
     showToast(_t("下载失败: ") + e);
+    clearDownloadSpeed(modelId);
     if (btn) {
       btn.textContent = _t("下载");
       btn.disabled = false;
@@ -814,28 +848,33 @@ function handleTauriEvent(type, payload) {
   switch (type) {
     case "download-progress": {
       const t = payload.type || "model";
+      const key = model_id + ":" + t;
+      const spd = trackDownloadSpeed(key, payload.downloaded || 0);
+      if (spd !== null) dlSpeedShown[key] = formatSpeed(spd);
+      const speedText = dlSpeedShown[key] ? " · " + dlSpeedShown[key] : "";
       if (t === "mmproj") {
         st.downloadingMmproj[model_id] = true;
         const btn = document.querySelector('[data-model-id="' + model_id + '"]');
-        if (btn) btn.textContent = "mmproj " + progress + "%";
+        if (btn) btn.textContent = "mmproj " + progress + "%" + speedText;
       } else if (t === "diffusion") {
         st.downloadingDiffusion[model_id] = progress;
         const btn = document.querySelector('[data-model-id="' + model_id + '"]');
-        if (btn) btn.textContent = "diffusion " + progress + "%";
+        if (btn) btn.textContent = "diffusion " + progress + "%" + speedText;
       } else if (t === "vae") {
         st.downloadingVae[model_id] = progress;
         const btn = document.querySelector('[data-model-id="' + model_id + '"]');
-        if (btn) btn.textContent = "vae " + progress + "%";
+        if (btn) btn.textContent = "vae " + progress + "%" + speedText;
       } else {
         st.downloadingModels[model_id] = progress;
         const btn = document.querySelector('[data-model-id="' + model_id + '"]');
-        if (btn) btn.textContent = progress + "%";
+        if (btn) btn.textContent = progress + "%" + speedText;
       }
       updateProgressBar(model_id, progress);
       break;
     }
     case "download-complete": {
       const t = payload.type || "model";
+      clearDownloadSpeed(model_id);
       if (t === "mmproj") {
         delete st.downloadingMmproj[model_id];
         delete st.downloadingModels[model_id];
@@ -910,6 +949,7 @@ function handleTauriEvent(type, payload) {
     }
     case "download-error": {
       delete st.downloadingModels[model_id];
+      clearDownloadSpeed(model_id);
       showToast(_t("下载失败 [") + model_id + _t("]: ") + error);
       renderModelTable();
       break;
