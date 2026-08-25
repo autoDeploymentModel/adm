@@ -7,8 +7,8 @@ import { getErrorMessage, classifyError, ERROR_QUOTA } from "./error.js";
 
 // 退出手动滚动模式（切换会话/工作区时调用，避免把旧会话的滚动位置带到新会话）
 export function exitManualScrollMode() {
-  if (S.manualModeExitTimer) { clearTimeout(S.manualModeExitTimer); S.manualModeExitTimer = null; }
   S.manualScrollMode = false;
+  S.lastProgrammaticScroll = 0;
 }
 
 // 更新「回到底部」悬浮圆球的显隐：未滚到底部时显示，到底/无滚动条时隐藏
@@ -269,6 +269,7 @@ export function showNotice(msg, level) {
   div.textContent = msg;
   area.appendChild(div);
   S.programmaticScroll = true;
+  S.lastProgrammaticScroll = Date.now();
   if (!S.manualScrollMode) area.scrollTop = area.scrollHeight;
   S.programmaticScroll = false;
   updateScrollBottomBtn();
