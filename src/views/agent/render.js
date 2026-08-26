@@ -98,8 +98,10 @@ export function renderMessages() {
   var existing = {};
   Array.prototype.slice.call(area.children).forEach(function(c) {
     if (c.id === "agent-working-indicator") return;
-    // 错误/警告/信息提示节点保留（否则 run_complete 后的 refreshMessages 会把刚显示的提示立即清掉）
-    if (c.classList && (c.classList.contains("error") || c.classList.contains("warn") || c.classList.contains("info"))) return;
+    // 错误/警告/信息提示节点保留（否则 run_complete 后的 refreshMessages 会把刚显示的提示立即清掉）；
+    // 本地常驻错误气泡（data-adm-local-error）除外——它随消息列表管理，不在列表时即移除
+    if (c.classList && (c.classList.contains("warn") || c.classList.contains("info") ||
+        (c.classList.contains("error") && !c.hasAttribute("data-adm-local-error")))) return;
     var mid = c.getAttribute ? c.getAttribute("data-msgid") : null;
     if (mid && keySet[mid] && !existing[mid]) existing[mid] = c;
     else c.remove();
@@ -211,6 +213,10 @@ function buildMessageNode(msg, key) {
     foldBadge.textContent = _t("插入中");
     div.appendChild(foldBadge);
   }
+
+  // 本地常驻错误气泡（不落库、不进 LLM 上下文）：加标记与弹窗提示节点区分，
+  // 供 renderMessages 按消息列表生命周期管理（切会话/刷新时随列表移除）
+  if (msg._error) div.setAttribute("data-adm-local-error", "1");
 
   // 消息元信息
   if (msg.model || msg.provider) {

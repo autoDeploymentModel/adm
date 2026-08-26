@@ -2,7 +2,7 @@
 import { t as _t } from "../../i18n.js";
 import { S, invoke, listen, store } from "./store.js";
 import { api } from "./api.js";
-import { getErrorMessage } from "./error.js";
+import { getErrorMessage, classifyError, ERROR_QUOTA } from "./error.js";
 import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showInfo, reportError, updateContextUsage } from "./ui.js";
 import { renderMessages, renderTodos } from "./render.js";
 import { loadConversations, refreshMessages, renderConversationList, selectConversation, syncWxFollowSession } from "./session.js";
@@ -125,8 +125,9 @@ export async function setupSSEListener() {
         if (bgType === "run_complete") {
           var bgInner = (bgRaw.payload || {}).payload || bgRaw.payload || {};
           if (bgInner.error) {
-            // 与 active workspace 的错误处理一致：走 reportError 获得 quota 分类与空消息防护
-            reportError(bgInner.error, { prefix: _t("后台工作区运行出错: ") });
+            // 与 active workspace 的错误展示一致：气泡写进该后台 workspace 的消息池，
+            // 切回时可见，不打扰当前 tab
+            appendErrorBubble(bgInner.error, { prefix: _t("后台工作区运行出错: "), wsId: eventWsId, sessionId: bgInner.session_id });
           }
         }
       }
@@ -186,6 +187,40 @@ function reconnectSSE() {
 
 // 错误格式化 / 分类统一收口到 error.js（getErrorMessage / classifyError），
 // 展示统一走 ui.js 的 reportError（quota 类错误自动提示"余额不足，任务中断"）。
+
+// 常驻错误气泡：错误以本地消息形式追加进聊天列表（不落库 → 下次请求不会
+// 跟随上下文提交给 LLM），替代 3s 自动消失的弹窗；切会话/刷新页面后随会话
+// 状态清理。quota 类错误沿用"余额不足"文案；同一会话 3 秒内相同文本去重
+//（输出退化场景服务端会同时发 agent_event error + run_complete error）。
+var lastErrorBubble = null;
+function appendErrorBubble(err, opts) {
+  opts = opts || {};
+  var wsId = opts.wsId || S.serverInfo.workspace_id;
+  var sid = opts.sessionId || S.currentConvId;
+  var base = getErrorMessage(err);
+  if (!base) return;
+  var text;
+  if (classifyError(err) === ERROR_QUOTA) {
+    text = _t("余额不足，任务中断");
+  } else {
+    text = (opts.prefix || "") + base + (opts.hint || "");
+  }
+  var now = Date.now();
+  // 同一会话 3s 内相同核心错误只显示一次（agent_event 与 run_complete 的
+  // prefix 不同，用 base 而非最终文本比较，避免同一次失败双气泡）
+  if (lastErrorBubble && lastErrorBubble.wsId === wsId && lastErrorBubble.sid === sid && lastErrorBubble.base === base && now - lastErrorBubble.ts < 3000) return;
+  lastErrorBubble = { wsId: wsId, sid: sid, base: base, ts: now };
+  store.appendMessage(wsId, {
+    id: "local-error-" + now,
+    role: "error",
+    content: text,
+    _temp: true,
+    _error: true,
+    _sessionId: sid,
+  });
+  // 仅当前 tab 需要 DOM 渲染；后台 workspace 的气泡在切回时由 renderMessages 呈现
+  if (wsId === S.activeWsId) renderMessages();
+}
 
 function handleSSEEvent(payload, ctx) {
   ctx = ctx || {};
@@ -276,7 +311,8 @@ function handleSSEEvent(payload, ctx) {
         var ctxHint = (S.contextUsage.max > 0 && S.contextUsage.used >= S.contextUsage.max * 0.9)
           ? _t("（上下文已接近上限 ") + S.contextUsage.used + "/" + S.contextUsage.max + _t("，建议新建会话继续）") : "";
         // 统一错误展示：quota（余额不足/401）类自动提示"余额不足，任务中断"，其余显示原始错误
-        reportError(actualData.error, { prefix: _t("本轮对话中断: "), hint: ctxHint });
+        // 常驻错误气泡写进聊天列表（不弹窗、不进 LLM 上下文）
+        appendErrorBubble(actualData.error, { prefix: _t("本轮对话中断: "), hint: ctxHint });
         updateStatusBar("error", null, S.contextUsage.used);
         // 运行出错时不自动续跑（避免在持续性错误上循环烧 token）
         resetAutoContinue();
@@ -331,7 +367,7 @@ function handleSSEEvent(payload, ctx) {
       // Agent 事件（错误/响应/摘要/思考中）：error 可能是字符串或对象，统一展示并留完整日志便于排查
       if (actualData && actualData.error) {
         console.warn("[agent] agent_event 错误:", JSON.stringify(actualData).substring(0, 500));
-        reportError(actualData.error, { prefix: _t("Agent 错误: ") });
+        appendErrorBubble(actualData.error, { prefix: _t("Agent 错误: ") });
       } else if (actualData && actualData.type === "thinking" && actualData.progress) {
         // 模型长时间思考仍未产出可见内容：仅提示当前正在查看的会话，避免其它会话打扰
         if (!actualData.session_id || actualData.session_id === S.currentConvId) {
