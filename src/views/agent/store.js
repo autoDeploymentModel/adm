@@ -180,27 +180,35 @@ class Store {
     if (wsId === this.activeWsId) this.bindToS();
   }
 
-  // 服务端消息覆盖 + 保留折叠插入的待落库气泡（_fold）：
+  // 服务端消息覆盖 + 保留折叠插入的待落库气泡（_fold）与本地错误气泡（_error）：
   // 折叠插入的消息在服务端下一步边界才会创建，切会话/切页面/刷新时若直接覆盖
-  // 会被抹掉；这里把本地仍在等待落库、且属于 convId 会话的 _fold 用户气泡按内容
-  // 去重后合并追加到末尾。仅保留 _fold（不复活普通发送/排队发送的 _temp 临时气泡），
-  // 且限定会话归属（防止把上一会话的待插入气泡串进当前会话列表）
+  // 会被抹掉；错误气泡为本地常驻提示（不落库、不进 LLM 上下文），同样需要跨
+  // refreshMessages 保留。这里把本地仍在等待落库、且属于 convId 会话的气泡按
+  // 内容去重后合并追加到末尾。仅保留 _fold/_error（不复活普通发送/排队发送的
+  // _temp 临时气泡），且限定会话归属（防止把上一会话的待插入气泡串进当前会话列表）
   setMessagesKeepPending(wsId, serverMsgs, convId) {
     var ws = this.workspaces.get(wsId);
     if (!ws) return;
     var merged = (serverMsgs || []).slice();
-    var pendingFolds = [];
+    var pendingLocal = [];
     ws.messages.forEach(function(m) {
-      if (!m._temp || !m._fold || m.role !== "user") return;
+      if (!m._temp) return;
+      if (m._error) {
+        // 本地错误气泡：服务端不会有同名消息，直接保留（_error 气泡已带唯一 id）
+        if (convId && m._sessionId && m._sessionId !== convId) return;
+        pendingLocal.push(m);
+        return;
+      }
+      if (!m._fold || m.role !== "user") return;
       if (convId && m._sessionId && m._sessionId !== convId) return;
       var onServer = merged.some(function(sm) {
         if (sm.role !== "user") return false;
         var sText = (sm.content || getTextFromParts(sm.parts)) || "";
         return m.content === stripSystemInfoText(sText);
       });
-      if (!onServer) pendingFolds.push(m);
+      if (!onServer) pendingLocal.push(m);
     });
-    if (pendingFolds.length > 0) merged = merged.concat(pendingFolds);
+    if (pendingLocal.length > 0) merged = merged.concat(pendingLocal);
     ws.messages = merged;
     this.workspacesObj[wsId] = ws.snapshot();
     if (wsId === this.activeWsId) this.bindToS();
