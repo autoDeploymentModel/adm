@@ -193,6 +193,27 @@
       font-weight: 600;
     }
 
+    /* 多卡下拉：替代 vram-info 文本显示，允许逐卡查看（放宽宽度尽量显示完整卡名） */
+    #gpu-select {
+      color: var(--c-text-hi);
+      font-weight: 600;
+      font-size: 12px;
+      height: 18px;
+      line-height: 18px;
+      padding: 0 2px;
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      max-width: 260px;
+      outline: none;
+      text-align: right;
+      vertical-align: bottom;
+    }
+    #gpu-select option {
+      background: var(--c-panel-2);
+      color: var(--c-text);
+    }
+
     /* 更新弹窗样式 */
     #update-overlay {
       display: none;
@@ -319,6 +340,7 @@
         </div>
         <div class="hw-item">
           <span class="hw-label" id="gpu-label" data-i18n="显存">显存</span>
+          <select id="gpu-select" class="hw-value" style="display:none;"></select>
           <span class="hw-value" id="vram-info">--</span>
         </div>
         <div class="hw-item">
@@ -691,20 +713,67 @@
     window.doLlamacppDownload = doLlamacppDownload;
 
     // ===== 硬件栏 =====
+    // 显卡栏：多张显卡时渲染下拉逐卡查看（卡名 + 显存），单卡/无卡维持原文本显示
+    function updateGpuBar() {
+      const select = document.getElementById("gpu-select");
+      const vramEl = document.getElementById("vram-info");
+      const gpuLabel = document.getElementById("gpu-label");
+      const gpus = (systemInfo.gpus || []).filter(function(g) { return g && g.name; });
+
+      if (gpus.length > 1) {
+        // 多卡：下拉选卡（独显排前），右侧显示所选卡的显存用量（已用 / 总量）
+        select.style.display = "";
+        const prev = select.value;
+        const ordered = gpus.slice().sort(function(a, b) {
+          return (a.is_integrated ? 1 : 0) - (b.is_integrated ? 1 : 0);
+        });
+        select.innerHTML = "";
+        ordered.forEach(function(g, i) {
+          const opt = document.createElement("option");
+          opt.value = String(i);
+          // 核显显存是共享内存占位值（专用显存常为一两百 MB），不可信，只标注不显示数字
+          opt.textContent = g.name + (g.is_integrated ? " (" + t("集成显卡") + ")" : "");
+          opt.title = g.name;
+          select.appendChild(opt);
+        });
+        if (prev !== "" && ordered[Number(prev)]) select.value = prev;
+        const showVram = function(g) {
+          if (!g) { vramEl.textContent = ""; return; }
+          vramEl.textContent = g.total_vram > 0 ? formatBytes(g.total_vram) : "";
+        };
+        select.onchange = function() { showVram(ordered[Number(select.value)]); };
+        vramEl.style.display = "";
+        showVram(ordered[Number(select.value)]);
+        if (gpuLabel.getAttribute("data-i18n") !== "显存") {
+          gpuLabel.textContent = t("显存");
+          gpuLabel.setAttribute("data-i18n", "显存");
+        }
+        return;
+      }
+
+      select.style.display = "none";
+      vramEl.style.display = "";
+      if (systemInfo.has_gpu && systemInfo.total_vram > 0) {
+        // 单卡：优先逐卡枚举值（nvidia-smi 准确），只显示总量
+        const one = gpus.length === 1 ? gpus[0] : null;
+        const oneTotal = one && one.total_vram > 0 ? one.total_vram : systemInfo.total_vram;
+        vramEl.textContent = formatBytes(oneTotal);
+        // 型号优先：hwinfo 插件 > 单卡枚举结果 > 默认"显存"
+        const model = (hwinfo.gpu && hwinfo.gpu.model) || (one ? one.name : null);
+        if (model) {
+          gpuLabel.textContent = one && one.is_integrated ? model + " (" + t("集成显卡") + ")" : model;
+          gpuLabel.removeAttribute("data-i18n"); // 型号优先，语言切换不再覆盖
+        }
+      } else {
+        vramEl.textContent = t("无显卡");
+      }
+    }
+
     function updateHardwareBar() {
       if (!systemInfo) return;
       try {
         document.getElementById("ram-info").textContent = formatBytes(systemInfo.total_ram);
-        if (systemInfo.has_gpu && systemInfo.total_vram > 0) {
-          document.getElementById("vram-info").textContent = formatBytes(systemInfo.total_vram);
-          if (hwinfo.gpu && hwinfo.gpu.model) {
-            const gpuLabel = document.getElementById("gpu-label");
-            gpuLabel.textContent = hwinfo.gpu.model;
-            gpuLabel.removeAttribute("data-i18n"); // 型号优先，语言切换不再覆盖
-          }
-        } else {
-          document.getElementById("vram-info").textContent = t("无显卡");
-        }
+        updateGpuBar();
         const cpuCores = systemInfo.cpu_physical_cores;
         const cpuThreads = systemInfo.cpu_logical_cores;
         if (hwinfo.cpu && hwinfo.cpu.model) {
@@ -817,7 +886,10 @@
           hwinfo.os = await invoke("plugin:hwinfo|get_os_info");
 
           if (hwinfo.ram && hwinfo.ram.sizeMb) systemInfo.total_ram = hwinfo.ram.sizeMb * 1024 * 1024;
-          if (hwinfo.gpu && hwinfo.gpu.vramMb) { systemInfo.total_vram = hwinfo.gpu.vramMb * 1024 * 1024; systemInfo.has_gpu = true; }
+          // hwinfo 插件只报单张卡显存，可能低于逐卡枚举结果，仅在后端未枚举到显卡时兜底
+          if (hwinfo.gpu && hwinfo.gpu.vramMb && !(systemInfo.gpus && systemInfo.gpus.length > 0)) {
+            systemInfo.total_vram = hwinfo.gpu.vramMb * 1024 * 1024; systemInfo.has_gpu = true;
+          }
           if (hwinfo.cpu && hwinfo.cpu.threads) systemInfo.cpu_logical_cores = hwinfo.cpu.threads;
         } catch (hwe) {
           console.warn("hwinfo 插件获取失败，使用原有数据:", hwe);

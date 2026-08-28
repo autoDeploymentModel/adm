@@ -984,7 +984,8 @@ async function init() {
       st.systemInfo = await invoke()("get_system_info");
       try {
         const gpuInfo = await invoke()("plugin:hwinfo|get_gpu_info");
-        if (gpuInfo && gpuInfo.vramMb) {
+        // hwinfo 插件只报单张卡显存，可能低于后端逐卡枚举结果，仅在未枚举到显卡时兜底
+        if (gpuInfo && gpuInfo.vramMb && !(st.systemInfo.gpus && st.systemInfo.gpus.length > 0)) {
           st.systemInfo.total_vram = gpuInfo.vramMb * 1024 * 1024;
           st.systemInfo.has_gpu = true;
         }

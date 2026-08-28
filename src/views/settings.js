@@ -279,9 +279,50 @@ const template = `
           </div>
         </div>
 
+        <div class="param-group">
+          <div class="param-group-title">${_t("多卡模式")}</div>
+          <div class="param-row">
+            <div class="param-label">${_t("启用多卡")}<div class="param-key">--split-mode</div></div>
+            <div class="param-input">
+              <div class="checkbox-wrap"><input type="checkbox" id="multi_gpu"><span>${_t("将模型分载到多张 GPU")}</span></div>
+              <div class="param-desc">${_t("开启后按下方设置把模型权重/KV 分载到多张显卡；单卡机器无需开启")}</div>
+            </div>
+          </div>
+          <div class="param-row">
+            <div class="param-label">${_t("分片方式")}<div class="param-key">-sm, --split-mode</div></div>
+            <div class="param-input">
+              <select id="split_mode">
+                <option value="layer">layer — ${_t("按层流水线分载（默认）")}</option>
+                <option value="row">row — ${_t("按行并行分载")}</option>
+                <option value="tensor">tensor — ${_t("按张量并行分载（实验性）")}</option>
+                <option value="none">none — ${_t("仅使用单卡")}</option>
+              </select>
+            </div>
+          </div>
+          <div class="param-row">
+            <div class="param-label">${_t("各卡分配比例")}<div class="param-key">-ts, --tensor-split</div></div>
+            <div class="param-input"><input type="text" id="tensor_split" placeholder="3,1"><div class="param-desc">${_t("各 GPU 分配比例，逗号分隔，留空按显存自动分配")}</div></div>
+          </div>
+          <div class="param-row">
+            <div class="param-label">${_t("主卡索引")}<div class="param-key">-mg, --main-gpu</div></div>
+            <div class="param-input"><input type="number" id="main_gpu" value="0" min="0"><div class="param-desc">${_t("主 GPU 编号，默认 0；仅分片方式为 none / row 时生效")}</div></div>
+          </div>
+          <div class="param-row">
+            <div class="param-label">${_t("设备列表")}<div class="param-key">-dev, --device</div></div>
+            <div class="param-input"><input type="text" id="device" placeholder="CUDA0,CUDA1"><div class="param-desc">${_t("参与分载的设备名，逗号分隔；名称以 llama-server --list-devices 的输出为准（CUDA 构建形如 CUDA0/CUDA1，Vulkan 构建形如 Vulkan0/Vulkan1），留空为全部可用设备")}</div></div>
+          </div>
+          <div class="param-row">
+            <div class="param-label">${_t("排除集成显卡")}<div class="param-key">--device</div></div>
+            <div class="param-input">
+              <div class="checkbox-wrap"><input type="checkbox" id="exclude_integrated"><span>${_t("只把模型放到独立显卡")}</span></div>
+              <div class="param-desc">${_t("机器同时有核显与独显时自动把 --device 限定为独显（上方设备列表留空时生效），避免核显被分到层拖慢推理；未开启多卡时同样生效。由于自动填入的是系统报告的设备名，可能与 llama-server --list-devices 的名称不一致，默认关闭，请核对后再开启")}</div>
+            </div>
+          </div>
+        </div>
+
         <div class="param-row" style="margin-top:16px;">
           <div class="param-label"></div>
-          <div class="param-input"><span style="font-size:12px;color:var(--c-text-3);">${_t("其余启动参数（GPU 层、线程、采样、KV 缓存、推理等）已固定为 llama-server 默认值，如需调整请直接修改 doc/llamacpp.txt 列出的参数。")}</span></div>
+          <div class="param-input"><span style="font-size:12px;color:var(--c-text-3);">${_t("其余启动参数（GPU 层数自动、线程、采样、KV 缓存、推理等）已固定为 llama-server 默认值，如需调整请直接修改 doc/llamacpp.txt 列出的参数。")}</span></div>
         </div>
 
         <button class="btn-reset" id="reset-btn">${_t("恢复默认")}</button>
@@ -479,14 +520,46 @@ function showToast(message, isError) {
   setTimeout(() => toast.remove(), 3000);
 }
 
+// 逗号分隔列表输入：非法值不写入配置（否则 llama-server 会因参数解析失败直接退出），
+// 同时清空输入框并提示，保证界面状态与保存值一致（避免用户误以为已保存）
+function readListField(id, re, label) {
+  const el = document.getElementById(id);
+  if (!el) return null;
+  const v = el.value.trim();
+  if (!v) return null;
+  if (!re.test(v)) {
+    showToast(_t(label) + _t("格式不正确，已忽略"), true);
+    el.value = "";
+    return null;
+  }
+  return v;
+}
+
+const RE_NUM_LIST = /^\d+(?:\s*,\s*\d+)*$/;
+const RE_DEVICE_LIST = /^[\w. -]+(?:\s*,\s*[\w. -]+)*$/;
+
 function getParamsFromForm() {
   const ctxVal = parseInt(document.getElementById("ctx_size").value) || 0;
   const portEl = document.getElementById("port");
   const hostEl = document.getElementById("host");
+  const mgEl = document.getElementById("main_gpu");
+  let mgVal = parseInt(mgEl.value);
+  // 主卡索引不允许负数（llama-server 会因索引越界报错）：非法时回写 0 并提示
+  if (Number.isFinite(mgVal) && mgVal < 0) {
+    showToast(_t("主卡索引不能为负数，已重置为 0"), true);
+    mgEl.value = "0";
+    mgVal = 0;
+  }
   return {
     ctx_size: ctxVal,
     port: portEl ? (parseInt(portEl.value) || 5678) : 5678,
     host: hostEl ? hostEl.value : "127.0.0.1",
+    multi_gpu: document.getElementById("multi_gpu").checked,
+    split_mode: document.getElementById("split_mode").value,
+    tensor_split: readListField("tensor_split", RE_NUM_LIST, "各卡分配比例"),
+    main_gpu: Number.isFinite(mgVal) ? mgVal : null,
+    device: readListField("device", RE_DEVICE_LIST, "设备列表"),
+    exclude_integrated: document.getElementById("exclude_integrated").checked,
   };
 }
 
@@ -497,6 +570,15 @@ function fillFormFromParams(params) {
   if (portEl) portEl.value = p.port ?? 5678;
   const hostEl = document.getElementById("host");
   if (hostEl) hostEl.value = p.host ?? "127.0.0.1";
+  document.getElementById("multi_gpu").checked = !!p.multi_gpu;
+  document.getElementById("split_mode").value = p.split_mode || "layer";
+  document.getElementById("tensor_split").value = p.tensor_split || "";
+  const mgEl = document.getElementById("main_gpu");
+  if (mgEl) mgEl.value = p.main_gpu ?? 0;
+  document.getElementById("device").value = p.device || "";
+  // 默认关闭（与后端 serde 默认一致）：自动注入的 --device 用的是系统报告名，
+  // 与 llama-server --list-devices 的取值格式不保证一致，不能默认改动启动行为
+  document.getElementById("exclude_integrated").checked = p.exclude_integrated === true;
 }
 
 async function saveParams() {
@@ -523,7 +605,7 @@ function resetParams() {
 function autoSave() { saveParams(); }
 
 function setupAutoSave() {
-  ["ctx_size", "port", "host"].forEach(function (id) {
+  ["ctx_size", "port", "host", "multi_gpu", "split_mode", "tensor_split", "main_gpu", "device", "exclude_integrated"].forEach(function (id) {
     var el = document.getElementById(id);
     if (el) el.addEventListener("change", autoSave);
   });
