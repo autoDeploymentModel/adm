@@ -10,6 +10,20 @@ pub struct SystemInfo {
     pub cpu_usage: f32,
     pub cpu_physical_cores: usize,
     pub cpu_logical_cores: usize,
+    /// 每张显卡的详细信息（多卡时含多张，单卡/无卡时长度为 1 或 0）
+    pub gpus: Vec<GpuInfo>,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct GpuInfo {
+    /// 显卡名称，如 "NVIDIA GeForce RTX 4090"
+    pub name: String,
+    /// 总显存（字节），0 = 未知；集成显卡该值不可信（共享内存不计入）
+    pub total_vram: u64,
+    /// 已用显存（字节），0 = 未知
+    pub used_vram: u64,
+    /// 是否为集成显卡（核显）
+    pub is_integrated: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -27,6 +41,29 @@ pub struct LaunchParams {
     pub port: Option<u16>,
     /// 监听地址，如 "127.0.0.1" / "0.0.0.0"
     pub host: Option<String>,
+    /// 多卡模式：启用后按 split_mode / tensor_split / main_gpu / device 将模型分载到多张 GPU
+    #[serde(default)]
+    pub multi_gpu: bool,
+    /// 多卡分片方式（--split-mode）：none / layer / row / tensor，空则默认 layer
+    #[serde(default)]
+    pub split_mode: Option<String>,
+    /// 各 GPU 分配比例（--tensor-split），如 "3,1"，空则不传按显存自动分配
+    #[serde(default)]
+    pub tensor_split: Option<String>,
+    /// 主卡索引（--main-gpu），默认 0
+    #[serde(default)]
+    pub main_gpu: Option<i32>,
+    /// 参与 offload 的设备列表（--device），如 "CUDA0,CUDA1" 或完整显卡名，空则为全部可用设备
+    #[serde(default)]
+    pub device: Option<String>,
+    /// 排除集成显卡：设备列表留空且同时存在集显/独显时，自动只把模型放到独立显卡
+    /// （Vulkan 等后端默认会把层分给核显，导致推理变慢甚至显存不足）。
+    /// 默认关闭：自动注入的 `--device` 用的是操作系统报告名（WMI/CIM、system_profiler），
+    /// 与 llama-server `--list-devices` 的取值格式不保证一致，匹配不上会让服务端
+    /// 拒绝启动或静默降级到 CPU。默认开启等于在用户无感知的情况下改动启动行为，
+    /// 因此保持 opt-in，由用户核对 `--list-devices` 输出后自行开启。
+    #[serde(default)]
+    pub exclude_integrated: bool,
 }
 
 

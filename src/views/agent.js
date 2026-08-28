@@ -636,11 +636,25 @@ function bindEvents() {
       S.manualScrollMode = !isMsgAreaAtBottom(msgArea);
     });
 
+    // 滚轮向上是用户浏览意图的直接信号，立即进入手动模式。
+    // 不能只靠 scroll 事件判定：浏览器每帧最多合并派发一次 scroll 事件，流式渲染
+    // 会在同帧内把 scrollTop 重新钉回底部，用户滚轮产生的中间位置被覆盖，
+    // 事件到达时已看不出用户滚动过（thinking 高速输出时滚轮「失灵」的另一半根因）。
+    msgArea.addEventListener("wheel", function(e) {
+      if (e.deltaY < 0) S.manualScrollMode = true;
+    }, { passive: true });
+
     // 滚动到底部 → 立即进入自动浏览模式；不在底部 → 进入手动模式（暂停自动滚底）。
     // 用 programmaticScroll 标志区分代码触发的滚动与用户操作，不依赖 :hover，
     // 避免 macOS 触控板滚动时光标不在消息区内导致手动模式无法激活。
+    // 注意：程序滚动（renderMessages/回到底部）后浏览器异步派发的 scroll 事件无法用
+    // programmaticScroll 标志区分，只能靠时间窗口兜底；但流式渲染（SSE 每增量一次）
+    // 远快于 100ms，仅凭时间窗口会把用户滚动全部吞掉（thinking 时滚轮无法上滑翻页）。
+    // 程序滚动目标恒为底部：时间窗口内且仍在底部才视为程序滚动自身事件；
+    // 位置不在底部（必为用户上滑）必须立即进入手动模式，不能等窗口过期。
     msgArea.addEventListener("scroll", function() {
-      if (S.programmaticScroll || Date.now() - S.lastProgrammaticScroll < 100) { updateScrollBottomBtn(); return; }
+      if (S.programmaticScroll) { updateScrollBottomBtn(); return; }
+      if (Date.now() - S.lastProgrammaticScroll < 100 && isMsgAreaAtBottom(msgArea)) { updateScrollBottomBtn(); return; }
       if (isMsgAreaAtBottom(msgArea)) {
         S.manualScrollMode = false;
       } else {

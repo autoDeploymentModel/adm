@@ -261,7 +261,27 @@ pub async fn get_system_info(state: tauri::State<'_, AppState>) -> Result<System
     let cpu_physical_cores = sys.physical_core_count().unwrap_or(0);
     let cpu_logical_cores = sys.cpus().len();
 
-    let (total_vram, used_vram, has_gpu) = platform::get_gpu_info();
+    let gpus = platform::get_gpu_devices();
+    // 枚举到显卡时以逐卡结果为准（nvidia-smi 显存准确、多卡求和正确、虚拟显示驱动已过滤）。
+    // macOS 例外：Apple Silicon 显存即共享内存，total_vram 保持等于总内存的约定（前端据此识别统一内存）。
+    // 这里不能退回 get_gpu_info()：它内部还会再跑一次 system_profiler（耗时数秒且无缓存），
+    // 首屏就会把 system_profiler 执行两遍；改为复用上面已缓存的逐卡结果。
+    #[cfg(target_os = "macos")]
+    let (total_vram, used_vram, has_gpu) = if gpus.is_empty() {
+        platform::get_gpu_info()
+    } else {
+        (sys.total_memory(), 0, true)
+    };
+    #[cfg(not(target_os = "macos"))]
+    let (total_vram, used_vram, has_gpu) = if gpus.is_empty() {
+        platform::get_gpu_info()
+    } else {
+        (
+            gpus.iter().map(|g| g.total_vram).sum(),
+            gpus.iter().map(|g| g.used_vram).sum(),
+            true,
+        )
+    };
 
     Ok(SystemInfo {
         total_ram,
@@ -272,6 +292,7 @@ pub async fn get_system_info(state: tauri::State<'_, AppState>) -> Result<System
         cpu_usage,
         cpu_physical_cores,
         cpu_logical_cores,
+        gpus,
     })
 }
 

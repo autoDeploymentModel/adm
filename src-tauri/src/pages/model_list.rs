@@ -425,6 +425,96 @@ pub async fn start_model(
         }
     }
 
+    // 显卡放置策略：
+    // --device 优先取用户显式填写；留空且勾选「排除集成显卡」且机器确有集显+独显时自动填独显列表
+    // （Vulkan 等后端默认会把层分给核显，导致推理变慢甚至显存不足），单卡模式下同样生效。
+    // 无论来源是用户填写还是自动推导，都必须过一遍 sanitize_device_list：
+    // 值会作为独立 argv 直接进入 llama-server，格式非法的后果是服务端拒绝启动。
+    let auto_device = if params.exclude_integrated {
+        crate::common::utils::platform::discrete_device_list()
+    } else {
+        None
+    };
+    let raw_device = params
+        .device
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or(auto_device.as_deref());
+    let device = raw_device.and_then(crate::common::utils::platform::sanitize_device_list);
+    // 填了值却被校验拦下：静默丢弃会让用户以为生效了，必须在日志里说清楚
+    if raw_device.is_some() && device.is_none() {
+        app.emit(
+            "model-log",
+            serde_json::json!({
+                "model_id": &model_id,
+                "line": "[WARN] --device 取值格式非法，已忽略该参数（请使用 llama-server --list-devices 输出的名称，逗号分隔）",
+                "source": "stderr",
+            }),
+        )
+        .ok();
+    }
+
+    // --main-gpu 仅对 none（选卡）与 row（中间结果/KV 放主卡）生效，layer/tensor 下无意义，不下发
+    let main_gpu = if params.multi_gpu {
+        let sm = params
+            .split_mode
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("layer");
+        params
+            .main_gpu
+            .filter(|v| *v >= 0)
+            .filter(|_| sm == "none" || sm == "row")
+    } else {
+        None
+    };
+
+    if params.multi_gpu {
+        let split_mode = params
+            .split_mode
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("layer");
+        let tensor_split = params
+            .tensor_split
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .and_then(crate::common::utils::platform::sanitize_tensor_split);
+
+        args.extend(["--split-mode".to_string(), split_mode.to_string()]);
+        if let Some(ts) = tensor_split {
+            args.extend(["--tensor-split".to_string(), ts.to_string()]);
+        }
+        if let Some(mg) = main_gpu {
+            args.extend(["--main-gpu".to_string(), mg.to_string()]);
+        }
+    }
+    if let Some(dev) = &device {
+        args.extend(["--device".to_string(), dev.clone()]);
+    }
+    if params.multi_gpu || device.is_some() {
+        app.emit(
+            "model-log",
+            serde_json::json!({
+                "model_id": &model_id,
+                "line": format!(
+                    "[DEBUG] GPU placement: multi-gpu={} split-mode={:?} tensor-split={:?} main-gpu(生效)={:?} device={:?}",
+                    params.multi_gpu,
+                    params.split_mode,
+                    params.tensor_split,
+                    main_gpu,
+                    device
+                ),
+                "source": "stdout",
+            }),
+        )
+        .ok();
+    }
+
     // MTP (Multi-Token Prediction) auto-detection
     if model_id.to_lowercase().contains("mtp") {
         args.extend(["--spec-draft-n-max".to_string(), "2".to_string()]);
