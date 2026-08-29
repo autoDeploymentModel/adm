@@ -1688,10 +1688,12 @@ pub async fn start_agent_server(
         Some(child)
     };
 
-    // 轮询健康检查端点，等待 server 就绪（15 秒）。若 spawn 后检测到 server 已可连
+    // 轮询健康检查端点，等待 server 就绪（5 秒）。若 spawn 后检测到 server 已可连
     // （并发启动的其它实例抢先 bind 成功、本进程子进程随即退出），视为复用成功。
+    // 5s 阈值已远大于实测冷启动 (~1-2s)；从 15s 缩短是为让「真启动失败」更快暴露，
+    // 避免前端空白页面等过久。
     {
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         loop {
             if health_check(&probe_client).await {
                 break;
@@ -1707,9 +1709,9 @@ pub async fn start_agent_server(
                 }
             }
             if tokio::time::Instant::now() > deadline {
-                bail!("等待 admAgent server 启动超时（15秒），请检查 admAgent 是否正常");
+                bail!("等待 admAgent server 启动超时（5秒），请检查 admAgent 是否正常");
             }
-            tokio::time::sleep(Duration::from_millis(300)).await;
+            tokio::time::sleep(Duration::from_millis(200)).await;
         }
     }
 

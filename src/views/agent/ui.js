@@ -252,6 +252,43 @@ export function updateStatusBar(state, workdir, tokens) {
   }
 }
 
+// ===== 初始化进度条 =====
+// 首次进入 Agent 页时显示在顶部状态栏正上方的一条薄进度条，给用户「正在做什么」的反馈。
+// 各阶段文案由 init() 在 Phase 切换时调用 showInitProgress 更新；init 完成后调 hideInitProgress 收起。
+// 设计要点：
+// - 不依赖具体阶段顺序：只暴露一个字符串，由调用方决定何时显示/隐藏
+// - 跨阶段并发调用同一函数（多次写同一个 text）无副作用，单调地覆盖
+// - hideInitProgress 必须 idempotent：init 异常分支已多次 return 前都会调用，保证不留挂件
+//   此外还会兜底清掉残留的骨架屏（init 中途失败时 conv-list / tools-list / msg-area
+//   还停在初始骨架），否则用户会看到「加载到一半卡死」的灰色占位。
+export function showInitProgress(text) {
+  var bar = document.getElementById("agent-init-progress");
+  var label = document.getElementById("agent-init-progress-text");
+  if (!bar || !label) return;
+  if (text) label.textContent = text;
+  bar.classList.add("show");
+}
+
+export function hideInitProgress() {
+  var bar = document.getElementById("agent-init-progress");
+  if (bar) bar.classList.remove("show");
+
+  // 兜底清理骨架屏：仅在 init() 中途异常退出时生效（init 正常完成时这里三个容器
+  // 已被 renderMessages / renderConversationList / renderToolsList 重绘，骨架不存在）
+  var msgArea = document.getElementById("agent-msg-area");
+  if (msgArea && msgArea.querySelector(".agent-loading")) {
+    msgArea.innerHTML = '<div class="empty-state"><span class="empty-state-icon">🤖</span><span class="empty-state-text">' + _t("开始一个新的对话") + '</span></div>';
+  }
+  var convList = document.getElementById("agent-conv-list");
+  if (convList && convList.querySelector(".skeleton-conv-item")) {
+    convList.innerHTML = '<div style="padding:12px 14px;color:var(--c-text-4);font-size:12px;">' + _t("暂无会话") + '</div>';
+  }
+  var toolsList = document.getElementById("agent-tools-list");
+  if (toolsList && toolsList.querySelector(".skeleton-tool-item")) {
+    toolsList.innerHTML = '<div class="tool-item"><span class="tool-dot gray"></span><span class="tool-name" style="color:var(--c-text-4);">' + _t("暂无工具") + '</span></div>';
+  }
+}
+
 // ===== 统一错误/提示展示 =====
 // 所有提示（错误/警告/信息）统一走 showNotice 渲染为消息区节点：
 //   error 红 / warn 黄 / info 灰，3 秒后自动消失；render.js 增量渲染时保留 error/warn/info 节点。
