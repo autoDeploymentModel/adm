@@ -58,7 +58,9 @@ async function init() {
   } finally {
     // 无论成功/失败/异常，loading UI 必须被清掉。
     // hideInitProgress() 内部 idempotent + 兜底替换残留骨架，重复调用安全。
-    hideInitProgress();
+    // 关键：仅当自己仍是最新 init（seq 未被 unmount/新 mount 递增）时才收尾，
+    // 否则会误清「快速切走再切回后」新 init 正在展示的进度条与骨架。
+    if (seq === S.initSeq) hideInitProgress();
   }
 }
 

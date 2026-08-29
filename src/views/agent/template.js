@@ -1451,13 +1451,15 @@ export const template = `
 
   /* 初始化进度条：贴在底部状态栏上方，显示当前 init() 阶段。
      默认隐藏（无 .show），由 ui.js showInitProgress / hideInitProgress 切显隐。
-     收起时用 height+opacity 平滑过渡，避免跳变。 */
+     收起时用 height+opacity 平滑过渡，避免跳变。
+     注意：padding 放在 .show 里 —— box-sizing: border-box 下 max-height:0 只能
+     压到「padding+border」高度，若 padding 常驻则隐藏时仍会漏出可见空隙。 */
   .agent-init-progress {
     flex-shrink: 0;
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 4px 16px;
+    padding: 0 16px;
     background: var(--c-raise);
     border-top: 1px solid var(--c-border-soft);
     font-size: 11px;
@@ -1465,11 +1467,12 @@ export const template = `
     max-height: 0;
     opacity: 0;
     overflow: hidden;
-    transition: max-height 0.2s ease, opacity 0.2s ease;
+    transition: max-height 0.2s ease, opacity 0.2s ease, padding 0.2s ease;
   }
   .agent-init-progress.show {
     max-height: 28px;
     opacity: 1;
+    padding: 4px 16px;
   }
   .agent-init-progress-spinner {
     display: inline-block;
