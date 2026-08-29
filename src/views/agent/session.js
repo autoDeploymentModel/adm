@@ -153,6 +153,178 @@ export function renderConversationList() {
 
     container.appendChild(item);
   });
+
+  // 同步刷新侧栏列表；聊天区右侧的消息大纲（outline）由 renderMessages 负责刷新，
+  // 避免在切会话时与消息列表对账时机错位（消息未加载完时显示旧数据）。
+}
+
+// 渲染聊天区右侧的悬浮「对话记录」大纲面板。
+// 列出当前会话 S.messages 中有文本内容的每条消息（带角色色条 + 预览文本 + 时间），
+// 点击项定位到对应消息节点并短暂闪烁高亮，方便长对话快速跳转。
+// 纯工具调用 / 思考流（无文本 part）的消息直接跳过，避免大纲被噪声淹没。
+export function renderMessageOutline() {
+  var container = document.getElementById("agent-outline-list");
+  if (!container) return;
+  container.innerHTML = "";
+
+  // 过滤：必须是带 id 的消息且能从 parts/content 抽到非空文本预览
+  var messages = S.messages || [];
+  var visible = messages.filter(function(m) {
+    return m && m.id !== undefined && m.id !== null && getMessagePreview(m);
+  });
+
+  // 同步 header 计数
+  var countEl = document.getElementById("agent-outline-count");
+  if (countEl) countEl.textContent = String(visible.length);
+
+  if (visible.length === 0) {
+    container.innerHTML =
+      '<div class="agent-outline-empty">' +
+        '<div class="agent-outline-empty-icon">📑</div>' +
+        '<div>' + _t("暂无对话记录") + '</div>' +
+        '<div style="margin-top:6px;font-size:11px;">' + _t("在左侧开始对话后将自动出现") + '</div>' +
+      '</div>';
+    updateOutlineFabBadge();
+    return;
+  }
+
+  visible.forEach(function(msg, idx) {
+    var item = document.createElement("div");
+    var role = msg.role || "assistant";
+    var msgKey = String(msg.id != null ? msg.id : ("idx" + idx));
+    item.className = "outline-item " + role;
+    item.setAttribute("data-msg-key", msgKey);
+
+    var preview = getMessagePreview(msg);
+    var time = formatTime(msg.created_at || msg.updated_at || "");
+    var roleLabel = role === "user" ? _t("你") : _t("Agent");
+    var roleIcon = role === "user" ? "👤" : "🤖";
+
+    item.innerHTML =
+      '<span class="outline-item-bar"></span>' +
+      '<div class="outline-item-body">' +
+        '<div class="outline-item-meta">' +
+          '<span class="outline-item-role">' + roleIcon + ' ' + roleLabel + '</span>' +
+          (time ? '<span>· ' + time + '</span>' : '') +
+          '<span style="margin-left:auto;color:var(--c-text-4);">#' + (idx + 1) + '</span>' +
+        '</div>' +
+        '<div class="outline-item-preview">' + escapeHtml(preview) + '</div>' +
+      '</div>';
+
+    item.addEventListener("click", function() {
+      setOutlinePanelOpen(false);
+      scrollToMessage(msgKey, item);
+    });
+
+    container.appendChild(item);
+  });
+
+  updateOutlineFabBadge();
+}
+
+// 从消息中提取前 ~50 字文本预览（按 parts 顺序查找首个 text part，回退 content）
+function getMessagePreview(msg) {
+  if (Array.isArray(msg.parts)) {
+    for (var i = 0; i < msg.parts.length; i++) {
+      var p = msg.parts[i];
+      if (p && p.type === "text" && p.data && p.data.text) {
+        var t = String(p.data.text).replace(/\s+/g, " ").trim();
+        if (t) return t.slice(0, 60);
+      }
+    }
+  }
+  if (msg.content) {
+    var c = String(msg.content).replace(/\s+/g, " ").trim();
+    if (c) return c.slice(0, 60);
+  }
+  return "";
+}
+
+// 滚动消息区到指定 msgKey 对应消息，并短暂闪烁高亮（用户感知「已跳转」）
+function scrollToMessage(msgKey, sourceItem) {
+  var area = document.getElementById("agent-msg-area");
+  if (!area) return;
+  var target = area.querySelector('[data-msgid="' + cssEscape(msgKey) + '"]');
+  if (!target) {
+    showError(_t("未找到对应消息（可能已被折叠或删除）"));
+    return;
+  }
+  // 退出手动滚动模式 + 跳到底部命令互斥状态，确保后续 scroll 事件判定为程序触发
+  S.programmaticScroll = true;
+  S.lastProgrammaticScroll = Date.now();
+  S.manualScrollMode = false;
+  try {
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+  } catch (_) {
+    target.scrollIntoView();
+  }
+  // 闪烁高亮：复用模板内 .msg.flash-highlight 动画
+  target.classList.remove("flash-highlight");
+  // 强制重排，确保重新触发动画
+  /** @type {any} */ (target).offsetWidth;
+  target.classList.add("flash-highlight");
+  setTimeout(function() { try { target.classList.remove("flash-highlight"); } catch (_) {} }, 1300);
+  // 大纲面板里临时高亮当前项
+  if (sourceItem) {
+    var prev = sourceItem.parentNode && sourceItem.parentNode.querySelector(".outline-item.active");
+    if (prev && prev !== sourceItem) prev.classList.remove("active");
+    sourceItem.classList.add("active");
+  }
+  // 调用 ui.js 的同步刷新让悬浮回到底部圆球的显隐与新滚动位置一致
+  try {
+    // 通过动态 import 避免 session.js 与 ui.js 形成新循环依赖（store.js 已经引用过 utils.js）
+    import("./ui.js").then(function(ui) { ui.updateScrollBottomBtn(); }).catch(function() {});
+  } catch (_) {}
+}
+
+// 简单的 CSS.escape 兼容（旧 WebView 可能没有 CSS.escape）
+function cssEscape(s) {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+    try { return CSS.escape(String(s)); } catch (_) {}
+  }
+  return String(s).replace(/[^a-zA-Z0-9_\-]/g, function(c) { return "\\" + c; });
+}
+
+// 同步 FAB 角标：与面板里展示的大纲项数一致（即只计有文本内容的消息），
+// 否则用户看到角标是「总消息数」、打开后却少几条，体感不一致。
+function updateOutlineFabBadge() {
+  var badge = document.getElementById("agent-outline-fab-badge");
+  if (!badge) return;
+  var msgs = S.messages || [];
+  var total = 0;
+  for (var i = 0; i < msgs.length; i++) {
+    var m = msgs[i];
+    if (m && m.id !== undefined && m.id !== null && getMessagePreview(m)) total++;
+  }
+  if (total > 0) {
+    badge.textContent = total > 99 ? "99+" : String(total);
+    badge.style.display = "";
+  } else {
+    badge.style.display = "none";
+  }
+}
+
+// 切换 / 设置大纲面板的展开状态
+export function setOutlinePanelOpen(open) {
+  var panel = document.getElementById("agent-outline-panel");
+  var fab = document.getElementById("agent-outline-fab");
+  if (!panel || !fab) return;
+  if (open) {
+    panel.classList.add("show");
+    fab.classList.add("active");
+  } else {
+    panel.classList.remove("show");
+    fab.classList.remove("active");
+  }
+}
+
+export function isOutlinePanelOpen() {
+  var panel = document.getElementById("agent-outline-panel");
+  return !!(panel && panel.classList.contains("show"));
+}
+
+export function toggleOutlinePanel() {
+  setOutlinePanelOpen(!isOutlinePanelOpen());
 }
 
 function handleConvAction(action, convId) {

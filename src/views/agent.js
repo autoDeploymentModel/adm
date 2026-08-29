@@ -8,7 +8,7 @@ import { setLogEnabled } from "./agent/log.js";
 import { api } from "./agent/api.js";
 import { generateUUID, isMsgAreaAtBottom, autoResize, $input, normalizeReasoningEffort } from "./agent/utils.js";
 import { updateStatusBar, updateContextUsage, updateModeToggle, updateSendButton, exitManualScrollMode, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showConfirm, showCopyPasteMenu, updateScrollBottomBtn, reportError } from "./agent/ui.js";
-import { loadConversations, renderConversationList, selectConversation, newConversation } from "./agent/session.js";
+import { loadConversations, renderConversationList, selectConversation, newConversation, toggleOutlinePanel, setOutlinePanelOpen } from "./agent/session.js";
 import { syncWorkingIndicator } from "./agent/render.js";
 import { sendMessage, cancelCurrentRun } from "./agent/send.js";
 import { setupSSEListener, cancelScheduledLoadTools } from "./agent/sse.js";
@@ -361,6 +361,41 @@ function bindEvents() {
       S.sessionViewMode = item.getAttribute("data-mode") === "all" ? "all" : "current";
       renderConversationList();
     });
+  });
+
+  // 悬浮「对话记录导航」按钮：点击展开/收起右侧消息大纲面板
+  var outlineFab = document.getElementById("agent-outline-fab");
+  if (outlineFab) {
+    outlineFab.addEventListener("click", function(e) {
+      e.stopPropagation();
+      toggleOutlinePanel();
+    });
+  }
+  var outlineClose = document.getElementById("agent-outline-close");
+  if (outlineClose) {
+    outlineClose.addEventListener("click", function(e) {
+      e.stopPropagation();
+      setOutlinePanelOpen(false);
+    });
+  }
+  // 点击面板外区域自动收起（包括消息区 / 输入区等）
+  // 用具名函数保存以便 unmount 通过 S.unlisteners 解绑（每次 mount 都重新注册，
+  // 切回 agent 视图时不会泄漏堆积）
+  function onDocClickForOutline(e) {
+    var panel = document.getElementById("agent-outline-panel");
+    var fab = document.getElementById("agent-outline-fab");
+    if (!panel || !fab || !panel.classList.contains("show")) return;
+    if (panel.contains(e.target) || fab.contains(e.target)) return;
+    setOutlinePanelOpen(false);
+  }
+  function onDocKeydownForOutline(e) {
+    if (e.key === "Escape") setOutlinePanelOpen(false);
+  }
+  document.addEventListener("click", onDocClickForOutline);
+  document.addEventListener("keydown", onDocKeydownForOutline);
+  S.unlisteners.push(function() {
+    document.removeEventListener("click", onDocClickForOutline);
+    document.removeEventListener("keydown", onDocKeydownForOutline);
   });
 
   // 设置按钮 (在侧栏底部)

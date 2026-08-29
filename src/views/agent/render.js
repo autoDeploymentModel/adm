@@ -3,6 +3,7 @@ import { t as _t } from "../../i18n.js";
 import { S, store } from "./store.js";
 import { renderMarkdown, formatTime, splitSystemInfo } from "./utils.js";
 import { updateScrollBottomBtn } from "./ui.js";
+import { renderMessageOutline } from "./session.js";
 
 // ===== 消息渲染 =====
 // Message 结构: { id, role, session_id, parts: ContentPart[], model, provider, created_at, updated_at }
@@ -88,6 +89,8 @@ export function renderMessages() {
     }
     syncWorkingIndicator(area);
     updateScrollBottomBtn();
+    // 消息清空（如切到新会话尚未加载）→ 同步刷新右侧大纲为空态
+    renderMessageOutline();
     return;
   }
   if (area.querySelector(".empty-state")) area.innerHTML = "";
@@ -149,6 +152,8 @@ export function renderMessages() {
   S.programmaticScroll = false;
   // 流式输出时内容增长不一定触发 scroll 事件，渲染后主动刷新悬浮圆球显隐
   updateScrollBottomBtn();
+  // 同步刷新右侧「对话记录」大纲面板（SSE 流式期间 message 增量会持续触发）
+  renderMessageOutline();
 }
 
 // 「正在思考」指示器同步：运行中确保持久节点存在并置于消息区末尾；结束则移除。
