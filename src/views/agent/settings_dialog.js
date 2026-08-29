@@ -108,6 +108,7 @@ export function renderVisionModelSelect() {
     sel.value = current;
   } else {
     sel.value = "admAgent/admImage-model";
+    S.settings.agent_vision_model = "admAgent/admImage-model";
   }
 }
 

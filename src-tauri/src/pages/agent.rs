@@ -213,7 +213,10 @@ fn migrate_legacy_config(new_dir: &std::path::Path) {
             let mut new_value: serde_json::Value = serde_json::from_str(&s)
                 .map_err(|e| format!("解析 {} 失败: {}", new_path.display(), e))?;
             merge_json(&mut new_value, &legacy_value);
-            write_json_direct(&new_path, &new_value)?;
+            // 迁移在 adm_agent_config_dir() 内部触发，此时不能走
+            // update_adm_agent_config（它会再调 adm_agent_config_dir → 递归 + Mutex 重入）。
+            // 直接用原子写：临时文件 + rename，不截断目标文件。
+            write_json_atomic(&new_path, &new_value)?;
         } else {
             if let Some(parent) = new_path.parent() {
                 std::fs::create_dir_all(parent)
@@ -254,77 +257,33 @@ fn load_ctx_size(app: &tauri::AppHandle) -> Option<i32> {
 fn load_port(app: &tauri::AppHandle) -> u16 {
     let data_dir = match config::get_data_dir(Some(app)) {
         Ok(d) => d,
-        Err(_) => return 5678,
+        Err(_) => return DEFAULT_PORT,
     };
     let config_path = data_dir.join("config.json");
     let json = match std::fs::read_to_string(&config_path) {
         Ok(s) => s,
-        Err(_) => return 5678,
+        Err(_) => return DEFAULT_PORT,
     };
     let settings: Settings = match serde_json::from_str(&json) {
         Ok(s) => s,
-        Err(_) => return 5678,
+        Err(_) => return DEFAULT_PORT,
     };
-    settings.launch_params.port.unwrap_or(5678)
+    settings.launch_params.port.unwrap_or(DEFAULT_PORT)
 }
 
-/// 根据上下文大小、端口、图片支持与推理支持标志构造完整的 admAgent.json 配置结构体。
-/// default_max_tokens 取 context_window 的 30%（四舍五入为整数）；
-/// 模型支持推理时补充 can_reason / reasoning_levels / default_reasoning_effort，
-/// 服务端会发送 reasoning_effort 并遵守 reasoning_content 回传规则。
-fn build_adm_agent_config(
-    context_window: u32,
-    port: u16,
-    supports_images: bool,
-    supports_reasoning: bool,
-) -> serde_json::Value {
-    let default_max_tokens = (context_window as f64 * 0.3).round() as u32;
-    let (can_reason, reasoning_levels, default_reasoning_effort) = if supports_reasoning {
-        (
-            serde_json::json!(true),
-            serde_json::json!(["low", "medium", "high"]),
-            serde_json::json!("medium"),
-        )
-    } else {
-        (serde_json::json!(false), serde_json::Value::Null, serde_json::Value::Null)
-    };
-    serde_json::json!({
-        "model": {
-            "provider": "local",
-            "model": "localModel"
-        },
-        "providers": {
-            "local": {
-                "type": "openai-compat",
-                "name": "Local",
-                "base_url": format!("http://127.0.0.1:{}/v1", port),
-                "models": [
-                    {
-                        "id": "localModel",
-                        "name": "Local Model",
-                        "context_window": context_window,
-                        "default_max_tokens": default_max_tokens,
-                        "supports_images": supports_images,
-                        "can_reason": can_reason,
-                        "reasoning_levels": reasoning_levels,
-                        "default_reasoning_effort": default_reasoning_effort
-                    }
-                ]
-            }
-        }
-    })
-}
+// 注：原先的 build_adm_agent_config() 已删除。
+// 它只产出 { model, providers.local } 两个键，一旦被用于「整文件覆盖」就会清空
+// agent_proxy / agent_vision_model / options / 全部云端 provider。
+// 结构补齐统一由 ensure_adm_agent_config 的字段级补丁完成。
 
-/// 确保 admAgent.json 存在且 context_window / default_max_tokens / base_url /
-/// supports_images / can_reason 与当前配置一致。
+/// 确保 admAgent.json 里 `providers.local` 的结构与当前本地模型能力一致。
 ///
-/// - 目录不存在则创建。
-/// - 文件不存在：写入完整的默认结构（context_window、port 来自配置，default_max_tokens = 30%）。
-/// - 文件已存在：原地更新 providers.local.models[0] 的 context_window、default_max_tokens、
-///   supports_images（取自 AppState，启动模型时按 mmproj 实际加载判定）
-///   与 can_reason / reasoning_levels / default_reasoning_effort（按 --reasoning 参数判定），
-///   以及 providers.local.base_url 中的端口，尽量保留文件中其它字段；
-///   若结构异常无法原地更新，则回退写入完整默认结构。
+/// 与旧实现的本质区别：**只补齐缺失字段，绝不整文件覆盖**。
+///
+/// 旧实现在 `providers.local.models[0]` 不存在（或 base_url 缺失）时会退回
+/// `build_adm_agent_config()` 重写整个文件，把 agent_proxy / agent_vision_model /
+/// options / 全部云端 provider 一并清掉 —— 用户看到的「云端模型全部消失」就源于此。
+/// 现在改为逐级 `entry().or_insert()` 补丁，任何情况下都不动其它字段。
 fn ensure_adm_agent_config(app: &tauri::AppHandle) -> Result<(), AppError> {
     let ctx = load_ctx_size(app)
         .filter(|v| *v > 0)
@@ -348,79 +307,298 @@ fn ensure_adm_agent_config(app: &tauri::AppHandle) -> Result<(), AppError> {
         .map(|g| *g)
         .unwrap_or(false);
 
-    let dir = adm_agent_config_dir()?;
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("创建 admAgent 配置目录失败: {}", e))?;
-    let path = dir.join("admAgent.json");
+    let default_max_tokens = (ctx as f64 * 0.3).round() as u32;
+    let base_url = format!("http://127.0.0.1:{}/v1", port);
 
-    // 文件已存在：尝试原地更新 context_window 与 default_max_tokens
-    if path.exists() {
-        if let Ok(s) = std::fs::read_to_string(&path) {
-            if let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&s) {
-                let default_max_tokens = (ctx as f64 * 0.3).round() as u32;
-                let mut updated = false;
-                if let Some(models) = v
-                    .get_mut("providers")
-                    .and_then(|p| p.get_mut("local"))
-                    .and_then(|l| l.get_mut("models"))
-                    .and_then(|m| m.as_array_mut())
-                {
-                    if let Some(first) = models.get_mut(0) {
-                        first["context_window"] = serde_json::json!(ctx);
-                        first["default_max_tokens"] = serde_json::json!(default_max_tokens);
-                        first["supports_images"] = serde_json::json!(supports_images);
-                        // 推理能力同步：支持时写全推理元数据，不支持时写 false 并清理可能残留的旧值
-                        if supports_reasoning {
-                            first["can_reason"] = serde_json::json!(true);
-                            first["reasoning_levels"] = serde_json::json!(["low", "medium", "high"]);
-                            first["default_reasoning_effort"] = serde_json::json!("medium");
-                        } else {
-                            first["can_reason"] = serde_json::json!(false);
-                            if let Some(obj) = first.as_object_mut() {
-                                obj.remove("reasoning_levels");
-                                obj.remove("default_reasoning_effort");
-                            }
-                        }
-                        updated = true;
-                    }
-                    // 同步更新 base_url 中的端口
-                    if let Some(base_url) = v
-                        .get_mut("providers")
-                        .and_then(|p| p.get_mut("local"))
-                        .and_then(|l| l.get_mut("base_url"))
-                    {
-                        *base_url = serde_json::json!(format!("http://127.0.0.1:{}/v1", port));
-                        updated = true;
-                    }
-                }
-                if updated {
-                    write_json_direct(&path, &v)?;
-                    return Ok(());
-                }
-            }
+    update_adm_agent_config(|v| {
+        let root = v
+            .as_object_mut()
+            .ok_or_else(|| AppError::msg("admAgent.json 结构异常：根节点不是对象"))?;
+
+        let providers = root
+            .entry("providers")
+            .or_insert_with(|| serde_json::json!({}));
+        if !providers.is_object() {
+            return Err(AppError::msg("admAgent.json 结构异常：providers 不是对象"));
+        }
+
+        let local = providers
+            .as_object_mut()
+            .unwrap()
+            .entry("local")
+            .or_insert_with(|| serde_json::json!({}));
+        if !local.is_object() {
+            return Err(AppError::msg(
+                "admAgent.json 结构异常：providers.local 不是对象",
+            ));
+        }
+        let local = local.as_object_mut().unwrap();
+
+        local.insert("type".to_string(), serde_json::json!("openai-compat"));
+        local.insert("name".to_string(), serde_json::json!("Local"));
+        local.insert("base_url".to_string(), serde_json::json!(base_url));
+
+        let models = local
+            .entry("models")
+            .or_insert_with(|| serde_json::json!([]));
+        if !models.is_array() {
+            return Err(AppError::msg(
+                "admAgent.json 结构异常：providers.local.models 不是数组",
+            ));
+        }
+        let models = models.as_array_mut().unwrap();
+
+        if models.is_empty() {
+            models.push(serde_json::json!({"id": "localModel", "name": "Local Model"}));
+        }
+        let first = models
+            .first_mut()
+            .ok_or_else(|| AppError::msg("providers.local.models 为空"))?;
+        if !first.is_object() {
+            return Err(AppError::msg(
+                "admAgent.json 结构异常：providers.local.models[0] 不是对象",
+            ));
+        }
+        let first = first.as_object_mut().unwrap();
+
+        first.insert("id".to_string(), serde_json::json!("localModel"));
+        first.insert("name".to_string(), serde_json::json!("Local Model"));
+        first.insert("context_window".to_string(), serde_json::json!(ctx));
+        first.insert(
+            "default_max_tokens".to_string(),
+            serde_json::json!(default_max_tokens),
+        );
+        first.insert(
+            "supports_images".to_string(),
+            serde_json::json!(supports_images),
+        );
+
+        // 推理能力同步：支持时写全推理元数据，不支持时写 false 并清理可能残留的旧值
+        if supports_reasoning {
+            first.insert("can_reason".to_string(), serde_json::json!(true));
+            first.insert(
+                "reasoning_levels".to_string(),
+                serde_json::json!(["low", "medium", "high"]),
+            );
+            first.insert(
+                "default_reasoning_effort".to_string(),
+                serde_json::json!("medium"),
+            );
+        } else {
+            first.insert("can_reason".to_string(), serde_json::json!(false));
+            first.remove("reasoning_levels");
+            first.remove("default_reasoning_effort");
+        }
+        Ok(())
+    })
+}
+
+/// 进程内串行化对 admAgent.json 的「读-改-写」操作。
+///
+/// 只覆盖本进程：跨进程（与 admAgent server 之间）的互斥由
+/// [`acquire_config_lock`] 负责，两者在 [`update_adm_agent_config`] 中组合使用。
+/// 注意：std Mutex **不可重入** —— 调用方不得在持有本锁时再次进入。
+static ADM_AGENT_CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+// ============================================================================
+// admAgent.json：跨进程互斥 + 原子落盘 + 统一写入入口
+//
+// 背景：本文件在 Windows 上与 admAgent server（Go）的数据配置是同一个文件
+// （%LOCALAPPDATA%/admAgent/admAgent.json）。旧实现有三个致命缺陷：
+//   1. std::fs::write 非原子（先截断），留下文件为 0 字节的窗口；
+//   2. Go 侧读到空串时不报错，把空文档当新表，写回后只剩本次设置的字段；
+//   3. 解析失败静默回退 build_adm_agent_config()，整文件覆盖清空云端 provider。
+// 三者叠加导致切换模型时 admAgent.json 被反复清空。
+// ============================================================================
+
+/// 与 admAgent server（Go）共用同一把锁。
+/// Go 侧 `ConfigStore.lockConfig` 用的是 `lock.File(path + ".lock")`，
+/// 这里必须对**同一个文件**加锁才能做到跨进程互斥。
+/// 锁范围与 Go 保持一致（0 .. u32::MAX），否则 Windows 上不会真正互斥。
+fn adm_agent_lock_path() -> Result<PathBuf, AppError> {
+    Ok(adm_agent_config_dir()?.join("admAgent.json.lock"))
+}
+
+/// 等待锁的最长时间。需大于 Go 侧的 configLockDeadline（5s）。
+const CONFIG_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const CONFIG_LOCK_RETRY: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// 跨进程排他锁句柄，Drop 时自动解锁并关闭文件。
+struct ConfigFileLock {
+    file: std::fs::File,
+}
+
+#[cfg(windows)]
+fn try_lock(file: &std::fs::File) -> Result<bool, AppError> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::{
+        LockFileEx, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY,
+    };
+    use windows::Win32::System::IO::OVERLAPPED;
+
+    // 锁范围与 Go 的 LockFileEx(0, MaxUint32, MaxUint32) 对齐，否则不互斥
+    let mut ov = unsafe { std::mem::zeroed::<OVERLAPPED>() };
+    let ok = unsafe {
+        LockFileEx(
+            HANDLE(file.as_raw_handle()),
+            LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+            0,
+            u32::MAX,
+            u32::MAX,
+            &mut ov,
+        )
+    };
+    Ok(ok.is_ok())
+}
+
+#[cfg(unix)]
+fn try_lock(file: &std::fs::File) -> Result<bool, AppError> {
+    use std::os::unix::io::AsRawFd;
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if rc == 0 {
+        return Ok(true);
+    }
+    let e = std::io::Error::last_os_error();
+    if e.raw_os_error() == Some(libc::EWOULDBLOCK) {
+        return Ok(false);
+    }
+    Err(AppError::msg(format!("flock 失败: {}", e)))
+}
+
+#[cfg(windows)]
+fn unlock(file: &std::fs::File) -> Result<(), AppError> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::UnlockFileEx;
+    use windows::Win32::System::IO::OVERLAPPED;
+
+    // UnlockFileEx 只按范围定位，offset 0 + 相同长度即可
+    let mut ov = unsafe { std::mem::zeroed::<OVERLAPPED>() };
+    unsafe { UnlockFileEx(HANDLE(file.as_raw_handle()), 0, u32::MAX, u32::MAX, &mut ov) }
+        .map_err(|e| AppError::msg(format!("解锁 admAgent.json 失败: {}", e)))
+}
+
+#[cfg(unix)]
+fn unlock(file: &std::fs::File) -> Result<(), AppError> {
+    use std::os::unix::io::AsRawFd;
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(AppError::msg(format!(
+            "解锁 admAgent.json 失败: {}",
+            std::io::Error::last_os_error()
+        )))
+    }
+}
+
+impl Drop for ConfigFileLock {
+    fn drop(&mut self) {
+        let _ = unlock(&self.file);
+    }
+}
+
+/// 获取跨进程排他锁，最多等待 [`CONFIG_LOCK_TIMEOUT`]。
+fn acquire_config_lock() -> Result<ConfigFileLock, AppError> {
+    let path = adm_agent_lock_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建配置目录失败: {}", e))?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false) // 锁文件只作 flock 载体，绝不能截断（可能有并发持有者）
+        .open(&path)
+        .map_err(|e| format!("打开锁文件失败: {}", e))?;
+
+    let started = std::time::Instant::now();
+    loop {
+        if try_lock(&file)? {
+            return Ok(ConfigFileLock { file });
+        }
+        if started.elapsed() > CONFIG_LOCK_TIMEOUT {
+            return Err(AppError::msg("获取 admAgent.json 锁超时（10s）"));
+        }
+        std::thread::sleep(CONFIG_LOCK_RETRY);
+    }
+}
+
+/// 原子落盘：写临时文件后 rename，**绝不在目标文件上截断**。
+///
+/// rename 是原子的，并发读者要么看到旧内容要么看到新内容，
+/// 不可能看到空文件或半截 JSON —— 这正是旧实现的致命伤。
+fn write_json_atomic(path: &std::path::Path, value: &serde_json::Value) -> Result<(), AppError> {
+    let json = serde_json::to_string_pretty(value)
+        .map_err(|e| format!("序列化 admAgent 配置失败: {}", e))?;
+
+    let dir = path.parent().ok_or_else(|| AppError::msg("配置路径缺少父目录"))?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("创建配置目录失败: {}", e))?;
+
+    // 写前备份：保留最近一份可用快照，便于人工回滚（失败不影响主流程）
+    if let Ok(meta) = std::fs::metadata(path) {
+        if meta.len() > 0 {
+            let _ = std::fs::copy(path, dir.join("admAgent.json.bak"));
         }
     }
 
-    // 文件不存在，或结构异常无法原地更新：写入完整默认结构
-    let config = build_adm_agent_config(ctx, port, supports_images, supports_reasoning);
-    write_json_direct(&path, &config)
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = dir.join(format!("admAgent.json.{}.{}.tmp", std::process::id(), nanos));
+
+    std::fs::write(&tmp, &json).map_err(|e| format!("写入临时配置失败: {}", e))?;
+    match std::fs::rename(&tmp, path) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(AppError::msg(format!("替换配置文件失败: {}", e)))
+        }
+    }
 }
 
-/// 直接写入 JSON 到目标文件（非原子：避免 macOS 上 rename 失败）。
-/// 进程在写入过程中崩溃可能导致文件截断/损坏，但 config.json 可由调用方重建。
-/// 串行化对 admAgent.json 的「读-改-写」整文件操作。
-/// sync_agent_vision_model / sync_agent_proxy / sync_local_model_capabilities /
-/// add|delete|update_cloud_provider 可能并发执行，后写者基于旧快照整文件写回会
-/// 覆盖先写者的字段更新（如 vision 与代理互相丢更新）。
-/// 注意：std Mutex 不可重入 —— ensure_adm_agent_config 自身不加锁，由调用方持锁进入。
-static ADM_AGENT_CONFIG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// 对 admAgent.json 做一次完整的「加锁 → 读 → 改 → 原子写」。
+///
+/// 三层保护：
+/// - 进程内串行：`ADM_AGENT_CONFIG_LOCK`
+/// - 跨进程串行：flock `admAgent.json.lock`（与 Go server 同一把锁）
+/// - 落盘原子：临时文件 + rename
+///
+/// 文件不存在时以 `{}` 起步；**文件存在但为空或 JSON 非法时一律返回错误**，
+/// 绝不回退默认结构 —— 旧实现正是靠这个回退把用户的云端 provider 全清掉了。
+///
+/// `mutate` 必须是纯内存变换：内部不得再调用本函数（std Mutex 不可重入）。
+fn update_adm_agent_config<T>(
+    mutate: impl FnOnce(&mut serde_json::Value) -> Result<T, AppError>,
+) -> Result<T, AppError> {
+    let _inproc = ADM_AGENT_CONFIG_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _filelock = acquire_config_lock()?;
 
-fn write_json_direct(path: &std::path::Path, value: &serde_json::Value) -> Result<(), AppError> {
-    let json = serde_json::to_string_pretty(value)
-        .map_err(|e| format!("序列化 admAgent 配置失败: {}", e))?;
-    std::fs::write(path, &json)
-        .map_err(|e| format!("写入配置文件失败: {}", e))?;
-    Ok(())
+    let dir = adm_agent_config_dir()?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建配置目录失败: {}", e))?;
+    let path = dir.join("admAgent.json");
+
+    let mut v = if path.exists() {
+        let s = std::fs::read_to_string(&path)
+            .map_err(|e| format!("读取 admAgent.json 失败: {}", e))?;
+        if s.trim().is_empty() {
+            return Err(AppError::msg(
+                "admAgent.json 为空，拒绝写入（可能有并发写正在截断文件）",
+            ));
+        }
+        serde_json::from_str::<serde_json::Value>(&s)
+            .map_err(|e| format!("解析 admAgent.json 失败: {}", e))?
+    } else {
+        serde_json::json!({})
+    };
+
+    let out = mutate(&mut v)?;
+    write_json_atomic(&path, &v)?;
+    Ok(out)
 }
 
 /// 模型启动成功后同步本地模型能力（supports_images / can_reason / context_window）到 admAgent：
@@ -435,10 +613,9 @@ fn write_json_direct(path: &std::path::Path, value: &serde_json::Value) -> Resul
 ///    失败静默：server 未运行时下次启动自然读到新配置。
 pub fn sync_local_model_capabilities(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
-        let ensure_result = {
-            let _guard = ADM_AGENT_CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-            ensure_adm_agent_config(&app)
-        };
+        // ensure_adm_agent_config 内部通过 update_adm_agent_config 自行加锁
+        // （进程内 Mutex 不可重入，此处不能再持锁）
+        let ensure_result = ensure_adm_agent_config(&app);
         if let Err(e) = ensure_result {
             eprintln!("[admAgent] 同步本地模型能力：写 admAgent.json 失败: {}", e);
             return;
@@ -503,7 +680,7 @@ pub fn sync_agent_vision_model(app: &tauri::AppHandle, value: &str) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let changed = {
-            let _guard = ADM_AGENT_CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            // 锁由 update_adm_agent_config 统一获取（进程内 Mutex + 跨进程 flock）
             write_agent_vision_model(&value)
         };
         let changed = match changed {
@@ -557,23 +734,15 @@ fn write_agent_vision_model(value: &str) -> Result<bool, AppError> {
         Some((p, m)) if !p.is_empty() && !m.is_empty() => (p.to_string(), m.to_string()),
         _ => ("admAgent".to_string(), "admImage-model".to_string()),
     };
-    let dir = adm_agent_config_dir()?;
-    std::fs::create_dir_all(&dir).map_err(|e| format!("创建 admAgent 配置目录失败: {}", e))?;
-    let path = dir.join("admAgent.json");
-    let mut config: serde_json::Value = if path.exists() {
-        let s = std::fs::read_to_string(&path)
-            .map_err(|e| format!("读取 admAgent.json 失败: {}", e))?;
-        serde_json::from_str(&s).map_err(|e| format!("解析 admAgent.json 失败: {}", e))?
-    } else {
-        build_adm_agent_config(DEFAULT_CONTEXT_WINDOW, DEFAULT_PORT, false, false)
-    };
     let target = serde_json::json!({ "provider": provider, "model": model });
-    if config.get("agent_vision_model") == Some(&target) {
-        return Ok(false);
-    }
-    config["agent_vision_model"] = target;
-    write_json_direct(&path, &config)?;
-    Ok(true)
+
+    update_adm_agent_config(move |config| {
+        if config.get("agent_vision_model") == Some(&target) {
+            return Ok(false);
+        }
+        config["agent_vision_model"] = target;
+        Ok(true)
+    })
 }
 
 /// 把 HTTP 代理配置写入 admAgent.json 顶层 agent_proxy 并触发服务端热重载。
@@ -586,7 +755,7 @@ pub fn sync_agent_proxy(app: &tauri::AppHandle, proxy: &crate::common::types::Ag
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let changed = {
-            let _guard = ADM_AGENT_CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            // 锁由 update_adm_agent_config 统一获取（进程内 Mutex + 跨进程 flock）
             api_debug_log(|| format!("Proxy: 同步代理配置 enabled={} url={}", proxy.enabled, proxy.url));
             write_agent_proxy(&proxy)
         };
@@ -638,25 +807,19 @@ pub fn sync_agent_proxy(app: &tauri::AppHandle, proxy: &crate::common::types::Ag
 /// 把 agent_proxy 写入 admAgent.json 顶层。
 /// 返回是否真的发生了变更（供调用方决定是否触发服务端重载）。
 fn write_agent_proxy(proxy: &crate::common::types::AgentProxyConfig) -> Result<bool, AppError> {
-    let dir = adm_agent_config_dir()?;
-    std::fs::create_dir_all(&dir).map_err(|e| format!("创建 admAgent 配置目录失败: {}", e))?;
-    let path = dir.join("admAgent.json");
-    // 文件可能被 admAgent server 并发写入而短暂为空，解析失败时回退到默认配置而非报错
-    let mut config: serde_json::Value = if path.exists() {
-        let s = std::fs::read_to_string(&path).unwrap_or_default();
-        serde_json::from_str(&s).unwrap_or_else(|_| {
-            build_adm_agent_config(DEFAULT_CONTEXT_WINDOW, DEFAULT_PORT, false, false)
-        })
-    } else {
-        build_adm_agent_config(DEFAULT_CONTEXT_WINDOW, DEFAULT_PORT, false, false)
-    };
+    // 旧实现在读取/解析失败时静默回退 build_adm_agent_config()，随后整文件覆盖，
+    // 把 agent_vision_model / options / 全部云端 provider 一并清掉。
+    // 现在解析失败一律返回错误（见 update_adm_agent_config），宁可这次不写，
+    // 也不能用默认结构覆盖用户的完整配置。
     let target = serde_json::json!({ "enabled": proxy.enabled, "url": proxy.url });
-    if config.get("agent_proxy") == Some(&target) {
-        return Ok(false);
-    }
-    config["agent_proxy"] = target;
-    write_json_direct(&path, &config)?;
-    Ok(true)
+
+    update_adm_agent_config(move |config| {
+        if config.get("agent_proxy") == Some(&target) {
+            return Ok(false);
+        }
+        config["agent_proxy"] = target;
+        Ok(true)
+    })
 }
 
 // ===== 添加云端模型 Provider =====
@@ -755,27 +918,12 @@ pub async fn add_cloud_provider(
     app: tauri::AppHandle,
     input: CloudProviderInput,
 ) -> Result<serde_json::Value, AppError> {
-    // 1) 保证基础结构存在（含 local provider），避免后续被覆盖
-    let _guard = ADM_AGENT_CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // 1) 保证基础结构存在（含 local provider）。
+    //    ensure_adm_agent_config 现在是字段级补丁，不会覆盖已有内容，可安全先跑。
+    //    锁由 update_adm_agent_config 统一获取，此处不持锁（std Mutex 不可重入）。
     ensure_adm_agent_config(&app)?;
 
-    let dir = adm_agent_config_dir()?;
-    let path = dir.join("admAgent.json");
-
-    // 2) 读取现有配置（此时文件一定已存在）
-    let mut config: serde_json::Value = if path.exists() {
-        let s = std::fs::read_to_string(&path)
-            .map_err(|e| format!("读取 admAgent.json 失败: {}", e))?;
-        serde_json::from_str(&s).map_err(|e| format!("解析 admAgent.json 失败: {}", e))?
-    } else {
-        build_adm_agent_config(DEFAULT_CONTEXT_WINDOW, DEFAULT_PORT, false, false)
-    };
-
-    if !config.get("providers").is_some_and(|v| v.is_object()) {
-        config["providers"] = serde_json::json!({});
-    }
-
-    // 3) 派生 provider key（仅作 JSON 内部键）；模型ID/名称原样写入，区分大小写
+    // 2) 派生 provider key（仅作 JSON 内部键）；模型ID/名称原样写入，区分大小写
     let key = slugify_provider_key(&input.name);
     let model_id = require_model_id(&input.model_id)?;
 
@@ -809,10 +957,15 @@ pub async fn add_cloud_provider(
         ]
     });
 
-    config["providers"][&key] = provider;
-
-    // 4) 原子写入
-    write_json_direct(&path, &config)?;
+    // 3) 加锁 → 读 → 改 → 原子写（与 Go server 跨进程互斥）
+    let key_for_write = key.clone();
+    update_adm_agent_config(move |config| {
+        if !config.get("providers").is_some_and(|v| v.is_object()) {
+            config["providers"] = serde_json::json!({});
+        }
+        config["providers"][&key_for_write] = provider;
+        Ok(())
+    })?;
 
     Ok(serde_json::json!({ "key": key, "success": true }))
 }
@@ -918,28 +1071,20 @@ pub async fn delete_cloud_provider(
     _app: tauri::AppHandle,
     key: String,
 ) -> Result<serde_json::Value, AppError> {
-    let _guard = ADM_AGENT_CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = adm_agent_config_dir()?;
-    let path = dir.join("admAgent.json");
-    if !path.exists() {
-        bail!("未找到 admAgent.json");
-    }
-    let s = std::fs::read_to_string(&path)
-        .map_err(|e| format!("读取 admAgent.json 失败: {}", e))?;
-    let mut config: serde_json::Value = serde_json::from_str(&s)
-        .map_err(|e| format!("解析 admAgent.json 失败: {}", e))?;
+    // 锁由 update_adm_agent_config 统一获取（进程内 Mutex + 跨进程 flock）
+    let removed = update_adm_agent_config(|config| {
+        let providers = config
+            .get_mut("providers")
+            .and_then(|p| p.as_object_mut())
+            .ok_or_else(|| AppError::msg("admAgent.json 结构异常：缺少 providers"))?;
 
-    let providers = config
-        .get_mut("providers")
-        .and_then(|p| p.as_object_mut())
-        .ok_or_else(|| "admAgent.json 结构异常：缺少 providers".to_string())?;
-
-    if providers.get(&key).is_none() {
-        bail!("未找到 provider: {}", key);
-    }
-
-    providers.remove(&key);
-    write_json_direct(&path, &config)?;
+        if providers.get(&key).is_none() {
+            return Err(AppError::msg(format!("未找到 provider: {}", key)));
+        }
+        providers.remove(&key);
+        Ok(true)
+    })?;
+    debug_assert!(removed);
 
     Ok(serde_json::json!({ "key": key, "success": true }))
 }
@@ -952,25 +1097,7 @@ pub async fn update_cloud_provider(
     key: String,
     input: CloudProviderInput,
 ) -> Result<serde_json::Value, AppError> {
-    let _guard = ADM_AGENT_CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let dir = adm_agent_config_dir()?;
-    let path = dir.join("admAgent.json");
-    if !path.exists() {
-        bail!("未找到 admAgent.json，请先添加云端模型");
-    }
-    let s = std::fs::read_to_string(&path)
-        .map_err(|e| format!("读取 admAgent.json 失败: {}", e))?;
-    let mut config: serde_json::Value = serde_json::from_str(&s)
-        .map_err(|e| format!("解析 admAgent.json 失败: {}", e))?;
-
-    let providers = config
-        .get_mut("providers")
-        .and_then(|p| p.as_object_mut())
-        .ok_or_else(|| "admAgent.json 结构异常：缺少 providers".to_string())?;
-
-    if providers.get(&key).is_none() {
-        bail!("未找到 provider: {}", key);
-    }
+    let key_for_check = key.clone();
 
     let model_id = require_model_id(&input.model_id)?;
     // 开启思考模式时补充推理档位元数据，服务端 effectiveReasoningEffort
@@ -1002,8 +1129,19 @@ pub async fn update_cloud_provider(
         ]
     });
 
-    providers.insert(key.clone(), new_provider);
-    write_json_direct(&path, &config)?;
+    // 加锁 → 读 → 改 → 原子写（与 Go server 跨进程互斥）
+    update_adm_agent_config(move |config| {
+        let providers = config
+            .get_mut("providers")
+            .and_then(|p| p.as_object_mut())
+            .ok_or_else(|| AppError::msg("admAgent.json 结构异常：缺少 providers"))?;
+
+        if providers.get(&key_for_check).is_none() {
+            return Err(AppError::msg(format!("未找到 provider: {}", key_for_check)));
+        }
+        providers.insert(key_for_check, new_provider);
+        Ok(())
+    })?;
 
     Ok(serde_json::json!({ "key": key, "success": true }))
 }
@@ -2534,3 +2672,193 @@ pub async fn read_clipboard_files() -> Result<Vec<String>, String> {
     Ok(Vec::new())
 }
 
+
+// ---------------------------------------------------------------------------
+// 回归测试：admAgent.json 被并发写清空的修复
+//
+// 背景：本文件在 Windows 上与 admAgent server（Go）的数据配置是同一个文件。
+// 旧实现用非原子的 std::fs::write 先截断文件，并在读取/解析失败时静默回退
+// build_adm_agent_config() 整文件覆盖，导致切换模型时 agent_proxy /
+// agent_vision_model / options / 全部云端 provider 被清空。
+//
+// 修复后必须成立的两条不变量：
+//   1. 任何写入都只打补丁，已有字段一字不动；
+//   2. 文件为空或 JSON 非法时拒绝写入，绝不当成空文档覆盖。
+//
+// 实现说明：这些用例通过 LOCALAPPDATA 把配置目录重定向到临时目录，而环境变量
+// 是进程全局的，因此用 TEST_SERIAL_LOCK 强制用例串行（cargo test 默认多线程并行）。
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod adm_agent_config_tests {
+    use super::*;
+
+    /// 强制用例串行：环境变量是进程全局的，并行会互相踩配置目录。
+    static TEST_SERIAL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// 持有串行锁的临时配置目录；drop 时释放锁（目录本身不自动删除，便于失败排查）。
+    ///
+    /// `dir` 是 **配置目录本身**（即 `.../admAgent`），与 `adm_agent_config_dir()`
+    /// 的返回值一致，测试里可直接 `t.dir.join("admAgent.json")`。
+    struct TestDir {
+        dir: PathBuf,
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    fn temp_config_dir(tag: &str) -> TestDir {
+        let guard = TEST_SERIAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let base = std::env::temp_dir().join(format!(
+            "adm_cfg_test_{}_{}_{}",
+            tag,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        // adm_agent_config_dir() 返回 LOCALAPPDATA/admAgent，这里保持一致
+        let dir = base.join("admAgent");
+        std::fs::create_dir_all(&dir).expect("创建临时配置目录失败");
+        std::env::set_var("LOCALAPPDATA", &base);
+        TestDir { dir, _guard: guard }
+    }
+
+    const SAMPLE: &str = r#"{
+  "agent_proxy": { "enabled": true, "url": "http://127.0.0.1:10809" },
+  "options": { "tui": { "compact_mode": true } },
+  "providers": {
+    "local": { "name": "Local" },
+    "mycloud": { "api_key": "sk-test", "base_url": "https://example.invalid/v1" }
+  }
+}"#;
+
+    /// 不变量 1：写入只打补丁，已有字段一字不动。
+    #[test]
+    fn update_preserves_every_unrelated_field() {
+        let t = temp_config_dir("preserve");
+        let path = t.dir.join("admAgent.json");
+        std::fs::write(&path, SAMPLE).expect("写入样本配置");
+
+        update_adm_agent_config(|v| {
+            v["agent_vision_model"] = serde_json::json!({ "provider": "p", "model": "m" });
+            Ok::<(), AppError>(())
+        })
+        .expect("写入应成功");
+
+        let out: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("读回配置"))
+                .expect("落盘后必须是合法 JSON");
+
+        assert_eq!(
+            out["agent_proxy"]["url"], "http://127.0.0.1:10809",
+            "agent_proxy 必须原样保留"
+        );
+        assert_eq!(
+            out["options"]["tui"]["compact_mode"],
+            serde_json::json!(true),
+            "options.tui 必须原样保留"
+        );
+        assert_eq!(
+            out["providers"]["mycloud"]["api_key"], "sk-test",
+            "云端 provider 必须原样保留 —— 旧实现正是把这里清空了"
+        );
+        assert_eq!(
+            out["providers"]["local"]["name"], "Local",
+            "local provider 必须保留"
+        );
+        assert_eq!(
+            out["agent_vision_model"]["model"], "m",
+            "新字段必须写入"
+        );
+    }
+
+    /// 不变量 2：空文件拒绝写入，且不破坏原文件。
+    #[test]
+    fn update_rejects_empty_config_file() {
+        let t = temp_config_dir("empty");
+        let path = t.dir.join("admAgent.json");
+        std::fs::write(&path, "").expect("写入空文件");
+
+        let err = update_adm_agent_config(|v| {
+            v["agent_proxy"] = serde_json::json!(true);
+            Ok::<(), AppError>(())
+        });
+        assert!(
+            err.is_err(),
+            "空文件必须拒绝写入：否则会被写成只含单个字段的残片，整份配置丢失"
+        );
+
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("读回"),
+            "",
+            "写入失败时不得改动原文件"
+        );
+    }
+
+    /// 不变量 2：非法 JSON（截断到一半）同样拒绝写入。
+    #[test]
+    fn update_rejects_truncated_config_file() {
+        let t = temp_config_dir("truncated");
+        let path = t.dir.join("admAgent.json");
+        std::fs::write(&path, r#"{"providers": {"local": {"nam"#).expect("写入半截文件");
+
+        assert!(
+            update_adm_agent_config(|v| {
+                v["agent_proxy"] = serde_json::json!(true);
+                Ok::<(), AppError>(())
+            })
+            .is_err(),
+            "半截 JSON 必须拒绝写入"
+        );
+    }
+
+    /// 连续写入：每次落盘后都必须是合法且完整的 JSON，不得出现空文件。
+    /// 这是对原子写（tmp + rename）的直接验证。
+    #[test]
+    fn repeated_writes_always_leave_valid_complete_json() {
+        let t = temp_config_dir("repeat");
+        let path = t.dir.join("admAgent.json");
+        std::fs::write(&path, SAMPLE).expect("写入样本配置");
+
+        for i in 0..50 {
+            update_adm_agent_config(move |v| {
+                v["options"]["tui"]["compact_mode"] = serde_json::json!(i % 2 == 0);
+                Ok::<(), AppError>(())
+            })
+            .expect("写入应成功");
+
+            // 每次写完立刻读回：必须合法，且云端 provider 始终存在
+            let raw = std::fs::read_to_string(&path).expect("读回配置");
+            assert!(!raw.trim().is_empty(), "第 {} 次写后文件为空", i);
+            let out: serde_json::Value = serde_json::from_str(&raw)
+                .unwrap_or_else(|e| panic!("第 {} 次写后 JSON 非法: {}", i, e));
+            assert_eq!(
+                out["providers"]["mycloud"]["api_key"], "sk-test",
+                "第 {} 次写后云端 provider 丢失",
+                i
+            );
+        }
+    }
+
+    /// 原子写只在同目录留临时文件，成功后必须清理干净。
+    #[test]
+    fn atomic_write_leaves_no_temp_files() {
+        let t = temp_config_dir("notmp");
+        let path = t.dir.join("admAgent.json");
+        std::fs::write(&path, SAMPLE).expect("写入样本配置");
+
+        update_adm_agent_config(|v| {
+            v["agent_proxy"]["url"] = serde_json::json!("http://127.0.0.1:1/v1");
+            Ok::<(), AppError>(())
+        })
+        .expect("写入应成功");
+
+        let leftovers: Vec<_> = std::fs::read_dir(&t.dir)
+            .expect("列出目录")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "残留临时文件: {:?}", leftovers);
+    }
+}
