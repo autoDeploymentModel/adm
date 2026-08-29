@@ -1393,6 +1393,94 @@ export const template = `
   @keyframes agent-spin { to { transform: rotate(360deg); } }
   @keyframes agent-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
+  /* 首次进入 Agent 页时的骨架屏（侧栏会话列表 / 工具列表）
+     与 conv-item / tool-item 高度对齐，闪烁动画让用户感知到「正在加载」 */
+  .skeleton-line {
+    height: 12px;
+    border-radius: 4px;
+    background: linear-gradient(90deg, var(--c-raise) 0%, var(--c-raise-2) 50%, var(--c-raise) 100%);
+    background-size: 200% 100%;
+    animation: agent-skeleton 1.4s ease-in-out infinite;
+  }
+  @keyframes agent-skeleton {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+  .skeleton-conv-item {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--c-raise-2);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .skeleton-conv-item .skeleton-line:first-child { width: 70%; }
+  .skeleton-conv-item .skeleton-line:last-child { width: 35%; height: 10px; }
+  .skeleton-tool-item {
+    padding: 8px 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .skeleton-tool-item .skeleton-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--c-raise-2);
+    flex-shrink: 0;
+  }
+  .skeleton-tool-item .skeleton-line { flex: 1; }
+
+  /* 聊天区首次进入加载态：居中 spinner + 文案，替换原本的「开始一个新的对话」空态 */
+  .agent-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    gap: 12px;
+    color: var(--c-text-3);
+    font-size: 13px;
+  }
+  .agent-loading-spinner {
+    display: inline-block;
+    width: 28px; height: 28px;
+    border: 3px solid var(--c-border);
+    border-top-color: var(--c-accent);
+    border-radius: 50%;
+    animation: agent-spin 0.8s linear infinite;
+  }
+
+  /* 初始化进度条：贴在底部状态栏上方，显示当前 init() 阶段。
+     默认隐藏（无 .show），由 ui.js showInitProgress / hideInitProgress 切显隐。
+     收起时用 height+opacity 平滑过渡，避免跳变。 */
+  .agent-init-progress {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 16px;
+    background: var(--c-raise);
+    border-top: 1px solid var(--c-border-soft);
+    font-size: 11px;
+    color: var(--c-text-2);
+    max-height: 0;
+    opacity: 0;
+    overflow: hidden;
+    transition: max-height 0.2s ease, opacity 0.2s ease;
+  }
+  .agent-init-progress.show {
+    max-height: 28px;
+    opacity: 1;
+  }
+  .agent-init-progress-spinner {
+    display: inline-block;
+    width: 12px; height: 12px;
+    border: 2px solid var(--c-border);
+    border-top-color: var(--c-accent);
+    border-radius: 50%;
+    animation: agent-spin 0.8s linear infinite;
+    flex-shrink: 0;
+  }
+
   /* 正在工作指示器（消息区底部） */
   .working-indicator {
     display: flex;
@@ -1503,6 +1591,11 @@ export const template = `
         </div>
         <!-- 会话列表 (内部滚动) -->
         <div class="conv-list-section" id="agent-conv-list">
+          <!-- 首次进入时的骨架屏（init() 完成由 renderConversationList 清空重绘） -->
+          <div class="skeleton-conv-item"><div class="skeleton-line"></div><div class="skeleton-line"></div></div>
+          <div class="skeleton-conv-item"><div class="skeleton-line"></div><div class="skeleton-line"></div></div>
+          <div class="skeleton-conv-item"><div class="skeleton-line"></div><div class="skeleton-line"></div></div>
+          <div class="skeleton-conv-item"><div class="skeleton-line"></div><div class="skeleton-line"></div></div>
         </div>
       </div>
 
@@ -1518,6 +1611,10 @@ export const template = `
           <span class="tools-tab" data-tab="mcp">MCP</span>
         </div>
         <div class="tools-list" id="agent-tools-list">
+          <!-- 首次进入时的骨架屏（init() 完成由 renderToolsList 清空重绘） -->
+          <div class="skeleton-tool-item"><span class="skeleton-dot"></span><div class="skeleton-line"></div></div>
+          <div class="skeleton-tool-item"><span class="skeleton-dot"></span><div class="skeleton-line"></div></div>
+          <div class="skeleton-tool-item"><span class="skeleton-dot"></span><div class="skeleton-line"></div></div>
         </div>
       </div>
 
@@ -1548,9 +1645,10 @@ export const template = `
       <!-- 消息列表 (滚动区域) -->
       <div class="msg-area-wrap">
         <div class="msg-area" id="agent-msg-area">
-          <div class="empty-state">
-            <span class="empty-state-icon">🤖</span>
-            <span class="empty-state-text">${_t("开始一个新的对话")}</span>
+          <!-- 首次进入加载态：init() 完成后由 renderMessages 替换为 empty-state 或实际消息 -->
+          <div class="agent-loading">
+            <div class="agent-loading-spinner"></div>
+            <div class="agent-loading-text">${_t("正在初始化 Agent...")}</div>
           </div>
         </div>
         <!-- 回到底部悬浮圆球 -->
@@ -1617,6 +1715,12 @@ export const template = `
         </div>
       </div>
     </div>
+  </div>
+
+  <!-- 初始化进度条：init() 期间显示当前阶段文案，结束后收起（由 ui.js 控制） -->
+  <div class="agent-init-progress" id="agent-init-progress">
+    <span class="agent-init-progress-spinner"></span>
+    <span id="agent-init-progress-text">${_t("正在加载...")}</span>
   </div>
 
   <!-- 底部状态栏: Agent 状态 · 工作区路径 · Token 统计 -->

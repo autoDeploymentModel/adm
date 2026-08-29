@@ -7,7 +7,7 @@ import { S, invoke, listen, store } from "./agent/store.js";
 import { setLogEnabled } from "./agent/log.js";
 import { api } from "./agent/api.js";
 import { generateUUID, isMsgAreaAtBottom, autoResize, $input, normalizeReasoningEffort } from "./agent/utils.js";
-import { updateStatusBar, updateContextUsage, updateModeToggle, updateSendButton, exitManualScrollMode, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showConfirm, showCopyPasteMenu, updateScrollBottomBtn, reportError } from "./agent/ui.js";
+import { updateStatusBar, updateContextUsage, updateModeToggle, updateSendButton, exitManualScrollMode, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showConfirm, showCopyPasteMenu, updateScrollBottomBtn, reportError, showInitProgress, hideInitProgress } from "./agent/ui.js";
 import { loadConversations, renderConversationList, selectConversation, newConversation, toggleOutlinePanel, setOutlinePanelOpen } from "./agent/session.js";
 import { syncWorkingIndicator } from "./agent/render.js";
 import { sendMessage, cancelCurrentRun } from "./agent/send.js";
@@ -21,72 +21,209 @@ import { addPendingFiles, parseUriListPaths, addPastedPaths, looksLikeFilePath }
 import { setAutoContinueEnabled } from "./agent/autocontinue.js";
 
 // ===== 初始化 =====
+//
+// 阶段拆解（按依赖关系，越往下越靠后）：
+//   Phase A: 并行启动所有不依赖 Go 服务的步骤（load_settings / check_adm_agent /
+//            get_agent_server_status / get_agent_workdir / validateWorkDirs /
+//            scan_local_models / list_cloud_providers）
+//            → 这些步骤可与 Go 服务冷启动完全并行，省下几百 ms 到几秒
+//   Phase B: 启动或复用 admAgent 服务（仅在服务未运行时调用 start_agent_server）
+//   Phase C: 工作区创建 / 拉取 + 服务端 provider 列表（独立，可并行）
+//   Phase D: Agent 初始化（/agent/init + /agent），随后 syncModeToServer + enableAutoCompact 并行
+//   Phase E: 订阅 SSE → 加载会话列表 + 加载工具列表（可并行）
+//   Phase F: UI 收尾
+//
+// 关键不变式：
+// - 每个 await 之前都校验 seq !== S.initSeq，防止页面切走/重新挂载后旧 init 继续推进
+// - 整个 init 体包在 try/finally 里，finally 必跑 hideInitProgress()：
+//   ① 任何 await 意外抛出（即便未被业务 catch 吞掉）也能保证 loading UI 不残留
+//   ② 早期 return 分支会先显式 hide 一次，finally 再 hide 一次也无副作用（idempotent）
+// - 异常分支必须先 hideInitProgress() 再 return，避免红色错误 + 进度条并存
 async function init() {
   var seq = ++S.initSeq;
   console.log("[agent] init() 开始, seq:", seq);
-  // 生成 clientId (UUID)
   S.clientId = crypto.randomUUID ? crypto.randomUUID() : generateUUID();
 
-  // 加载设置
+  showInitProgress(_t("正在加载配置..."));
+
   try {
-    S.settings = await invoke("load_settings");
-  } catch (_) {
-    S.settings = {};
+    await _doInit(seq);
+  } catch (e) {
+    // 通常情况下各阶段都自带防御（try/catch / .catch / 内部 allSettled），
+    // 但仍不能排除意外抛出（例如 store.setActive 在 workspace 异常状态下的 nil 引用、
+    // DOM 操作遇到 detached 节点等）。这里兜底显示错误 + finally 清 loading UI。
+    console.error("[agent] init() 未捕获异常:", e);
+    reportError(e, { prefix: _t("Agent 页面初始化失败: ") });
+    updateStatusBar("error", null, 0);
+  } finally {
+    // 无论成功/失败/异常，loading UI 必须被清掉。
+    // hideInitProgress() 内部 idempotent + 兜底替换残留骨架，重复调用安全。
+    hideInitProgress();
   }
+}
 
-  // 根据 debug_logging 初始值设置前端日志级别
+// init 的实际流水线，单独拆出来便于 try/finally 包裹
+async function _doInit(seq) {
+
+  // ===== Phase A: 并行执行所有服务无关的初始化步骤 =====
+  // 这些步骤不依赖 Go 服务，全部并行触发，最大化与冷启动重叠时间
+  var [settingsRes, admAgentRes, serverStatusRes, workdirRes, scanModelsRes, cloudProvidersRes] =
+    await Promise.allSettled([
+      invoke("load_settings"),
+      invoke("check_adm_agent"),
+      invoke("get_agent_server_status"),
+      invoke("get_agent_workdir"),
+      invoke("scan_local_models"),
+      invoke("list_cloud_providers"),
+    ]);
+
+  if (seq !== S.initSeq) return;
+
+  // 设置（最先用到，单独解析）
+  S.settings = (settingsRes.status === "fulfilled" && settingsRes.value) ? settingsRes.value : {};
+  if (settingsRes.status === "rejected") console.warn("[agent] load_settings 失败:", settingsRes.reason);
   setLogEnabled(!!S.settings.debug_logging);
-
-  // 更新状态栏
   updateStatusBar("ready", null, 0);
 
-  // 检查 admAgent 是否存在（安装包内置 sidecar，缺失属于安装损坏，无运行时下载兜底）
-  try {
-    var agentCheck = await invoke("check_adm_agent");
-    if (!agentCheck || !agentCheck.exists) {
-      showError(_t("未找到 admAgent 组件（应随安装包内置），请重新安装 ADM"));
+  // admAgent 二进制缺失 = 致命（安装损坏）
+  if (admAgentRes.status !== "fulfilled" || !admAgentRes.value || !admAgentRes.value.exists) {
+    hideInitProgress();
+    showError(_t("未找到 admAgent 组件（应随安装包内置），请重新安装 ADM"));
+    updateStatusBar("error", null, 0);
+    return;
+  }
+
+  // 解析 workdir / 本地模型 / 云端 provider（仅供 UI 使用，不阻塞服务启动）
+  var workdir = (workdirRes.status === "fulfilled" && typeof workdirRes.value === "string") ? workdirRes.value : "";
+  S.localModels = (scanModelsRes.status === "fulfilled" && Array.isArray(scanModelsRes.value)) ? scanModelsRes.value : [];
+  S.providers = (cloudProvidersRes.status === "fulfilled" && Array.isArray(cloudProvidersRes.value)) ? cloudProvidersRes.value : [];
+
+  // 工作目录校验（与上述步骤独立；fire-and-forget，失败仅 warn）
+  validateWorkDirs().catch(function(e) { console.warn("[agent] validateWorkDirs 失败:", e); });
+
+  // ===== Phase B: 启动 / 复用 admAgent 服务 =====
+  var serverStatus = (serverStatusRes.status === "fulfilled") ? serverStatusRes.value : null;
+  if (serverStatus && serverStatus.running && serverStatus.host) {
+    S.serverInfo = { host: serverStatus.host, workspace_id: serverStatus.workspace_id || "" };
+    // 复用已运行的 server 时必须同步 client_id：remount 后 S.clientId 已重新生成，
+    // 若不更新则 current-session 等接口会因 client_id 不匹配返回 404
+    if (serverStatus.client_id) S.clientId = serverStatus.client_id;
+  } else {
+    showInitProgress(_t("正在启动 Agent 服务..."));
+    try {
+      S.serverInfo = await invoke("start_agent_server", { clientId: S.clientId });
+      console.log("[agent] Agent 服务已启动, host:", S.serverInfo?.host);
+    } catch (e) {
+      console.error("[agent] 启动 Agent 服务失败:", e);
+      hideInitProgress();
+      reportError(e, { prefix: _t("启动 Agent 服务失败: ") });
       updateStatusBar("error", null, 0);
       return;
     }
-  } catch (e) {
-    reportError(e, { prefix: _t("检查 admAgent 失败: ") });
-    updateStatusBar("error", null, 0);
-    return;
   }
+  if (seq !== S.initSeq) return;
 
-  // 检查 admAgent server 状态
-  try {
-    const status = await invoke("get_agent_server_status");
-    if (status.running && status.host) {
-      S.serverInfo = { host: status.host, workspace_id: status.workspace_id || "" };
-      // 复用已运行的 server 时必须同步 client_id：remount 后 S.clientId 已重新生成，
-      // 若不更新则 current-session 等接口会因 client_id 不匹配返回 404
-      if (status.client_id) S.clientId = status.client_id;
-    } else {
-      // 启动 server
-      try {
-        S.serverInfo = await invoke("start_agent_server", { clientId: S.clientId });
-      console.log("[agent] Agent 服务已启动, host:", S.serverInfo?.host);
-      } catch (e) {
-        console.error("[agent] 启动 Agent 服务失败:", e);
-        reportError(e, { prefix: _t("启动 Agent 服务失败: ") });
-        updateStatusBar("error", null, 0);
-        return;
-      }
+  // ===== Phase C: 工作区创建/拉取 + 服务端 provider 列表（并行）=====
+  showInitProgress(_t("正在加载工作区..."));
+  await Promise.all([
+    setupWorkspace(workdir).catch(function(e) {
+      console.warn("[agent] setupWorkspace 失败:", e);
+    }),
+    refreshServerProviders().catch(function(e) {
+      console.warn("[agent] refreshServerProviders 失败:", e);
+    }),
+  ]);
+  if (seq !== S.initSeq) return;
+
+  // ===== Phase D: Agent 初始化（依赖 workspace）=====
+  if (S.serverInfo.workspace_id) {
+    showInitProgress(_t("正在初始化 Agent..."));
+    try {
+      await api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent/init");
+    } catch (e) {
+      // 不阻塞流程（可能已初始化过 / 服务端瞬时未就绪），但不再静默：
+      // coordinator 构建失败会导致对话时报「agent coordinator not initialized」，
+      // 提前提示让用户知道（发送消息时会自动重试 init，见 send.js）
+      console.warn("[agent] /agent/init 失败:", e);
+      showWarning(_t("Agent 初始化失败，对话可能暂时无法进行（发送时会自动重试）"));
     }
-  } catch (e) {
-    reportError(e, { prefix: _t("检查 Agent 服务状态失败: ") });
-    updateStatusBar("error", null, 0);
-    return;
+
+    // 获取 Agent 信息 (当前模型等)
+    try {
+      var info = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent");
+      store.setAgentInfo(S.serverInfo.workspace_id, info);
+      if (info && info.model && info.model.context_window) {
+        store.setContextUsage(S.serverInfo.workspace_id, S.contextUsage.used, info.model.context_window, S.contextUsage.estimated);
+      }
+      updateContextUsage();
+    } catch (e) {
+      console.warn("[agent] 获取 agentInfo 失败:", e);
+    }
+
+    // 把本地模式（skip 直通 + Plan 开关）同步到服务端（复用已有工作区时服务端保留的是旧状态，可能与本地不一致）
+    // + 全局默认开启自动压缩（Compact 模式）。两者独立，并行执行
+    await Promise.all([
+      syncModeToServer().catch(function(e) { console.warn("[agent] syncModeToServer 失败:", e); }),
+      enableAutoCompact().catch(function(e) { console.warn("[agent] enableAutoCompact 失败:", e); }),
+    ]);
   }
-  if (seq !== S.initSeq) return; // 页面已切走/重新挂载，终止过期 init
+  if (seq !== S.initSeq) return;
 
-  // 验证工作目录列表（移除不存在的路径）
-  await validateWorkDirs();
+  // ===== Phase E: 订阅 SSE + 加载会话列表 + 加载工具列表 =====
+  showInitProgress(_t("正在加载会话与工具..."));
+  // 重新挂载时模板默认 Skill tab 高亮，同步重置状态
+  S.toolsTab = "skill";
 
-  // 加载工作区信息 (获取或创建工作区)
+  // setupSSEListener 必须先于 loadConversations：selectConversation 会 POST /current-session
+  // 上报在场会话，服务端要求该 client_id 已挂活跃 SSE 流，否则返回 404 client not attached
+  await setupSSEListener();
+  if (seq !== S.initSeq) return;
+
+  await Promise.all([
+    loadConversations(true),
+    loadTools(),
+  ]);
+  if (seq !== S.initSeq) return;
+
+  // ===== Phase F: UI 收尾 =====
+  // 工具 tab 切换（Skill / LSP / MCP）
+  var toolsTabs = document.getElementById("agent-tools-tabs");
+  if (toolsTabs) {
+    toolsTabs.addEventListener("click", function(e) {
+      var target = /** @type {HTMLElement} */ (e.target);
+      var tab = target.closest ? target.closest(".tools-tab") : null;
+      if (!tab) return;
+      var mode = /** @type {"skill" | "lsp" | "mcp"} */ (tab.getAttribute("data-tab"));
+      if (!mode || mode === S.toolsTab) return;
+      S.toolsTab = mode;
+      toolsTabs.querySelectorAll(".tools-tab").forEach(function(t) {
+        t.classList.toggle("active", t === tab);
+      });
+      renderToolsList();
+    });
+  }
+
+  updateModelDropdown();
+  updateModeToggle();
+  updateSettingsUI();
+  if (seq !== S.initSeq) return;
+
+  // 发送态对账：S 是模块级状态，isSending/activeRun 跨挂载周期残留；
+  // unmount 期间 SSE 监听器已解绑，run_complete 在页面切走时到达会永久丢失，
+  // 重新挂载后必须以服务端 is_busy 为准校准，否则「正在思考」永远卡住
+  await reconcileSendingState();
+
+  // 检查项目初始化引导（fire-and-forget；内部已自带 try/catch，加 .catch 仅防
+  // 意外 throw 时变成未处理 promise rejection；不影响 init 主体）
+  checkProjectInit().catch(function(e) { console.warn("[agent] checkProjectInit 异常:", e); });
+  // 进度条由 init() 的 finally 统一收尾，这里无需手动 hide
+}
+
+// 工作区创建 / 拉取：根据 workdir 找到匹配的 workspace，若无则创建。
+// 仅依赖 S.serverInfo.host，调用前必须确保服务已启动（Phase B 之后）。
+// 单独拆出是为了让 Phase C 能与 refreshServerProviders 并行。
+async function setupWorkspace(workdir) {
   try {
-    var workdir = await invoke("get_agent_workdir");
     if (workdir) {
       // 尝试获取或创建工作区
       try {
@@ -144,102 +281,6 @@ async function init() {
       store.setActive(S.serverInfo.workspace_id);
     }
   }
-  if (seq !== S.initSeq) return;
-
-  // 加载 provider 列表
-  try {
-    S.providers = await invoke("list_cloud_providers");
-  } catch (_) {
-    S.providers = [];
-  }
-
-  // 加载服务端 provider 列表（含 admAgent 内置模型）
-  await refreshServerProviders();
-
-  // 加载本地模型列表
-  try {
-    S.localModels = await invoke("scan_local_models");
-    if (!Array.isArray(S.localModels)) S.localModels = [];
-  } catch (_) {
-    S.localModels = [];
-  }
-
-  // 初始化 Agent (调用 /agent/init)
-  if (S.serverInfo.workspace_id) {
-    try {
-      await api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent/init");
-    } catch (e) {
-      // 不阻塞流程（可能已初始化过 / 服务端瞬时未就绪），但不再静默：
-      // coordinator 构建失败会导致对话时报「agent coordinator not initialized」，
-      // 提前提示让用户知道（发送消息时会自动重试 init，见 send.js）
-      console.warn("[agent] /agent/init 失败:", e);
-      showWarning(_t("Agent 初始化失败，对话可能暂时无法进行（发送时会自动重试）"));
-    }
-
-    // 获取 Agent 信息 (当前模型等)
-    try {
-      var info = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent");
-      store.setAgentInfo(S.serverInfo.workspace_id, info);
-      // 更新 contextUsage.max
-      if (info && info.model && info.model.context_window) {
-        store.setContextUsage(S.serverInfo.workspace_id, S.contextUsage.used, info.model.context_window, S.contextUsage.estimated);
-      }
-      updateContextUsage();
-    } catch (e) {
-      console.warn("[agent] 获取 agentInfo 失败:", e);
-    }
-
-    // 把本地模式（skip 直通 + Plan 开关）同步到服务端（复用已有工作区时服务端保留的是旧状态，可能与本地不一致）
-    await syncModeToServer();
-
-    // 全局默认开启自动压缩（Compact 模式）
-    await enableAutoCompact();
-  }
-  if (seq !== S.initSeq) return;
-
-  // 监听 SSE 事件（必须先于 loadConversations：selectConversation 会 POST /current-session
-  // 上报在场会话，服务端要求该 client_id 已挂活跃 SSE 流，否则返回 404 client not attached）
-  await setupSSEListener();
-  if (seq !== S.initSeq) return;
-
-  // 加载会话列表（restoreCurrent=true：重新挂载时 DOM 已重置，即使 currentConvId 仍有值也必须重新 selectConversation 渲染聊天区）
-  await loadConversations(true);
-
-  // 加载工具列表（重新挂载时模板默认 Skill tab 高亮，同步重置状态）
-  S.toolsTab = "skill";
-  await loadTools();
-
-  // 工具 tab 切换（Skill / LSP / MCP）
-  var toolsTabs = document.getElementById("agent-tools-tabs");
-  if (toolsTabs) {
-    toolsTabs.addEventListener("click", function(e) {
-      var tab = /** @type {HTMLElement} */ (e.target).closest(".tools-tab");
-      if (!tab) return;
-      var mode = /** @type {"skill" | "lsp" | "mcp"} */ (tab.getAttribute("data-tab"));
-      if (!mode || mode === S.toolsTab) return;
-      S.toolsTab = mode;
-      toolsTabs.querySelectorAll(".tools-tab").forEach(function(t) {
-        t.classList.toggle("active", t === tab);
-      });
-      renderToolsList();
-    });
-  }
-
-  // 更新 UI
-  updateModelDropdown();
-  updateModeToggle();
-  updateSettingsUI();
-
-  if (seq !== S.initSeq) return;
-  // 发送态对账：S 是模块级状态，isSending/activeRun 跨挂载周期残留；
-  // unmount 期间 SSE 监听器已解绑，run_complete 在页面切走时到达会永久丢失，
-  // 重新挂载后必须以服务端 is_busy 为准校准，否则「正在思考」永远卡住
-  await reconcileSendingState();
-
-  // 工作区选择器点击切换已绑定到 bindEvents 中（下拉列表）
-
-  // 检查项目初始化引导
-  checkProjectInit();
 }
 
 // 重新挂载后校准残留的发送态。
@@ -308,6 +349,8 @@ async function handleServerDied() {
   updateSendButton();
   clearSendSafetyTimer();
   updateStatusBar("error", null, S.contextUsage.used);
+  // 自愈流程与首次 init 共享同一进度条，init() 的 finally 会负责收尾
+  showInitProgress(_t("正在重启 Agent 服务..."));
   try {
     await init();
   } catch (e) {
@@ -777,16 +820,21 @@ export default {
         .then(function(u) { S.unlisteners.push(u); })
         .catch(function() {});
     }
-    // init 是 fire-and-forget，必须兜底 catch，否则任何未捕获异常都是静默死亡（表现为页面空白无报错）
+    // init 是 fire-and-forget。init() 内部已用 try/finally 兜底：
+    // - 任何阶段异常都被 catch → reportError → finally 清 loading UI
+    // - 此处的 .catch 仅作为防御层：理论上 init() 不会 reject
+    //   （除非 try 块自身抛出导致同步路径异常），仍兜底 hide 一次进度条
     init().catch(function(e) {
-      console.error("[agent] init() 未捕获异常:", e);
-      reportError(e, { prefix: _t("Agent 页面初始化失败: ") });
+      console.error("[agent] init() 兜底异常（init 内部 catch 未接住）:", e);
+      hideInitProgress();
     });
   },
   unmount() {
     console.log("[agent] unmount() isSending=" + S.isSending + " activeRun=" + JSON.stringify(S.activeRun));
     // 使在途 init() 失效，防止切走后旧 init 继续执行、或与下次 mount 的新 init 并发互踩
     S.initSeq++;
+    // 隐藏 init 进度条（init 还在跑的情况下，DOM 即将被 router 清空，但保险起见显式隐藏一次）
+    hideInitProgress();
     S.pendingFiles = [];
     // 关闭工作目录下拉（清理 DOM 和文档级监听器）
     closeWorkDirDropdown();
