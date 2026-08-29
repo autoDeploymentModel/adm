@@ -9,7 +9,7 @@ import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafet
 import { log } from "./log.js";
 
 // 单个任务（一次手动发送）最多自动续跑轮数（硬熔断）
-var MAX_AUTO_ROUNDS = 10;
+var MAX_AUTO_ROUNDS = 64;
 // 连续多少轮 todos 完成数无增长即停（模型已推不动，续跑只会烧 token）
 var MAX_NO_PROGRESS_ROUNDS = 2;
 var STORAGE_KEY = "agent_auto_continue";
@@ -91,15 +91,26 @@ export async function maybeAutoContinue(data, runStats) {
   await sendContinuePrompt(sid);
 }
 
-// 程序化发送“继续”消息（不经输入框；用户气泡由 SSE message created 事件补显）
-async function sendContinuePrompt(sessionId) {
+// 步数触顶后用户在决策卡点「继续干活」时调用：重新挂上续跑守卫（轮数上限/
+// 无进展熔断照常生效），发送通用"继续完成任务"prompt（触顶场景未必有 todos）。
+export async function continueAfterStepCap(sessionId) {
+  if (!sessionId || !S.serverInfo) return;
+  if (S.isSending) { log.debug("AUTOC", "step_cap 续跑跳过: 已有运行中任务"); return; }
+  armAutoContinue(sessionId);
+  await sendContinuePrompt(sessionId, _t("继续完成刚才的任务。若有未完成的步骤，请继续使用工具推进，直到任务完成后给出总结。"));
+}
+
+// 程序化发送“继续”消息（不经输入框；用户气泡由 SSE message created 事件补显）。
+// promptText 缺省为 todos 专用文案；步数触顶续跑传通用文案。
+async function sendContinuePrompt(sessionId, promptText) {
   var workspaceId = S.serverInfo.workspace_id;
   var runId = generateRunId();
+  var prompt = promptText || _t("任务清单还有未完成项，请继续完成剩余的 todos；每完成一项立即用 todos 工具标记，全部完成后再结束。");
   store.startRun(workspaceId, sessionId, runId);
   // 续跑轮也是新 run：重置运行统计，供本轮假完成检测与下一轮进度判定使用
   store.setRunStats(workspaceId, {
     sessionId: sessionId,
-    prompt: _t("任务清单还有未完成项，请继续完成剩余的 todos；每完成一项立即用 todos 工具标记，全部完成后再结束。"),
+    prompt: prompt,
     toolCalls: 0,
     sideEffectCalls: 0,
     sideEffectSuccess: 0,
@@ -111,7 +122,7 @@ async function sendContinuePrompt(sessionId) {
   try {
     await api("POST", "/v1/workspaces/" + workspaceId + "/agent", {
       session_id: sessionId,
-      prompt: _t("任务清单还有未完成项，请继续完成剩余的 todos；每完成一项立即用 todos 工具标记，全部完成后再结束。"),
+      prompt: prompt,
       run_id: runId,
     });
     startSendSafetyTimer();

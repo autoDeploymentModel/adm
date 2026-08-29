@@ -2,14 +2,14 @@
 import { t as _t } from "../../i18n.js";
 import { S, invoke, listen, store } from "./store.js";
 import { api } from "./api.js";
-import { getErrorMessage, classifyError, ERROR_QUOTA } from "./error.js";
-import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showInfo, reportError, updateContextUsage } from "./ui.js";
+import { getErrorMessage, classifyError, ERROR_QUOTA, ERROR_STEP_CAP } from "./error.js";
+import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showInfo, showChoice, reportError, updateContextUsage } from "./ui.js";
 import { renderMessages, renderTodos } from "./render.js";
 import { loadConversations, refreshMessages, renderConversationList, selectConversation, syncWxFollowSession } from "./session.js";
 import { handlePermissionRequest, resetPermissionState } from "./permission.js";
 import { loadTools } from "./tools.js";
 import { refreshAgentInfo, reloadAgentConfig } from "./model.js";
-import { maybeAutoContinue, resetAutoContinue } from "./autocontinue.js";
+import { maybeAutoContinue, resetAutoContinue, continueAfterStepCap } from "./autocontinue.js";
 import { log } from "./log.js";
 
 // ===== SSE 事件 =====
@@ -126,8 +126,12 @@ export async function setupSSEListener() {
           var bgInner = (bgRaw.payload || {}).payload || bgRaw.payload || {};
           if (bgInner.error) {
             // 与 active workspace 的错误展示一致：气泡写进该后台 workspace 的消息池，
-            // 切回时可见，不打扰当前 tab
-            appendErrorBubble(bgInner.error, { prefix: _t("后台工作区运行出错: "), wsId: eventWsId, sessionId: bgInner.session_id });
+            // 切回时可见，不打扰当前 tab。触顶非故障，用独立文案避免误导为"运行出错"。
+            if (classifyError(bgInner.error) === ERROR_STEP_CAP) {
+              appendErrorBubble(bgInner.error, { prefix: _t("后台工作区步数触顶: "), wsId: eventWsId, sessionId: bgInner.session_id });
+            } else {
+              appendErrorBubble(bgInner.error, { prefix: _t("后台工作区运行出错: "), wsId: eventWsId, sessionId: bgInner.session_id });
+            }
           }
         }
       }
@@ -222,6 +226,27 @@ function appendErrorBubble(err, opts) {
   if (wsId === S.activeWsId) renderMessages();
 }
 
+// 步数触顶决策卡：模型用完了本轮 64 步预算但仍在干活，由用户显式决定去留。
+// 只针对激活 tab 的当前运行（run_complete 的 activeRun 匹配过滤在上游已完成），
+// 后台 workspace 触顶仍走错误气泡，避免多 tab 弹窗互相遮挡。
+function showStepCapDialog(sessionId) {
+  if (!sessionId) return;
+  showChoice({
+    title: _t("大模型已经推理很久啦"),
+    message: _t("还是没有解决您的问题吗？您是否要大模型继续干活不解决不罢休，还是终止本次交互，查看下原因先？后续您还可以给我说“继续”来完成本次任务。"),
+    okText: _t("继续干活，不解决不罢休"),
+    cancelText: _t("终止，查看原因"),
+    onOk: function() {
+      continueAfterStepCap(sessionId).catch(function(e) {
+        log.debug("AUTOC", "step_cap 续跑发送失败: " + getErrorMessage(e));
+      });
+    },
+    onCancel: function() {
+      showInfo(_t("可随时发送“继续”恢复本次任务"));
+    },
+  });
+}
+
 function handleSSEEvent(payload, ctx) {
   ctx = ctx || {};
   if (!payload) return;
@@ -308,14 +333,22 @@ function handleSSEEvent(payload, ctx) {
       // 否则服务端中断本轮时 UI 静默停止，表现为"会话突然中断"却无任何说明
       if (actualData && actualData.error) {
         console.warn("[agent] run_complete 携带错误:", JSON.stringify(actualData));
-        var ctxHint = (S.contextUsage.max > 0 && S.contextUsage.used >= S.contextUsage.max * 0.9)
-          ? _t("（上下文已接近上限 ") + S.contextUsage.used + "/" + S.contextUsage.max + _t("，建议新建会话继续）") : "";
-        // 统一错误展示：quota（余额不足/401）类自动提示"余额不足，任务中断"，其余显示原始错误
-        // 常驻错误气泡写进聊天列表（不弹窗、不进 LLM 上下文）
-        appendErrorBubble(actualData.error, { prefix: _t("本轮对话中断: "), hint: ctxHint });
-        updateStatusBar("error", null, S.contextUsage.used);
-        // 运行出错时不自动续跑（避免在持续性错误上循环烧 token）
-        resetAutoContinue();
+        if (classifyError(actualData.error) === ERROR_STEP_CAP) {
+          // 步数触顶：模型仍在干活但本轮 64 步预算耗尽，不是故障。
+          // 弹决策卡让用户选"继续干活"（人工确认，绝不静默连跑）或"终止查原因"。
+          resetAutoContinue();
+          updateStatusBar("ready", null, S.contextUsage.used);
+          showStepCapDialog(actualData.session_id);
+        } else {
+          var ctxHint = (S.contextUsage.max > 0 && S.contextUsage.used >= S.contextUsage.max * 0.9)
+            ? _t("（上下文已接近上限 ") + S.contextUsage.used + "/" + S.contextUsage.max + _t("，建议新建会话继续）") : "";
+          // 统一错误展示：quota（余额不足/401）类自动提示"余额不足，任务中断"，其余显示原始错误
+          // 常驻错误气泡写进聊天列表（不弹窗、不进 LLM 上下文）
+          appendErrorBubble(actualData.error, { prefix: _t("本轮对话中断: "), hint: ctxHint });
+          updateStatusBar("error", null, S.contextUsage.used);
+          // 运行出错时不自动续跑（避免在持续性错误上循环烧 token）
+          resetAutoContinue();
+        }
       } else {
         if (actualData && actualData.empty_output) {
           // 服务端标记：本轮正常结束但没有任何实际输出（正文/工具调用全无，
@@ -366,6 +399,11 @@ function handleSSEEvent(payload, ctx) {
     case "agent_event":
       // Agent 事件（错误/响应/摘要/思考中）：error 可能是字符串或对象，统一展示并留完整日志便于排查
       if (actualData && actualData.error) {
+        if (classifyError(actualData.error) === ERROR_STEP_CAP) {
+          // 步数触顶：服务端会同时发 agent_event error + run_complete error（与输出退化
+          // 场景同机制），提示统一由 run_complete 分支的决策卡呈现，这里不弹错误气泡
+          break;
+        }
         console.warn("[agent] agent_event 错误:", JSON.stringify(actualData).substring(0, 500));
         appendErrorBubble(actualData.error, { prefix: _t("Agent 错误: ") });
       } else if (actualData && actualData.type === "thinking" && actualData.progress) {
