@@ -47,6 +47,13 @@ pub struct InstalledSkill {
     path: String,
     /// user=全局（含 ~/.claude/skills 等兼容目录）、project=当前项目
     source: String,
+    /// SKILL.md frontmatter 中的 description（供前端展示；解析失败为空）
+    description: String,
+    /// SKILL.md frontmatter 中的 user-invocable（默认 true，缺省/解析失败视为 true）
+    user_invocable: bool,
+    /// SKILL.md 完整内容的 base64 编码（供前端直接附加；workspace 快照外的
+    /// 新装技能无法走服务端 /skills/read 读取，必须由扫描侧顺带带出）
+    content_base64: String,
 }
 
 // ===== 目录解析 =====
@@ -680,13 +687,35 @@ pub async fn list_installed_skills(
                 if !is_valid_skill_name(&name) {
                     continue;
                 }
-                if !path.join("SKILL.md").exists() {
+                let skill_md = path.join("SKILL.md");
+                if !skill_md.exists() {
                     continue;
                 }
+                // 读取完整内容：description/user-invocable 从 frontmatter 解析，
+                // content_base64 供前端直接附加（扫描已读文件，避免二次磁盘 IO）。
+                // 解析失败/缺失给空值/默认 true，调用方按 user_invocable=false 过滤。
+                let (description, user_invocable, content_base64) = match std::fs::read(&skill_md) {
+                    Ok(bytes) => {
+                        let text = String::from_utf8_lossy(&bytes);
+                        let fm = parse_frontmatter(&text);
+                        let desc = fm.get("description").cloned().unwrap_or_default();
+                        let inv = fm
+                            .get("user-invocable")
+                            .map(|v| v.trim().eq_ignore_ascii_case("true"))
+                            .unwrap_or(true);
+                        use base64::Engine as _;
+                        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                        (desc, inv, b64)
+                    }
+                    Err(_) => (String::new(), true, String::new()),
+                };
                 out.push(InstalledSkill {
                     name,
                     path: path.to_string_lossy().to_string(),
                     source: source.to_string(),
+                    description,
+                    user_invocable,
+                    content_base64,
                 });
             }
         }

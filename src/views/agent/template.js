@@ -928,6 +928,112 @@ export const template = `
   .model-item-name { flex: 1; }
   .model-item-ctx { font-size: 11px; color: var(--c-text-4); }
 
+  /* 技能选择器（与模型选择器同款按钮/下拉，但顶部带刷新+空态/标题） */
+  .toolbar-skill-selector { position: relative; }
+  .toolbar-skill-btn { gap: 4px; }
+  .toolbar-skill-btn.has-skill {
+    background: rgba(var(--c-accent-rgb), 0.18);
+    color: var(--c-accent);
+    border: 1px solid rgba(var(--c-accent-rgb), 0.4);
+  }
+  .toolbar-skill-icon { font-size: 12px; }
+
+  .skill-dropdown-header {
+    padding: 6px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--c-text-3);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    border-bottom: 1px solid var(--c-border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    background: var(--c-raise);
+  }
+  .skill-dropdown-refresh {
+    background: transparent;
+    border: none;
+    color: var(--c-text-3);
+    cursor: pointer;
+    font-size: 13px;
+    padding: 0 4px;
+    border-radius: 4px;
+    transition: color 0.15s, background 0.15s;
+  }
+  .skill-dropdown-refresh:hover { color: var(--c-accent); background: var(--c-raise-2); }
+  .skill-dropdown-refresh.loading { animation: agent-spin 0.8s linear infinite; }
+
+  .skill-item {
+    padding: 8px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    border-bottom: 1px solid var(--c-raise-2);
+  }
+  .skill-item:last-child { border-bottom: none; }
+  .skill-item:hover { background: var(--c-raise-2); }
+  .skill-item.attached { background: rgba(var(--c-accent-rgb), 0.08); }
+  .skill-item.attached:hover { background: rgba(var(--c-accent-rgb), 0.14); }
+
+  .skill-item-top {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .skill-item-name {
+    flex: 1;
+    font-weight: 500;
+    color: var(--c-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .skill-item-source {
+    flex-shrink: 0;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 8px;
+    background: var(--c-overlay);
+    color: var(--c-text-3);
+  }
+  .skill-item-source.global { color: #69db7c; background: rgba(105, 219, 124, 0.1); }
+  .skill-item-source.project { color: #b197fc; background: rgba(177, 151, 252, 0.1); }
+  .skill-item-desc {
+    font-size: 11px;
+    color: var(--c-text-3);
+    line-height: 1.4;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    word-break: break-word;
+  }
+  .skill-item-status {
+    font-size: 11px;
+    color: var(--c-accent);
+    flex-shrink: 0;
+  }
+  .skill-dropdown-empty {
+    padding: 14px 12px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--c-text-4);
+    line-height: 1.6;
+  }
+  .skill-dropdown-empty-icon {
+    font-size: 22px;
+    opacity: 0.6;
+    margin-bottom: 4px;
+  }
+
   .toolbar-context-usage {
     font-size: 12px;
     color: var(--c-text-3);
@@ -1696,6 +1802,16 @@ export const template = `
               <span class="dropdown-arrow">▾</span>
             </button>
             <div class="model-dropdown" id="agent-model-dropdown">
+            </div>
+          </div>
+          <!-- ②a 技能选择下拉（只显示用户/项目技能；选中后作为 markdown 附件随下一条消息发送） -->
+          <div class="toolbar-skill-selector">
+            <button class="model-current toolbar-skill-btn" id="agent-skill-btn" title="${_t("选择技能（仅显示用户与项目技能）；选中后将随下一条消息一起发送")}">
+              <span class="toolbar-skill-icon">🧩</span>
+              <span id="agent-skill-name">${_t("技能")}</span>
+              <span class="dropdown-arrow">▾</span>
+            </button>
+            <div class="model-dropdown" id="agent-skill-dropdown">
             </div>
           </div>
           <!-- ②b 微信消息开关：开 = 微信 Bot 消息进入当前打开的会话；关 = 不接收微信消息 -->

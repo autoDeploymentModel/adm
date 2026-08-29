@@ -19,6 +19,7 @@ import { enableAutoCompact, updateWorkspaceSelector, toggleWorkDirDropdown, clos
 import { showSettings, hideSettings, updateSettingsUI, saveSettings, showAddModelDialog, hideAddModelDialog, addModel, initProjectMemoryUI, renderVisionModelSelect } from "./agent/settings_dialog.js";
 import { addPendingFiles, parseUriListPaths, addPastedPaths, looksLikeFilePath } from "./agent/attach.js";
 import { setAutoContinueEnabled } from "./agent/autocontinue.js";
+import { bindSkillSelectorEvents, initSkillSelector, clearAttachedSkillsAfterSend } from "./agent/skill_selector.js";
 
 // ===== 初始化 =====
 //
@@ -209,6 +210,9 @@ async function _doInit(seq) {
   updateModeToggle();
   updateSettingsUI();
   if (seq !== S.initSeq) return;
+
+  // 异步加载用户技能列表（不阻塞 init 主体；首屏渲染已含空态占位）
+  initSkillSelector().catch(function(e) { console.warn("[agent] initSkillSelector 失败:", e); });
 
   // 发送态对账：S 是模块级状态，isSending/activeRun 跨挂载周期残留；
   // unmount 期间 SSE 监听器已解绑，run_complete 在页面切走时到达会永久丢失，
@@ -528,11 +532,17 @@ function bindEvents() {
       updateModelDropdown();
       renderVisionModelSelect();
     });
+    // 互斥：打开模型下拉时关闭技能下拉
+    var skillDd = document.getElementById("agent-skill-dropdown");
+    if (skillDd) skillDd.classList.remove("show");
     document.getElementById("agent-model-dropdown").classList.toggle("show");
   });  document.addEventListener("click", function() {
     var dd = document.getElementById("agent-model-dropdown");
     if (dd) dd.classList.remove("show");
   });
+
+  // 技能下拉（用户/项目技能，选中后随下一条消息发送）
+  bindSkillSelectorEvents();
 
   // 模型添加
   document.getElementById("agent-add-model-close").addEventListener("click", hideAddModelDialog);
