@@ -52,6 +52,19 @@ export function updateSettingsUI() {
   tempInput.value = S.settings.agent_temperature || "";
 
   // 多模态模型（图片识别）：默认内置 admImage-model，自动轮询远程图片后端
+  // 迁移：仅在服务端快照就绪时校验当前值并重置为内置默认值；快照未就绪时保留原值，
+  // 交给下方 renderVisionModelSelect 的保留逻辑兜底（避免离线时把 local/localModel
+  // 等有效配置误重置 —— S.providers 来自 list_cloud_providers，不含 local 条目）
+  if (S.serverProvidersLoaded && S.settings.agent_vision_model) {
+    var visionValid = S.serverProviders.some(function(sp) {
+      return Array.isArray(sp.models) && sp.models.some(function(m) {
+        return m.supports_images === true && S.settings.agent_vision_model === sp.id + "/" + m.id;
+      });
+    });
+    if (!visionValid) {
+      S.settings.agent_vision_model = "admAgent/admImage-model";
+    }
+  }
   renderVisionModelSelect();
 
   // 云端模型列表
