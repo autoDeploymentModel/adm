@@ -156,6 +156,8 @@ GUI 客户端通过 `GET /v1/workspaces/{id}/events` 订阅 Server-Sent Events�
 
 **关联策略**：优先用 `run_id` 关联（当客户端发送消息时设置了 `run_id`），否则退化为 `session_id` 关联。
 
+> **步数触顶**：当 `error` 包含 `max_steps_reached` 时，表示模型本轮用完了步数预算（64 步）仍在正常干活，任务可能未完成。这不是故障，客户端应提示用户可发送"继续"恢复任务（桌面端表现为"继续干活/终止查看原因"决策弹窗）。该 token 是前后端契约，服务端改文案不得移除。
+
 #### AgentEvent（Agent 事件）
 
 Agent 运行过程中产生的事件，包括错误、响应和摘要通知。

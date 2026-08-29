@@ -352,28 +352,40 @@ export function clearErrorNotices() {
   area.querySelectorAll(".msg.error, .msg.warn, .msg.info").forEach(function(e) { e.remove(); });
 }
 
-// 应用内确认弹窗（Tauri WebView 中原生 confirm() 非阻塞，不可用）
-export function showConfirm(message, onOk) {
+// 应用内选择弹窗（Tauri WebView 中原生 confirm() 非阻塞，不可用）。
+// 通用双按钮决策卡：permission-modal 样式，挂在 .agent-root 下随视图 unmount 销毁。
+/**
+ * @param {{ title?: string, message?: string, okText?: string, cancelText?: string,
+ *           onOk?: function, onCancel?: function }} [opts]
+ */
+export function showChoice(opts) {
+  opts = opts || {};
   var overlay = document.createElement("div");
   overlay.className = "permission-overlay show";
   overlay.innerHTML =
     '<div class="permission-modal">' +
       '<div class="permission-header">' +
         '<span class="permission-icon">⚠️</span>' +
-        '<span class="permission-title">' + _t("确认操作") + '</span>' +
+        '<span class="permission-title"></span>' +
       '</div>' +
       '<div class="permission-body"></div>' +
       '<div class="permission-footer">' +
-        '<button class="settings-btn settings-btn-secondary" data-act="cancel">' + _t("取消") + '</button>' +
-        '<button class="settings-btn settings-btn-primary" data-act="ok">' + _t("确定") + '</button>' +
+        '<button class="settings-btn settings-btn-secondary" data-act="cancel"></button>' +
+        '<button class="settings-btn settings-btn-primary" data-act="ok"></button>' +
       '</div>' +
     '</div>';
-  overlay.querySelector(".permission-body").textContent = message;
+  overlay.querySelector(".permission-title").textContent = opts.title || _t("确认操作");
+  overlay.querySelector(".permission-body").textContent = opts.message || "";
+  overlay.querySelector('[data-act="cancel"]').textContent = opts.cancelText || _t("取消");
+  overlay.querySelector('[data-act="ok"]').textContent = opts.okText || _t("确定");
   function close() { overlay.remove(); }
-  overlay.querySelector('[data-act="cancel"]').addEventListener("click", close);
+  overlay.querySelector('[data-act="cancel"]').addEventListener("click", function() {
+    close();
+    if (opts.onCancel) opts.onCancel();
+  });
   overlay.querySelector('[data-act="ok"]').addEventListener("click", function() {
     close();
-    onOk();
+    if (opts.onOk) opts.onOk();
   });
   // 弹窗内的点击不冒泡到 document，避免触发背后页面"点击外部关闭"的监听
   // （如下拉列表：用户点"取消"时不应连带关闭下拉）
@@ -383,4 +395,8 @@ export function showConfirm(message, onOk) {
   });
   // 挂到视图根节点下，随视图 unmount 一起销毁
   (document.querySelector(".agent-root") || document.body).appendChild(overlay);
+}
+
+export function showConfirm(message, onOk) {
+  showChoice({ message: message, onOk: onOk });
 }

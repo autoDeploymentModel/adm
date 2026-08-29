@@ -11,6 +11,7 @@ export var ERROR_TIMEOUT = "timeout";   // 请求超时
 export var ERROR_NETWORK = "network";   // 连接失败 / server 未运行 / 断线
 export var ERROR_NOT_FOUND = "not_found"; // 资源不存在
 export var ERROR_CANCEL = "cancel";     // 已取消
+export var ERROR_STEP_CAP = "step_cap"; // 步数触顶（模型仍在干活但本轮预算耗尽，非故障）
 export var ERROR_UNKNOWN = "unknown";   // 其它
 
 /**
@@ -39,6 +40,9 @@ var TIMEOUT_RE = /timeout|timed out|超时/i;
 var NETWORK_RE = /请求失败|连接失败|connect|refused|ECONN|未运行|断线|重连|network|socket/i;
 var NOT_FOUND_RE = /404|不存在|not found/i;
 var CANCEL_RE = /canceled|cancelled|已取消/i;
+// 步数触顶哨兵：服务端 errStepCap 文案固定含 "max_steps_reached"（有单测锁定），
+// 是前后端契约，改服务端文案必须保留该 token。
+var STEP_CAP_RE = /max_steps_reached/i;
 
 /**
  * 错误分类：优先匹配更具体的类别，未命中返回 unknown。
@@ -47,6 +51,7 @@ var CANCEL_RE = /canceled|cancelled|已取消/i;
  */
 export function classifyError(err) {
   var text = getErrorMessage(err);
+  if (STEP_CAP_RE.test(text)) return ERROR_STEP_CAP;
   if (QUOTA_RE.test(text)) return ERROR_QUOTA;
   if (TIMEOUT_RE.test(text)) return ERROR_TIMEOUT;
   if (NETWORK_RE.test(text)) return ERROR_NETWORK;
