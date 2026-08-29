@@ -728,21 +728,57 @@ pub fn sync_agent_vision_model(app: &tauri::AppHandle, value: &str) {
 }
 
 /// 把 agent_vision_model 写入 admAgent.json 顶层（缺省回退内置 admImage-model）。
+/// 校验目标模型在 providers 中声明 supports_images=true，否则回退内置。
 /// 返回是否真的发生了变更（供调用方决定是否触发服务端重载）。
 fn write_agent_vision_model(value: &str) -> Result<bool, AppError> {
     let (provider, model) = match value.split_once('/') {
         Some((p, m)) if !p.is_empty() && !m.is_empty() => (p.to_string(), m.to_string()),
         _ => ("admAgent".to_string(), "admImage-model".to_string()),
     };
-    let target = serde_json::json!({ "provider": provider, "model": model });
 
     update_adm_agent_config(move |config| {
-        if config.get("agent_vision_model") == Some(&target) {
+        // 校验：模型必须在某个 provider 的 models 中声明 supports_images=true，否则回退内置
+        let (final_provider, final_model) = if model_supports_images_in_config(&*config, &provider, &model) {
+            (provider.clone(), model.clone())
+        } else {
+            ("admAgent".to_string(), "admImage-model".to_string())
+        };
+
+        let final_target = serde_json::json!({ "provider": final_provider, "model": final_model });
+        if config.get("agent_vision_model") == Some(&final_target) {
             return Ok(false);
         }
-        config["agent_vision_model"] = target;
+        config["agent_vision_model"] = final_target;
         Ok(true)
     })
+}
+
+/// 检查指定 provider/model 是否在 admAgent.json 的 providers 中声明 supports_images=true。
+/// admAgent 是内置 provider（含 admImage-model），不在 providers 键中，需特殊处理。
+fn model_supports_images_in_config(config: &serde_json::Value, provider: &str, model: &str) -> bool {
+    // admAgent 是内置 provider，其模型（如 admImage-model）支持图片
+    if provider == "admAgent" {
+        return model == "admImage-model";
+    }
+    if let Some(providers) = config.get("providers").and_then(|p| p.as_object()) {
+        for (key, pc) in providers {
+            if key != provider {
+                continue;
+            }
+            if let Some(models) = pc.as_object().and_then(|p| p.get("models").and_then(|m| m.as_array())) {
+                return models.iter().any(|m| {
+                    m.as_object()
+                        .and_then(|mo| {
+                            mo.get("id").and_then(|id| id.as_str()).map(|id| {
+                                id == model && mo.get("supports_images").and_then(|s| s.as_bool()).unwrap_or(false)
+                            })
+                        })
+                        .unwrap_or(false)
+                });
+            }
+        }
+    }
+    false
 }
 
 /// 把 HTTP 代理配置写入 admAgent.json 顶层 agent_proxy 并触发服务端热重载。
@@ -2770,6 +2806,149 @@ mod adm_agent_config_tests {
             out["agent_vision_model"]["model"], "m",
             "新字段必须写入"
         );
+    }
+
+    // ---- write_agent_vision_model：supports_images 校验 ----
+
+    const VISION_SAMPLE: &str = r#"{
+  "providers": {
+    "local": {
+      "name": "Local",
+      "models": [ { "id": "localModel", "name": "Local Model", "supports_images": true } ]
+    },
+    "visioncloud": {
+      "name": "Vision Cloud",
+      "base_url": "https://example.invalid/v1",
+      "models": [ { "id": "gpt-4o", "name": "GPT-4o", "supports_images": true } ]
+    },
+    "textcloud": {
+      "name": "Text Cloud",
+      "base_url": "https://example.invalid/v1",
+      "models": [
+        { "id": "gpt-4o", "name": "GPT-4o", "supports_images": false },
+        { "id": "deepseek", "name": "DeepSeek" }
+      ]
+    }
+  }
+}"#;
+
+    fn read_vision_model(path: &std::path::Path) -> serde_json::Value {
+        let out: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).expect("读回配置"))
+                .expect("落盘后必须是合法 JSON");
+        out["agent_vision_model"].clone()
+    }
+
+    fn assert_builtin_vision(v: &serde_json::Value) {
+        assert_eq!(
+            v,
+            &serde_json::json!({ "provider": "admAgent", "model": "admImage-model" }),
+            "应回退为内置 admAgent/admImage-model"
+        );
+    }
+
+    /// 模型在 providers 中声明 supports_images=true：原样保留，返回 changed=true。
+    #[test]
+    fn vision_model_kept_when_supports_images_true() {
+        let t = temp_config_dir("vision_kept");
+        let path = t.dir.join("admAgent.json");
+        std::fs::write(&path, VISION_SAMPLE).expect("写入样本配置");
+
+        let changed = write_agent_vision_model("visioncloud/gpt-4o").expect("写入应成功");
+        assert!(changed, "首次写入应报告变更");
+        assert_eq!(
+            read_vision_model(&path),
+            serde_json::json!({ "provider": "visioncloud", "model": "gpt-4o" })
+        );
+    }
+
+    /// 内置 admAgent 特判：admImage-model 永远有效。
+    #[test]
+    fn vision_model_builtin_admimage_kept() {
+        let t = temp_config_dir("vision_builtin");
+        let path = t.dir.join("admAgent.json");
+        std::fs::write(&path, VISION_SAMPLE).expect("写入样本配置");
+
+        assert!(write_agent_vision_model("admAgent/admImage-model").expect("写入应成功"));
+        assert_eq!(
+            read_vision_model(&path),
+            serde_json::json!({ "provider": "admAgent", "model": "admImage-model" })
+        );
+    }
+
+    /// 本地模型 local/localModel 且 supports_images=true：保留（不回退内置）。
+    #[test]
+    fn vision_model_local_kept_when_supports_images() {
+        let t = temp_config_dir("vision_local");
+        let path = t.dir.join("admAgent.json");
+        std::fs::write(&path, VISION_SAMPLE).expect("写入样本配置");
+
+        assert!(write_agent_vision_model("local/localModel").expect("写入应成功"));
+        assert_eq!(
+            read_vision_model(&path),
+            serde_json::json!({ "provider": "local", "model": "localModel" })
+        );
+    }
+
+    /// provider 不存在：回退内置并报告变更。
+    #[test]
+    fn vision_model_falls_back_when_provider_missing() {
+        let t = temp_config_dir("vision_noprov");
+        let path = t.dir.join("admAgent.json");
+        std::fs::write(&path, VISION_SAMPLE).expect("写入样本配置");
+
+        let changed = write_agent_vision_model("nope/gpt-4o").expect("写入应成功");
+        assert!(changed, "校验失败改为内置应报告变更");
+        assert_builtin_vision(&read_vision_model(&path));
+    }
+
+    /// supports_images=false 或字段缺失：同样回退内置。
+    #[test]
+    fn vision_model_falls_back_when_supports_images_not_true() {
+        let t = temp_config_dir("vision_noimg");
+        let path = t.dir.join("admAgent.json");
+        std::fs::write(&path, VISION_SAMPLE).expect("写入样本配置");
+
+        assert!(
+            write_agent_vision_model("textcloud/gpt-4o").expect("写入应成功"),
+            "supports_images=false 应回退内置"
+        );
+        assert_builtin_vision(&read_vision_model(&path));
+
+        // 缺 supports_images 字段的模型：独立目录验证同样回退并报告变更
+        let t2 = temp_config_dir("vision_noimg2");
+        let path2 = t2.dir.join("admAgent.json");
+        std::fs::write(&path2, VISION_SAMPLE).expect("写入样本配置");
+        assert!(
+            write_agent_vision_model("textcloud/deepseek").expect("写入应成功"),
+            "缺 supports_images 字段应回退内置"
+        );
+        assert_builtin_vision(&read_vision_model(&path2));
+    }
+
+    /// 值未变化（目标已是当前值）：返回 false，调用方跳过服务端重载。
+    #[test]
+    fn vision_model_no_change_returns_false() {
+        let t = temp_config_dir("vision_unchanged");
+        let path = t.dir.join("admAgent.json");
+        std::fs::write(&path, VISION_SAMPLE).expect("写入样本配置");
+
+        assert!(write_agent_vision_model("visioncloud/gpt-4o").expect("首次写入应成功"));
+        let changed = write_agent_vision_model("visioncloud/gpt-4o").expect("二次写入应成功");
+        assert!(!changed, "值未变化必须返回 false，避免不必要的服务端重载");
+    }
+
+    /// 非法值（无 provider/model 分隔）回退内置。
+    #[test]
+    fn vision_model_bad_value_falls_back_to_builtin() {
+        for bad in ["", "no-slash", "/model", "provider/"] {
+            let t = temp_config_dir("vision_badval");
+            let path = t.dir.join("admAgent.json");
+            std::fs::write(&path, VISION_SAMPLE).expect("写入样本配置");
+            let changed = write_agent_vision_model(bad).expect("写入应成功");
+            assert!(changed, "非法值 {:?} 应回退内置并报告变更", bad);
+            assert_builtin_vision(&read_vision_model(&path));
+        }
     }
 
     /// 不变量 2：空文件拒绝写入，且不破坏原文件。
