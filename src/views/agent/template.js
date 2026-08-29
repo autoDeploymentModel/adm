@@ -473,6 +473,191 @@ export const template = `
   .scroll-bottom-btn.show { display: flex; }
   .scroll-bottom-btn:hover { background: #e6e6e6; }
 
+  /* 悬浮「对话记录导航」按钮（聊天区右侧中部，固定可见） */
+  .agent-outline-fab {
+    position: absolute;
+    top: 50%;
+    right: 12px;
+    transform: translateY(-50%);
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: var(--c-raise-2);
+    border: 1px solid var(--c-border);
+    color: var(--c-text);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    z-index: 5;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+    transition: background 0.15s, color 0.15s, border-color 0.15s, transform 0.15s;
+    user-select: none;
+  }
+  .agent-outline-fab:hover { background: var(--c-accent); color: #fff; border-color: var(--c-accent); }
+  .agent-outline-fab.active { background: var(--c-accent); color: #fff; border-color: var(--c-accent); }
+  .agent-outline-fab .outline-fab-badge {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 8px;
+    background: var(--c-accent);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 16px;
+    text-align: center;
+    box-shadow: 0 0 0 2px var(--c-panel);
+    pointer-events: none;
+  }
+
+  /* 悬浮消息大纲面板（从右侧滑出，紧贴 FAB 左侧） */
+  .agent-outline-panel {
+    position: absolute;
+    top: 16px;
+    bottom: 16px;
+    right: 56px;
+    width: 280px;
+    background: var(--c-panel);
+    border: 1px solid var(--c-border);
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    display: none;
+    flex-direction: column;
+    overflow: hidden;
+    z-index: 6;
+    animation: agent-outline-in 0.15s ease-out;
+  }
+  .agent-outline-panel.show { display: flex; }
+  @keyframes agent-outline-in {
+    from { opacity: 0; transform: translateX(8px); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
+
+  .agent-outline-header {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--c-border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .agent-outline-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--c-text-2);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .agent-outline-count {
+    font-size: 10px;
+    color: var(--c-text-4);
+    background: var(--c-raise);
+    border-radius: 8px;
+    padding: 1px 6px;
+  }
+  .agent-outline-close {
+    background: transparent;
+    border: none;
+    color: var(--c-text-3);
+    font-size: 14px;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+  }
+  .agent-outline-close:hover { color: #fff; }
+
+  .agent-outline-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 4px 0;
+  }
+  .agent-outline-list::-webkit-scrollbar { width: 6px; }
+  .agent-outline-list::-webkit-scrollbar-track { background: var(--c-panel); }
+  .agent-outline-list::-webkit-scrollbar-thumb { background: var(--c-border); border-radius: 3px; }
+
+  /* 单条消息大纲项：左侧角色色条 + 角色图标 + 预览文本 + 时间 */
+  .outline-item {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    padding: 6px 10px 6px 0;
+    cursor: pointer;
+    border-bottom: 1px solid var(--c-raise-2);
+    transition: background 0.12s;
+  }
+  .outline-item:hover { background: var(--c-raise); }
+  .outline-item.active { background: var(--c-raise); }
+  .outline-item-bar {
+    width: 3px;
+    flex-shrink: 0;
+    border-radius: 0 2px 2px 0;
+    margin-right: 8px;
+    background: transparent;
+  }
+  .outline-item.user .outline-item-bar { background: var(--c-accent); }
+  .outline-item.assistant .outline-item-bar { background: #6e7681; }
+  .outline-item-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .outline-item-meta {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    color: var(--c-text-4);
+  }
+  .outline-item-role {
+    font-weight: 600;
+    color: var(--c-text-3);
+  }
+  .outline-item.user .outline-item-role { color: var(--c-accent); }
+  .outline-item-preview {
+    font-size: 12px;
+    color: var(--c-text-2);
+    line-height: 1.4;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-word;
+  }
+  .outline-item-preview.empty { color: var(--c-text-4); font-style: italic; }
+
+  .agent-outline-empty {
+    padding: 20px 12px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--c-text-4);
+  }
+  .agent-outline-empty-icon {
+    font-size: 28px;
+    margin-bottom: 6px;
+    opacity: 0.6;
+  }
+
+  /* 被大纲点击跳转到的消息节点闪烁高亮（短暂反馈，告知定位成功） */
+  .msg.flash-highlight {
+    animation: agent-flash 1.2s ease-out;
+  }
+  @keyframes agent-flash {
+    0%   { box-shadow: 0 0 0 0 rgba(var(--c-accent-rgb), 0.6); }
+    20%  { box-shadow: 0 0 0 4px rgba(var(--c-accent-rgb), 0.45); }
+    100% { box-shadow: 0 0 0 0 rgba(var(--c-accent-rgb), 0); }
+  }
+
   /* Todo 固定面板（有 todos 时常驻在消息区与输入区之间，实时反映完成状态） */
   .todos-panel {
     flex-shrink: 0;
@@ -1370,6 +1555,16 @@ export const template = `
         </div>
         <!-- 回到底部悬浮圆球 -->
         <button class="scroll-bottom-btn" id="agent-scroll-bottom-btn" title="${_t("滚动到底部")}">↓</button>
+        <!-- 悬浮「对话记录导航」按钮：点击展开右侧面板，列出当前会话的所有消息，点击跳转 -->
+        <button class="agent-outline-fab" id="agent-outline-fab" title="${_t("对话记录导航")}">📑<span class="outline-fab-badge" id="agent-outline-fab-badge" style="display:none;"></span></button>
+        <!-- 悬浮消息大纲面板 -->
+        <div class="agent-outline-panel" id="agent-outline-panel">
+          <div class="agent-outline-header">
+            <span class="agent-outline-title">📑 ${_t("对话记录")}<span class="agent-outline-count" id="agent-outline-count">0</span></span>
+            <button class="agent-outline-close" id="agent-outline-close" title="${_t("关闭")}">✕</button>
+          </div>
+          <div class="agent-outline-list" id="agent-outline-list"></div>
+        </div>
       </div>
 
       <!-- Todo 固定面板（有 todos 时显示，实时反映完成状态） -->
