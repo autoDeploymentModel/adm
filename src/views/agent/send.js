@@ -11,6 +11,7 @@ import { newConversation, renderConversationList } from "./session.js";
 import { refreshAgentInfo, reloadAgentConfig } from "./model.js";
 import { clearPendingFiles } from "./attach.js";
 import { armAutoContinue, resetAutoContinue } from "./autocontinue.js";
+import { clearAttachedSkillsAfterSend } from "./skill_selector.js";
 
 // ===== 发送消息 =====
 
@@ -240,6 +241,8 @@ export async function sendMessage() {
     }
     startSendSafetyTimer();
     updateContextUsage();
+    // 发送成功后清理已附加的技能（确保每轮仅附加一次，下次重新选择）
+    clearAttachedSkillsAfterSend();
   } catch (e) {
     if (foldIn) {
       // 折叠插入失败：不中断正在运行的当前轮，仅移除待插入的临时气泡并提示
