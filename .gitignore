@@ -28,12 +28,14 @@ src-tauri/llamacpp_all_version/*
 src-tauri/tauri/*
 src-tauri/binaries/
 admAgent
+.admAgent
+.agents
+_admagent_new.json
+_admagent*.json
 .catpaw
 .mimocode
 .workbuddy
 .codely*
 tmp
 .vscode
-.admAgent
-.agents
 codely*
