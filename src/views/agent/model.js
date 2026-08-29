@@ -230,6 +230,9 @@ export function updateModelDropdown() {
     providerModelCount[c.providerId] = (providerModelCount[c.providerId] || 0) + 1;
   });
 
+  // 按名称排序，避免服务端 provider 遍历顺序不稳定导致列表位置每次刷新都变化
+  cloudEntries.sort(function(a, b) { return a.name.localeCompare(b.name); });
+
   cloudEntries.forEach(function(p) {
     var item = document.createElement("div");
     var isSelected = currentProvider === p.key ||
