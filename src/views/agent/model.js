@@ -171,6 +171,20 @@ export function resolveAgentModel(providerKey) {
   return { provider: providerKey, model: slugifyModelId(p ? p.name : providerKey) };
 }
 
+// 内置隐藏模型名单：不再展示在 Agent 模型下拉中
+// 用数组 + indexOf 逐项精确匹配，避免对象属性查找命中 Object 原型链成员（constructor/toString 等）；
+// 任一项参数（model id / name / provider key）命中即隐藏。
+var HIDDEN_BUILTIN_MODELS = ["ghost"];
+
+function isHiddenBuiltinModel(a, b, c) {
+  var vals = [a, b, c];
+  for (var i = 0; i < vals.length; i++) {
+    if (!vals[i]) continue;
+    if (HIDDEN_BUILTIN_MODELS.indexOf(String(vals[i]).toLowerCase()) !== -1) return true;
+  }
+  return false;
+}
+
 // 合并本地模型 + 云端模型渲染下拉列表
 export function updateModelDropdown() {
   var dropdown = document.getElementById("agent-model-dropdown");
@@ -180,12 +194,11 @@ export function updateModelDropdown() {
 
   var currentProvider = S.settings.agent_default_provider || "local";
 
-  // 本地模型 - 统一显示一条入口
+  // 本地模型 - 统一显示一条入口（同时只能启动 1 个模型，所以不显示数量前缀）
   var localItem = document.createElement("div");
   var isLocalSelected = currentProvider === "local" || currentProvider.startsWith("local:");
   localItem.className = "model-item" + (isLocalSelected ? " selected" : "");
-  var localLabel = S.localModels.length > 0 ? S.localModels.length + " Local Models" : "Local Model";
-  localItem.innerHTML = '<span class="model-item-name">🏠 ' + localLabel + '</span><span class="model-item-ctx">' + _t("本地") + '</span>';
+  localItem.innerHTML = '<span class="model-item-name">🏠 Local Models</span><span class="model-item-ctx">' + _t("本地") + '</span>';
   localItem.addEventListener("click", function() {
     switchModel("local", "Local Model", 0);
   });
@@ -198,8 +211,10 @@ export function updateModelDropdown() {
     var seenKeys = {};
     S.serverProviders.forEach(function(sp) {
       if (!sp || sp.id === "local") return;
+      if (isHiddenBuiltinModel(sp.id, sp.name)) return;
       (Array.isArray(sp.models) ? sp.models : []).forEach(function(m) {
         if (!m || !m.id) return;
+        if (isHiddenBuiltinModel(m.id, m.name)) return;
         var key = sp.id + "/" + m.id;
         // 兼容尚未自愈的历史重复数据：同一 provider/model 只展示一条
         if (seenKeys[key]) return;
@@ -218,9 +233,11 @@ export function updateModelDropdown() {
   } else if (!S.serverInfo) {
     // 仅在没有运行中服务时回退磁盘配置；服务存在但快照请求失败时不展示未经确认的云端模型。
     S.providers.forEach(function(p) {
-      if (!S.pendingProviderKeys[p.key]) {
-        cloudEntries.push({ key: p.key, providerId: p.key, name: p.name, context_window: p.context_window || 0, supports_images: p.supports_images === true });
-      }
+      if (S.pendingProviderKeys[p.key]) return;
+      // 磁盘配置下 model_id 取的是 providers.<key>.models[0]（见 list_cloud_providers），
+      // 离线态只能启动该模型，故命中即隐藏整个 provider 行；快照路径按单模型粒度过滤。
+      if (isHiddenBuiltinModel(p.key, p.model_id || "", p.name || "")) return;
+      cloudEntries.push({ key: p.key, providerId: p.key, name: p.name, context_window: p.context_window || 0, supports_images: p.supports_images === true });
     });
   }
 

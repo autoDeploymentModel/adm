@@ -2,7 +2,7 @@
 import { t as _t } from "../../i18n.js";
 import { S, invoke, listen, store } from "./store.js";
 import { api } from "./api.js";
-import { getErrorMessage, classifyError, ERROR_QUOTA, ERROR_STEP_CAP } from "./error.js";
+import { getErrorMessage, classifyError, ERROR_QUOTA, ERROR_STEP_CAP, ERROR_CANCEL } from "./error.js";
 import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showInfo, showChoice, reportError, updateContextUsage } from "./ui.js";
 import { renderMessages, renderTodos } from "./render.js";
 import { loadConversations, refreshMessages, renderConversationList, selectConversation, syncWxFollowSession } from "./session.js";
@@ -129,6 +129,9 @@ export async function setupSSEListener() {
             // 切回时可见，不打扰当前 tab。触顶非故障，用独立文案避免误导为"运行出错"。
             if (classifyError(bgInner.error) === ERROR_STEP_CAP) {
               appendErrorBubble(bgInner.error, { prefix: _t("后台工作区步数触顶: "), wsId: eventWsId, sessionId: bgInner.session_id });
+            } else if (bgInner.cancelled || classifyError(bgInner.error) === ERROR_CANCEL) {
+              // 取消不是运行故障：跳过气泡（与 active workspace「本轮对话已取消」分支同语义）
+              console.log("[agent] 后台工作区运行取消，跳过错误气泡:", bgInner.session_id || "");
             } else {
               appendErrorBubble(bgInner.error, { prefix: _t("后台工作区运行出错: "), wsId: eventWsId, sessionId: bgInner.session_id });
             }
@@ -333,7 +336,14 @@ function handleSSEEvent(payload, ctx) {
       // 否则服务端中断本轮时 UI 静默停止，表现为"会话突然中断"却无任何说明
       if (actualData && actualData.error) {
         console.warn("[agent] run_complete 携带错误:", JSON.stringify(actualData));
-        if (classifyError(actualData.error) === ERROR_STEP_CAP) {
+        // 服务端取消时会把 context.Canceled 错误放进 error 字段（error="context canceled" cancelled=true），
+        // 不能当成运行失败：按用户主动取消走「本轮对话已取消」分支，避免误标"中断"
+        if (actualData.cancelled || classifyError(actualData.error) === ERROR_CANCEL) {
+          showError(_t("本轮对话已取消"));
+          resetAutoContinue();
+          // 取消后状态栏切回就绪（排队接管时新运行即将开始，保持 busy 由 run_start 接管）
+          if (!tookOverQueued) updateStatusBar("ready", null, S.contextUsage.used);
+        } else if (classifyError(actualData.error) === ERROR_STEP_CAP) {
           // 步数触顶：模型仍在干活但本轮 64 步预算耗尽，不是故障。
           // 弹决策卡让用户选"继续干活"（人工确认，绝不静默连跑）或"终止查原因"。
           resetAutoContinue();
@@ -359,6 +369,8 @@ function handleSSEEvent(payload, ctx) {
           // 未产生任何输出时不自动续跑（避免继续空转烧 token）
           resetAutoContinue();
         } else if (actualData && actualData.cancelled) {
+          // error 字段空 + cancelled=true：服务端在某些路径（少见）下只标 cancelled 不带 error；
+          // 大多数取消场景已在上方 ERROR_CANCEL 分支处理，这里兜底保持原行为
           showError(_t("本轮对话已取消"));
           resetAutoContinue();
         } else {
@@ -367,8 +379,9 @@ function handleSSEEvent(payload, ctx) {
           // runStats 用 store 处理前的快照：store.completeRun 非接管时已清空 S.runStats
           if (!tookOverQueued) maybeAutoContinue(actualData, ctx.prevRunStats || S.runStats);
         }
-        // 排队接管时仍有运行在队列中，状态栏保持运行中，不切回就绪
-        if (!tookOverQueued) updateStatusBar("ready", null, S.contextUsage.used);
+        // 排队接管时仍有运行在队列中，状态栏保持运行中，不切回就绪；
+        // empty_output 分支上面已置 error 态（模型未产生有效输出），此处不得覆盖
+        if (!tookOverQueued && (!actualData || !actualData.empty_output)) updateStatusBar("ready", null, S.contextUsage.used);
       }
       // 若切换模型时会话繁忙导致 /agent/update 未生效，本轮结束后立即重试重载
       if (S.pendingModelReload) {
