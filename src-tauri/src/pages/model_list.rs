@@ -6,6 +6,7 @@ use crate::common::config;
 use crate::common::utils::download::download_with_resume;
 use crate::bail;
 use crate::dbg_log;
+use crate::pages::agent::api_debug_log;
 
 use std::collections::HashMap;
 use tauri::Emitter;
@@ -395,7 +396,9 @@ pub async fn start_model(
                 if path.is_file() {
                     if let Some(name) = path.file_name() {
                         let name_str = name.to_string_lossy();
-                        if name_str.starts_with("mmproj") && name_str.ends_with(".gguf") {
+                        // HF 命名两种风格都要覆盖：`mmproj-*.gguf` / `<模型名>.mmproj-*.gguf`
+                        let name_lower = name_str.to_lowercase();
+                        if name_lower.contains("mmproj") && name_str.ends_with(".gguf") {
                             mmproj_path = Some(path);
                             break;
                         }
@@ -541,6 +544,16 @@ pub async fn start_model(
     args.push("--verbose".to_string());
 
     dbg_log!("[DEBUG] llama-server args: {:?}", args);
+
+    api_debug_log(|| {
+        format!(
+            "Model: 启动模型 model_id={} port={} full_command={} {:?}",
+            model_id,
+            port,
+            server_path.to_string_lossy(),
+            args
+        )
+    });
 
     app.emit(
         "model-log",

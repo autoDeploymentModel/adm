@@ -545,7 +545,8 @@ function isModelDownloaded(modelId) {
     return true;
   }
   if (model && model.model_type === "视觉多模态理解") {
-    return local.files.some(f => f.startsWith("mmproj"));
+    // 与 Rust start_model 一致：mmproj 文件名两种风格均生效（mmproj-*.gguf / <模型名>.mmproj-*.gguf），大小写不敏感
+    return local.files.some(f => f.toLowerCase().includes("mmproj"));
   }
   return true;
 }
@@ -878,11 +879,14 @@ function handleTauriEvent(type, payload) {
       if (t === "mmproj") {
         delete st.downloadingMmproj[model_id];
         delete st.downloadingModels[model_id];
+        const mmprojModel = st.modelList.find(m => m.model_id === model_id);
+        const mmprojFile = mmprojModel && mmprojModel.model_mmproj ? getUrlFilename(mmprojModel.model_mmproj) : null;
+        const realName = mmprojFile || "mmproj-downloaded.gguf";
         const local = st.localModels.find(m => m.model_id === model_id);
         if (local) {
-          if (!local.files.some(f => f.startsWith("mmproj"))) local.files.push("mmproj-downloaded.gguf");
+          if (!local.files.some(f => f.toLowerCase().includes("mmproj"))) local.files.push(realName);
         } else {
-          st.localModels.push({ model_id: model_id, files: ["mmproj-downloaded.gguf"] });
+          st.localModels.push({ model_id: model_id, files: [realName] });
         }
         delete st.partFiles[model_id];
         renderModelTable();
