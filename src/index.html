@@ -97,9 +97,9 @@
       display: flex;
       flex-direction: column;
       background: var(--c-bg);
+      transition: opacity 0.16s ease-out;
+      will-change: opacity;
     }
-
-    #view-root.hidden { display: none; }
 
     #hardware-bar {
       display: flex;
@@ -258,9 +258,67 @@
     .llamacpp-progress-fill { height: 100%; background: var(--c-accent); border-radius: 3px; transition: width 0.3s ease; }
     .llamacpp-status-text { font-size: 12px; color: var(--c-text-3); margin-top: 6px; text-align: center; }
 
-    /* 视图切换 loading 动画（模块加载超时才显示，避免瞬时切换时 spinner 闪烁） */
-    .view-loading { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 14px; }
-    .view-loading-spinner { width: 36px; height: 36px; border: 3px solid var(--c-border); border-top-color: var(--c-accent); border-radius: 50%; animation: spin 0.8s linear infinite; }
+    /* ===== 视图切换全局过渡 =====
+       流程：fade-out 当前视图（160ms）→ 可选展示顶部进度条 + 居中 spinner →
+       挂载新视图（opacity:0）→ fade-in（200ms）。
+       进度条 / spinner 仅在模块加载超过 180ms 才出现，避免瞬时切换闪烁；
+       fade-out / fade-in 始终执行，给用户视觉连续性。
+       注意：这里只用 opacity 做过渡，不用 transform —— view-root 内挂着
+       .modal-overlay 等 position:fixed 元素，transform 会让 root 成为它们的
+       containing block，过渡期间弹窗会错位。 */
+    #view-root.view-leaving {
+      opacity: 0;
+      pointer-events: none;
+    }
+    #view-root.view-entering {
+      opacity: 0;
+      transition: none; /* 挂载后下一帧再加 transition 才会播 */
+    }
+    #view-root.view-active {
+      opacity: 1;
+      transition: opacity 0.2s ease-out;
+    }
+
+    /* 顶部细线进度条（模块加载超阈值时显示） */
+    #view-progress {
+      position: fixed;
+      top: 0; left: 0;
+      height: 2px;
+      width: 0;
+      background: linear-gradient(90deg,
+        rgba(var(--c-accent-rgb), 0.6),
+        var(--c-accent));
+      box-shadow: 0 0 6px rgba(var(--c-accent-rgb), 0.5);
+      z-index: 100;
+      opacity: 0;
+      transition: opacity 0.12s ease-out;
+      pointer-events: none;
+    }
+    #view-progress.show { opacity: 1; }
+    #view-progress.anim { animation: view-progress 1.2s ease-in-out infinite; }
+    @keyframes view-progress {
+      0%   { width: 0%;   margin-left: 0%; }
+      50%  { width: 60%;  margin-left: 20%; }
+      100% { width: 0%;   margin-left: 100%; }
+    }
+
+    /* 视图切换 loading 动画（模块加载超阈值才显示，避免瞬时切换时 spinner 闪烁） */
+    .view-loading {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      gap: 14px;
+    }
+    .view-loading-spinner {
+      width: 36px;
+      height: 36px;
+      border: 3px solid var(--c-border);
+      border-top-color: var(--c-accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
     .view-loading-text { font-size: 13px; color: var(--c-text-3); }
 
     .global-toast {
@@ -313,6 +371,8 @@
       <div id="update-content"></div>
     </div>
   </div>
+
+  <div id="view-progress"></div>
 
   <div id="app">
     <div id="view-root"></div>
@@ -798,13 +858,35 @@
 
     let currentView = null;
     let renderSeq = 0;
+    const TRANSITION_FADE_OUT_MS = 160;
+    const TRANSITION_FADE_IN_MS = 200;
+    const TRANSITION_LOADING_THRESHOLD_MS = 180;
 
-    // 卸载旧视图并展示 loading 动画（仅在模块加载超过阈值时调用）
-    function showViewLoading() {
-      if (currentView && currentView.unmount) { try { currentView.unmount(); } catch (_) {} }
-      currentView = null;
-      document.getElementById("view-root").innerHTML =
+    function setProgress(active) {
+      const bar = document.getElementById("view-progress");
+      if (!bar) return;
+      if (active) { bar.classList.add("show", "anim"); }
+      else { bar.classList.remove("show", "anim"); bar.style.width = ""; bar.style.marginLeft = ""; }
+    }
+
+    function renderLoadingInto(root) {
+      root.innerHTML =
         '<div class="view-loading"><div class="view-loading-spinner"></div><div class="view-loading-text">' + t("页面加载中...") + '</div></div>';
+    }
+
+    function renderErrorInto(root, msg) {
+      root.innerHTML = '<div style="padding:40px;color:#ff6b6b;">' + t("页面加载失败: ") + msg + '</div>';
+    }
+
+    // 等待下一帧（保证 transition 真的生效）
+    function nextFrame() {
+      return new Promise(function (resolve) {
+        requestAnimationFrame(function () { requestAnimationFrame(resolve); });
+      });
+    }
+
+    function sleep(ms) {
+      return new Promise(function (resolve) { setTimeout(resolve, ms); });
     }
 
     async function renderRoute() {
@@ -825,17 +907,40 @@
         });
       }
 
-      // Agent 页面需提前检查依赖（模型运行/admAgent 存在），入口统一走 goAgent()，
-      // 直接输入 #/agent 的路由也照常加载，由 agent 视图自身做失败处理
       const route = routes[path] || routes["/list"];
       setActiveNav(route.nav);
 
-      // 先异步加载模块（已缓存时瞬时完成），旧视图保持显示避免黑屏闪烁；
-      // 超过 120ms 未就绪才切换为 loading 动画
-      const loadingTimer = setTimeout(function() {
-        // 只允许当前最新路由展示 loading；旧路由的延迟定时器不得卸载已挂载的新视图
-        if (seq === renderSeq) showViewLoading();
-      }, 120);
+      const root = document.getElementById("view-root");
+
+      // 初次渲染（还没有任何 view）：跳过 fade-out，直接挂载并 fade-in
+      const isFirstRender = !currentView && !root.querySelector("[data-view-mounted]");
+
+      // ===== Phase 1: fade-out 旧视图 =====
+      if (!isFirstRender) {
+        root.classList.remove("view-active");
+        root.classList.add("view-leaving");
+        await sleep(TRANSITION_FADE_OUT_MS);
+        if (seq !== renderSeq) return; // 期间又路由了，丢弃
+        // 卸载旧视图
+        if (currentView && currentView.unmount) {
+          try { currentView.unmount(); } catch (_) {}
+        }
+        currentView = null;
+        root.classList.remove("view-leaving");
+        // 立即清空旧内容：否则移除 view-leaving 后旧内容会从 opacity:0 淡回 1，
+        // 加载期间用户会看到"淡出→淡入→变 spinner"的闪烁
+        root.innerHTML = "";
+      }
+
+      if (seq !== renderSeq) return;
+
+      // ===== Phase 2: 加载模块 + 可选 loading =====
+      const loadingTimer = setTimeout(function () {
+        if (seq !== renderSeq) return;
+        setProgress(true);
+        renderLoadingInto(root);
+      }, TRANSITION_LOADING_THRESHOLD_MS);
+
       let mod = null;
       let loadErr = null;
       try {
@@ -844,28 +949,42 @@
         loadErr = e;
       }
       clearTimeout(loadingTimer);
+      setProgress(false);
+
       if (seq !== renderSeq) return; // 加载期间路由已切换，本次渲染作废
 
-      const root = document.getElementById("view-root");
-      if (currentView && currentView.unmount) currentView.unmount();
-      currentView = null;
+      // ===== Phase 3: 挂载并 fade-in =====
       root.innerHTML = "";
 
       if (loadErr) {
         console.error("[index] 加载视图失败:", loadErr);
-        root.innerHTML = '<div style="padding:40px;color:#ff6b6b;">' + t("页面加载失败: ") + loadErr + '</div>';
+        renderErrorInto(root, loadErr);
         return;
       }
 
       try {
         const view = mod.default;
-        currentView = view;
         console.log("[index] 加载视图模块:", path);
+        // mount 成功后才记账 currentView：mount 抛错时不把坏视图暴露给后续导航
         view.mount(root, params);
+        currentView = view;
+        // 给视图一个标记，便于下次识别 isFirstRender
+        const first = root.firstElementChild;
+        if (first) first.setAttribute("data-view-mounted", "1");
+        // 进入态：先 opacity 0，下一帧加 view-active 触发 transition
+        root.classList.add("view-entering");
+        await nextFrame();
+        if (seq !== renderSeq) return;
+        root.classList.remove("view-entering");
+        root.classList.add("view-active");
+        // fade-in 完成后清理标记（保留 class 让后续切走还能 fade-out）
+        setTimeout(function () {
+          if (seq === renderSeq) root.classList.remove("view-active");
+        }, TRANSITION_FADE_IN_MS + 30);
         console.log("[index] 视图已挂载:", path);
       } catch (e) {
         console.error("[index] 挂载视图失败:", e);
-        root.innerHTML = '<div style="padding:40px;color:#ff6b6b;">' + t("页面加载失败: ") + e + '</div>';
+        renderErrorInto(root, e);
       }
     }
 
