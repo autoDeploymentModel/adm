@@ -2,7 +2,7 @@
 import { t as _t } from "../../i18n.js";
 import { S, invoke, listen, store } from "./store.js";
 import { api } from "./api.js";
-import { getErrorMessage, classifyError, ERROR_QUOTA, ERROR_STEP_CAP, ERROR_CANCEL } from "./error.js";
+import { getErrorMessage, classifyError, friendlyError, ERROR_STEP_CAP, ERROR_CANCEL } from "./error.js";
 import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showInfo, showChoice, reportError, updateContextUsage } from "./ui.js";
 import { renderMessages, renderTodos } from "./render.js";
 import { loadConversations, refreshMessages, renderConversationList, selectConversation, syncWxFollowSession } from "./session.js";
@@ -197,8 +197,9 @@ function reconnectSSE() {
 
 // 常驻错误气泡：错误以本地消息形式追加进聊天列表（不落库 → 下次请求不会
 // 跟随上下文提交给 LLM），替代 3s 自动消失的弹窗；切会话/刷新页面后随会话
-// 状态清理。quota 类错误沿用"余额不足"文案；同一会话 3 秒内相同文本去重
-//（输出退化场景服务端会同时发 agent_event error + run_complete error）。
+// 状态清理。文本统一走 error.js 的 friendlyError（按当前 UI 语言生成友好提示，
+// 中文界面不出现英文报错）；quota 类错误沿用"余额不足"文案；同一会话 3 秒内
+// 相同错误去重（输出退化场景服务端会同时发 agent_event error + run_complete error）。
 var lastErrorBubble = null;
 function appendErrorBubble(err, opts) {
   opts = opts || {};
@@ -206,12 +207,8 @@ function appendErrorBubble(err, opts) {
   var sid = opts.sessionId || S.currentConvId;
   var base = getErrorMessage(err);
   if (!base) return;
-  var text;
-  if (classifyError(err) === ERROR_QUOTA) {
-    text = _t("余额不足，任务中断");
-  } else {
-    text = (opts.prefix || "") + base + (opts.hint || "");
-  }
+  var text = friendlyError(err, { prefix: opts.prefix, hint: opts.hint });
+  if (!text) return;
   var now = Date.now();
   // 同一会话 3s 内相同核心错误只显示一次（agent_event 与 run_complete 的
   // prefix 不同，用 base 而非最终文本比较，避免同一次失败双气泡）

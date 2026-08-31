@@ -320,6 +320,7 @@ const EN = {
   "输入消息，Enter 发送，Shift+Enter 换行": "Type a message. Enter to send, Shift+Enter for a new line",
   "消息不能为空": "Message cannot be empty",
   "发送失败: ": "Send failed: ",
+  "消息发送失败（未影响当前运行）: ": "Message send failed (current run unaffected): ",
   "正在思考...": "Thinking...",
   "任务执行中": "Task in progress",
   "余额不足，任务中断": "Insufficient balance, task interrupted",

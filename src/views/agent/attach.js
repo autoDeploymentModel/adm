@@ -2,7 +2,7 @@
 import { t as _t } from "../../i18n.js";
 import { S, invoke } from "./store.js";
 import { showError, showInfo } from "./ui.js";
-import { getErrorMessage } from "./error.js";
+import { friendlyError } from "./error.js";
 
 // ===== 附件处理 =====
 var ATTACH_MAX_SIZE = 1 * 1024 * 1024;  // 超过此大小的图片进行压缩 (1MB)
@@ -252,7 +252,7 @@ export async function addPastedPaths(paths) {
     try {
       res = await invoke("read_attachment_file", { path: path });
     } catch (e) {
-      showError(_t("读取文件失败: ") + path + " (" + getErrorMessage(e) + ")");
+      showError(_t("读取文件失败: ") + path + " (" + friendlyError(e, { inline: true }) + ")");
       continue;
     }
     if (!res || !res.base64) {

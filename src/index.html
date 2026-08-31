@@ -424,6 +424,8 @@
     // 预加载 i18n 模块并同步绑定 t()（顶层 await，后续所有动态文本走 t）
     const _i18n = await import("./i18n.js");
     const t = _i18n.t;
+    // 统一错误友好提示（语言感知：中文界面全中文，英文界面英文提示+原文）
+    const _errMod = await import("./views/agent/error.js");
     let _settingsLang = null;
     try { _settingsLang = (await invoke("load_settings")).language; } catch (_) {}
     _i18n.syncLanguageFromSettings({ language: _settingsLang });
@@ -668,7 +670,7 @@
       try {
         await invoke("download_and_extract_llamacpp", { url: pendingLlamacppUrl });
       } catch (e) {
-        if (statusText) statusText.textContent = t("下载失败: ") + e;
+        if (statusText) statusText.textContent = _errMod.friendlyError(e, { prefix: "下载失败: " });
         if (progressFill) progressFill.style.width = "0%";
         if (startBtn) { startBtn.style.display = ""; startBtn.textContent = t("重试"); }
       }
@@ -717,7 +719,7 @@
         }
         location.hash = "#/agent";
       } catch (e) {
-        showComingSoon(t("操作失败: ") + e);
+        showComingSoon(_errMod.friendlyError(e, { prefix: "操作失败: " }));
       }
     }
 

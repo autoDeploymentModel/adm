@@ -1,5 +1,6 @@
 // @ts-nocheck -- 历史视图暂未类型化（jsconfig checkJs 全局开启，新代码请勿加此标记）
 import { t as _t } from "../i18n.js";
+import { friendlyError } from "./agent/error.js";
 const template = `
 <style>
   /* 全局 reset（*）由 index.html 壳层统一提供，视图内不重复定义；选择器尽量限定在本视图容器内 */
@@ -423,7 +424,7 @@ async function startDownload() {
       return;
     }
     document.getElementById('sd-status').textContent = _t('✗ 错误');
-    showToast(_t("SD 下载失败: ") + e);
+    showToast(friendlyError(e, { prefix: "SD 下载失败: " }));
   }
 }
 
@@ -445,7 +446,7 @@ async function initPage() {
     }
   } catch (e) {
     document.getElementById('sd-status').textContent = _t('✗ 错误');
-    showToast(_t("SD 初始化失败: ") + e);
+    showToast(friendlyError(e, { prefix: "SD 初始化失败: " }));
   }
 }
 
@@ -484,7 +485,7 @@ async function handleGenerate() {
         modelDiffusion = model.model_diffusion || null;
         modelVae = model.model_vae || null;
       }
-    } catch (e) { showToast(_t("获取模型信息失败: ") + e); }
+    } catch (e) { showToast(friendlyError(e, { prefix: "获取模型信息失败: " })); }
 
     if (!modelUrl) {
       showToast(_t("未找到模型文件信息"));
@@ -505,7 +506,7 @@ async function handleGenerate() {
       modelVae: modelVae
     });
   } catch (e) {
-    showToast(_t("生成失败: ") + e);
+    showToast(friendlyError(e, { prefix: "生成失败: " }));
     btn.textContent = _t("生成图片");
     btn.disabled = false;
     isGenerating = false;
@@ -518,7 +519,7 @@ async function saveAsImage() {
     await invoke()("save_sd_image_as", { sourcePath: currentImagePath });
   } catch (e) {
     if (e && e.indexOf && e.indexOf("用户取消了保存") !== -1) return;
-    showToast(_t("保存失败: ") + e);
+    showToast(friendlyError(e, { prefix: "保存失败: " }));
   }
 }
 
@@ -552,7 +553,7 @@ function handleTauriEvent(type, payload) {
       }
       break;
     case "sd-error":
-      showToast(_t("生成出错: ") + (payload.message || _t("未知错误")));
+      showToast(friendlyError(payload.message, { prefix: "生成出错: " }) || _t("生成出错: ") + _t("未知错误"));
       const ebtn = document.getElementById('generate-btn');
       if (ebtn) { ebtn.textContent = _t("生成图片"); ebtn.disabled = false; }
       isGenerating = false;
