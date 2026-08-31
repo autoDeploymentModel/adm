@@ -1,5 +1,6 @@
 // @ts-nocheck -- 历史视图暂未类型化（jsconfig checkJs 全局开启，新代码请勿加此标记）
 import { t as _t } from "../i18n.js";
+import { friendlyError } from "./agent/error.js";
 const template = `
 <style>
   /* 全局 reset（*）由 index.html 壳层统一提供，视图内不重复定义；选择器尽量限定在本视图容器内 */
@@ -753,7 +754,7 @@ async function handleDownload(btn) {
     console.log("[model_list] 下载模型 invoke 完成:", modelId);
   } catch (e) {
     console.error("[model_list] 下载失败:", e);
-    showToast(_t("下载失败: ") + e);
+    showToast(friendlyError(e, { prefix: "下载失败: " }));
     clearDownloadSpeed(modelId);
     if (btn) {
       btn.textContent = _t("下载");
@@ -784,7 +785,7 @@ async function handleStart(btn) {
     console.log("[model_list] 启动模型 invoke 完成:", modelId);
   } catch (e) {
     console.error("[model_list] 启动失败:", e);
-    showToast(_t("启动失败: ") + e);
+    showToast(friendlyError(e, { prefix: "启动失败: " }));
     renderModelTable();
   }
 }
@@ -797,7 +798,7 @@ async function handleStop(btn) {
     S().runningModelPort = null;
     renderModelTable();
   } catch (e) {
-    showToast(_t("停止失败: ") + e);
+    showToast(friendlyError(e, { prefix: "停止失败: " }));
   }
 }
 
@@ -830,7 +831,7 @@ async function handleDelete(modelId) {
     delete S().partFiles[modelId];
     renderModelTable();
   } catch (e) {
-    showToast(_t("删除失败: ") + e);
+    showToast(friendlyError(e, { prefix: "删除失败: " }));
   }
 }
 
@@ -954,7 +955,7 @@ function handleTauriEvent(type, payload) {
     case "download-error": {
       delete st.downloadingModels[model_id];
       clearDownloadSpeed(model_id);
-      showToast(_t("下载失败 [") + model_id + _t("]: ") + error);
+      showToast(friendlyError(error, { prefix: _t("下载失败 [") + model_id + _t("]: ") }));
       renderModelTable();
       break;
     }
@@ -974,7 +975,7 @@ case "model-started": {
       break;
     }
     case "model-error": {
-      showToast(_t("模型错误 [") + model_id + _t("]: ") + error);
+      showToast(friendlyError(error, { prefix: _t("模型错误 [") + model_id + _t("]: ") }));
       break;
     }
   }
@@ -1035,7 +1036,7 @@ if (status.running) {
   try {
     st.modelList = await invoke()("fetch_model_list");
   } catch (e) {
-    showToast(_t("获取模型列表失败: ") + e);
+    showToast(friendlyError(e, { prefix: "获取模型列表失败: " }));
   }
 
   await populateTypeFilter();

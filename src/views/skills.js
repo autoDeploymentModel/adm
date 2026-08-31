@@ -3,6 +3,7 @@
 // 安装流程：卡片「安装」→ 弹窗选择位置（全局/当前项目）→ Rust 下载 zip → 校验 → 解压 → 删 zip
 // 本地上传：文件选择器 → Rust 先校验（target=null）→ 通过后弹位置选择 → 正式安装
 import { t as _t } from "../i18n.js";
+import { friendlyError } from "./agent/error.js";
 
 /** @type {(...args: any[]) => Promise<any>} */
 const invoke = window.__adm_invoke;
@@ -731,7 +732,7 @@ async function installStoreItem(item, btn) {
         } catch (e2) {
           const e2p = parseSkillError(e2);
           apiLog("error", "覆盖安装「" + name + "」失败: " + e2p.message);
-          showToast(_t("安装失败: ") + e2p.message, true);
+          showToast(friendlyError(e2p.message, { prefix: "安装失败: " }), true);
         }
       }
     } else {
@@ -801,7 +802,7 @@ async function uploadSkillPack() {
         } catch (e2) {
           const e2p = parseSkillError(e2);
           apiLog("error", "上传覆盖安装「" + name + "」失败: " + e2p.message);
-          showToast(_t("安装失败: ") + e2p.message, true);
+          showToast(friendlyError(e2p.message, { prefix: "安装失败: " }), true);
         }
       }
     } else {

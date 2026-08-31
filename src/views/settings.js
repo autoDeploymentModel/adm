@@ -1,5 +1,6 @@
 // @ts-nocheck -- 历史视图暂未类型化（jsconfig checkJs 全局开启，新代码请勿加此标记）
 import { t as _t, setLanguage, getLanguage } from "../i18n.js";
+import { friendlyError } from "./agent/error.js";
 const template = `
 <style>
   /* 样式隔离约定：选择器限定在本视图容器内（id/class 带 settings- 前缀），
@@ -593,7 +594,7 @@ async function saveParams() {
     showToast(_t("设置已保存，重启模型后生效"));
   } catch (e) {
     console.error("[settings] 保存失败:", e);
-    showToast(_t("保存失败: ") + e, true);
+    showToast(friendlyError(e, { prefix: "保存失败: " }), true);
   }
 }
 
@@ -633,7 +634,7 @@ async function saveProxy() {
     showToast(_t("代理设置已保存"));
   } catch (e) {
     console.error("[settings] 保存代理设置失败:", e);
-    showToast(_t("保存失败: ") + e, true);
+    showToast(friendlyError(e, { prefix: "保存失败: " }), true);
   }
 }
 
@@ -696,7 +697,7 @@ async function deleteLlamacpp() {
     document.getElementById("v-llamacpp").textContent = _t("未安装");
     showToast(_t("llamacpp 文件夹已删除"), false);
   } catch (e) {
-    showToast(_t("删除失败: ") + e, true);
+    showToast(friendlyError(e, { prefix: "删除失败: " }), true);
   }
 }
 
@@ -853,7 +854,7 @@ async function submitWxbotCode() {
     await invoke()("submit_ilink_verify_code", { code: code });
     hideWxbotCode();
   } catch (e) {
-    showToast(_t("提交配对码失败: ") + e, true);
+    showToast(friendlyError(e, { prefix: "提交配对码失败: " }), true);
   }
 }
 
@@ -877,7 +878,7 @@ async function setupWxbotPanel() {
       await invoke()("start_ilink_login");
     } catch (e) {
       hideWxbotQr();
-      showToast(_t("启动绑定失败: ") + e, true);
+      showToast(friendlyError(e, { prefix: "启动绑定失败: " }), true);
     }
   });
   document.getElementById("wxbot-qr-cancel-btn").addEventListener("click", async function () {
@@ -903,7 +904,7 @@ async function setupWxbotPanel() {
         showToast(_t("微信 Bot 已启动"));
       }
     } catch (e) {
-      showToast(_t("操作失败: ") + e, true);
+      showToast(friendlyError(e, { prefix: "操作失败: " }), true);
     }
     refreshWxbotStatus();
   });
@@ -914,7 +915,7 @@ async function setupWxbotPanel() {
       await invoke()("unbind_ilink");
       showToast(_t("已解绑微信 Bot"));
     } catch (e) {
-      showToast(_t("解绑失败: ") + e, true);
+      showToast(friendlyError(e, { prefix: "解绑失败: " }), true);
     }
     refreshWxbotStatus();
   });
@@ -931,7 +932,7 @@ async function setupWxbotPanel() {
         hideWxbotQr();
         hideWxbotCode();
         if (p.state === "running") showToast(_t("微信 Bot 已连接"));
-        if (p.state === "error" && p.error) showToast(_t("微信 Bot: ") + p.error, true);
+        if (p.state === "error" && p.error) showToast(friendlyError(p.error, { prefix: "微信 Bot: " }), true);
       }
       refreshWxbotStatus();
     });

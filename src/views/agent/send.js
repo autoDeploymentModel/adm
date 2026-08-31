@@ -4,7 +4,7 @@ import { S, invoke, store } from "./store.js";
 import { api } from "./api.js";
 import { autoResize, generateRunId } from "./utils.js";
 import { log } from "./log.js";
-import { getErrorMessage } from "./error.js";
+import { friendlyError } from "./error.js";
 import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, showInfo, reportError, updateContextUsage } from "./ui.js";
 import { renderMessages } from "./render.js";
 import { newConversation, renderConversationList } from "./session.js";
@@ -158,7 +158,7 @@ export async function sendMessage() {
           realPath = await invoke("save_attachment_file", { file_name: f.name, base64_content: f.base64 });
         } catch (e) {
           console.warn("[agent] 附件落盘失败:", e);
-          showError(_t("附件保存失败，已取消发送: ") + f.name + " (" + getErrorMessage(e) + ")");
+          showError(_t("附件保存失败，已取消发送: ") + f.name + " (" + friendlyError(e, { inline: true }) + ")");
           return;
         }
       }
@@ -248,7 +248,7 @@ export async function sendMessage() {
       // 折叠插入失败：不中断正在运行的当前轮，仅移除待插入的临时气泡并提示
       store.deleteMessage(workspaceId, tempId);
       renderMessages();
-      showError(_t("消息发送失败（未影响当前运行）: ") + getErrorMessage(e));
+      showError(friendlyError(e, { prefix: "消息发送失败（未影响当前运行）: " }));
     } else if (wasBusyOther) {
       store.clearQueuedRun(workspaceId);
       updateSendButton();
@@ -260,7 +260,7 @@ export async function sendMessage() {
       updateStatusBar("ready", null, S.contextUsage.used);
     }
     if (!foldIn) {
-      store.appendMessage(workspaceId, { role: "error", content: _t("发送失败: ") + getErrorMessage(e), type: "error" });
+      store.appendMessage(workspaceId, { role: "error", content: friendlyError(e, { prefix: "发送失败: " }), type: "error" });
       renderMessages();
     }
   }

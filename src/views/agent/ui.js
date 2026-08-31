@@ -3,7 +3,7 @@ import { t as _t } from "../../i18n.js";
 import { S, store } from "./store.js";
 import { api } from "./api.js";
 import { formatTokens, isMsgAreaAtBottom } from "./utils.js";
-import { getErrorMessage, classifyError, ERROR_QUOTA } from "./error.js";
+import { getErrorMessage, friendlyError } from "./error.js";
 
 // 退出手动滚动模式（切换会话/工作区时调用，避免把旧会话的滚动位置带到新会话）
 export function exitManualScrollMode() {
@@ -315,20 +315,19 @@ export function showNotice(msg, level) {
 }
 
 // 统一错误展示入口：传入原始错误（字符串 / Error / 结构化对象均可），
-// 内部统一提取文本并分类；quota（余额不足/401）类错误直接显示"余额不足，任务中断"。
+// 内部统一提取文本、分类并按当前 UI 语言生成友好提示（中文界面全中文，
+// 英文界面英文提示 + 原始错误细节），不再把英文错误原文直接暴露给用户。
 /**
  * @param {*} err 原始错误
  * @param {{ prefix?: string, hint?: string, level?: "error"|"warn"|"info" }} [opts] prefix 前缀（如"保存设置失败："），hint 补充提示
  */
 export function reportError(err, opts) {
   opts = opts || {};
-  var msg = getErrorMessage(err);
-  if (!msg) return;
-  if (classifyError(err) === ERROR_QUOTA) {
-    showNotice(_t("余额不足，任务中断"), "error");
-    return;
-  }
-  showNotice((opts.prefix || "") + msg + (opts.hint || ""), opts.level || "error");
+  var text = friendlyError(err, opts);
+  if (!text) return;
+  // 原始错误只进日志，不进 UI（中文界面不出现英文报错）
+  console.warn("[agent] reportError 原始错误:", getErrorMessage(err));
+  showNotice(text, opts.level || "error");
 }
 
 export function showError(msg) {
