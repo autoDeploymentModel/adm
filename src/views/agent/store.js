@@ -421,10 +421,11 @@ class Store {
         break;
       case "run_complete":
         // 子 Agent（agent 工具嵌套调用）的 run_complete 携带复合 session_id
-        //（格式 `{parentMsgId}$$call_{toolCallId}`）且 run_id 为空，
+        //（格式 `{parentMsgId}$${toolCallId}`，tool call id 前缀随 provider 不同，
+        // 如 OpenAI `call_`、Qwen `chatcmpl-tool-`），且 run_id 继承父运行，
         // 绝不能让它误触发父运行的 completeRun（会清空 isSending/activeRun）。
         var rcSession = actualData.session_id || "";
-        if (typeof rcSession === "string" && rcSession.indexOf("$$call_") !== -1) {
+        if (typeof rcSession === "string" && rcSession.indexOf("$$") !== -1) {
           _log("debug", "STORE", "handleSSEEvent 跳过子 Agent run_complete session=" + rcSession.slice(0, 20) + "...");
           break;
         }
