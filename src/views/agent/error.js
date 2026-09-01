@@ -11,13 +11,16 @@
 import { getLanguage, t } from "../../i18n.js";
 
 /** 错误分类常量 */
-export var ERROR_QUOTA = "quota";       // 余额不足 / 401 / 授权失败
-export var ERROR_TIMEOUT = "timeout";   // 请求超时
-export var ERROR_NETWORK = "network";   // 连接失败 / server 未运行 / 断线
-export var ERROR_NOT_FOUND = "not_found"; // 资源不存在
-export var ERROR_CANCEL = "cancel";     // 已取消
-export var ERROR_STEP_CAP = "step_cap"; // 步数触顶（模型仍在干活但本轮预算耗尽，非故障）
-export var ERROR_UNKNOWN = "unknown";   // 其它
+export var ERROR_QUOTA = "quota";            // 余额不足 / 401 / API 密钥无效
+export var ERROR_USAGE_LIMIT = "usage_limit"; // 月度使用配额限制（如 OpenCode/Go GoUsageLimitError），区别于余额不足
+export var ERROR_RATE_LIMIT = "rate_limit";   // 速率限制（rpm/tpm exceeded）
+export var ERROR_TIMEOUT = "timeout";        // 请求超时
+export var ERROR_NETWORK = "network";        // 连接失败 / server 未运行 / 断线
+export var ERROR_NOT_FOUND = "not_found";    // 资源不存在
+export var ERROR_CONTEXT_OVERFLOW = "context_overflow"; // 上下文超出模型支持的长度
+export var ERROR_CANCEL = "cancel";          // 已取消
+export var ERROR_STEP_CAP = "step_cap";      // 步数触顶（模型仍在干活但本轮预算耗尽，非故障）
+export var ERROR_UNKNOWN = "unknown";        // 其它
 
 /**
  * 从任意错误值提取用户可读文本。
@@ -39,25 +42,94 @@ export function getErrorMessage(err) {
   return String(err);
 }
 
-// 分类关键词（大小写不敏感）。注意：不包含裸 "quota"（rpm exhausted 属速率限制而非余额不足，避免误报）。
-var QUOTA_RE = /401|unauthorized|insufficient|balance|billing|payment|credits|余额|欠费|没有费用|no funds/i;
+/**
+ * 从任意错误值提取 ProviderError / 结构化错误对象的 type 字段。
+ * LLM Provider（OpenAI/Anthropic/fantasy/OpenCode Go 等）会在错误里塞 type/code
+ * 字段（如 "GoUsageLimitError"、"RateLimitError"、"InsufficientQuotaError"），
+ * 这是比 message 文本更稳定的分类依据——文本可能含 "available balance" 等无关词
+ * 干扰关键词匹配，而 type 名由 Provider 强制保证语义。
+ * @param {*} err
+ * @returns {string} type 字段，没有则返回 ""
+ */
+export function getErrorType(err) {
+  if (err == null || typeof err !== "object") return "";
+  var inner = (err.error && typeof err.error === "object") ? err.error : err;
+  return typeof inner.type === "string" ? inner.type : "";
+}
+
+// 已知 ProviderError type → 错误分类的精确映射。
+// 仅映射语义明确、跨 Provider 公认的类型；未命中走正则兜底，避免过度耦合。
+// Provider type 名参考 OpenAI / Anthropic / charm.land/fantasy / OpenCode Go 的实际错误名。
+var TYPE_TO_CLASS = {};
+// 月度/订阅使用配额限制（OpenCode Go GoUsageLimitError 等）——区别于余额不足
+TYPE_TO_CLASS["GoUsageLimitError"] = ERROR_USAGE_LIMIT;
+TYPE_TO_CLASS["MonthlyUsageLimitError"] = ERROR_USAGE_LIMIT;
+TYPE_TO_CLASS["SubscriptionLimitError"] = ERROR_USAGE_LIMIT;
+// 速率限制（rpm/tpm exceeded）——区别于余额不足
+TYPE_TO_CLASS["RateLimitError"] = ERROR_RATE_LIMIT;
+TYPE_TO_CLASS["RateLimitReachedError"] = ERROR_RATE_LIMIT;
+TYPE_TO_CLASS["TooManyRequestsError"] = ERROR_RATE_LIMIT;
+TYPE_TO_CLASS["rate_limit_error"] = ERROR_RATE_LIMIT; // OpenAI snake_case 变体
+// 余额不足 / 授权失败
+TYPE_TO_CLASS["InsufficientQuotaError"] = ERROR_QUOTA;
+TYPE_TO_CLASS["QuotaExceededError"] = ERROR_QUOTA;
+TYPE_TO_CLASS["AuthenticationError"] = ERROR_QUOTA;
+TYPE_TO_CLASS["InvalidAPIKeyError"] = ERROR_QUOTA;
+TYPE_TO_CLASS["InvalidApiKeyError"] = ERROR_QUOTA;
+TYPE_TO_CLASS["UnauthorizedError"] = ERROR_QUOTA;
+// Provider 服务端错误 / 上游不可用（Anthropic api_error/overloaded_error、OpenAI server_error 等）
+TYPE_TO_CLASS["server_error"] = ERROR_NETWORK;
+TYPE_TO_CLASS["api_error"] = ERROR_NETWORK;
+TYPE_TO_CLASS["overloaded_error"] = ERROR_NETWORK;
+// 上下文超限
+TYPE_TO_CLASS["ContextLengthExceededError"] = ERROR_CONTEXT_OVERFLOW;
+
+/**
+ * 按错误对象的 type 字段精确分类。未命中已知类型返回 ""（让调用方走正则兜底）。
+ * @param {*} err
+ * @returns {string} 见 ERROR_* 常量，未命中返回 ""
+ */
+export function classifyByErrorType(err) {
+  var type = getErrorType(err);
+  if (!type) return "";
+  return TYPE_TO_CLASS[type] || "";
+}
+
+// 分类关键词（大小写不敏感）。
+// 注意：不再包含裸 "balance" / "credits" / "insufficient" 这种泛词——它们会误命中
+// OpenCode/Go "available balance"、LSP "insufficient memory" 等无关错误。真正的"余额不足"
+// 由 classifyByErrorType（InsufficientQuotaError 等 ProviderError.type）精确分类，
+// 兜底正则只保留紧贴的词组匹配。
+// 同时不包含裸 "quota"（rpm exhausted 属速率限制而非余额不足，避免误报）。
+var QUOTA_RE = /\binsufficient[_-]?(?:quota|balance|credits)\b|\bquota[_-]?exceeded\b|\bbilling\b|\bpayment[_-]?required\b|\bunauthorized\b|\bno[_-]?funds\b|\bnot[_-]?enough[_-]?credit\b|余额不足|欠费|没有费用/i;
+var RATE_LIMIT_RE = /\brate[_-]?limit[_-]?(?:exceeded|error)\b|\brpm[_-]?exceeded\b|\btpm[_-]?exceeded\b|\btoo[_-]?many[_-]?requests\b/i;
+var USAGE_LIMIT_RE = /\bmonthly[_\s-]?usage[_\s-]?limit\b|\busage[_\s-]?limit[_\s-]?reached\b|\bsubscription[_\s-]?limit\b/i;
 var TIMEOUT_RE = /timeout|timed out|超时/i;
-var NETWORK_RE = /请求失败|连接失败|connect|refused|ECONN|未运行|断线|重连|network|socket/i;
+var NETWORK_RE = /请求失败|连接失败|connect|refused|ECONN|未运行|断线|重连|network|socket|upstream request failed|endpoint is unavailable|api_error|server_error|overloaded_error|upstream|unavailable|endpoint/i;
 var NOT_FOUND_RE = /404|不存在|not found/i;
+var CONTEXT_OVERFLOW_RE = /maximum context length exceeded|context length exceeded|maximum context length|exceed_context_size|exceeds the available context size|context window overflow|上下文超限/i;
 var CANCEL_RE = /canceled|cancelled|已取消/i;
 // 步数触顶哨兵：服务端 errStepCap 文案固定含 "max_steps_reached"（有单测锁定），
 // 是前后端契约，改服务端文案必须保留该 token。
 var STEP_CAP_RE = /max_steps_reached/i;
 
 /**
- * 错误分类：优先匹配更具体的类别，未命中返回 unknown。
+ * 错误分类：优先按 ProviderError.type 精确分类（最稳），未命中再走关键词正则兜底。
  * @param {*} err
  * @returns {string} 见 ERROR_* 常量
  */
 export function classifyError(err) {
+  // 1) 最优先：按错误对象的 type 字段精确分类（ProviderError type 名稳定，
+  //    不受 message 文本干扰，能可靠区分"月度配额" vs "余额不足" vs "速率限制"）
+  var byType = classifyByErrorType(err);
+  if (byType) return byType;
+  // 2) 兜底：按 message 文本关键词匹配（兼容老错误/无 type 字段的情况）
   var text = getErrorMessage(err);
   if (STEP_CAP_RE.test(text)) return ERROR_STEP_CAP;
+  if (USAGE_LIMIT_RE.test(text)) return ERROR_USAGE_LIMIT;
+  if (RATE_LIMIT_RE.test(text)) return ERROR_RATE_LIMIT;
   if (QUOTA_RE.test(text)) return ERROR_QUOTA;
+  if (CONTEXT_OVERFLOW_RE.test(text)) return ERROR_CONTEXT_OVERFLOW;
   if (TIMEOUT_RE.test(text)) return ERROR_TIMEOUT;
   if (NETWORK_RE.test(text)) return ERROR_NETWORK;
   if (NOT_FOUND_RE.test(text)) return ERROR_NOT_FOUND;
@@ -70,18 +142,24 @@ export function classifyError(err) {
 // 各分类的友好文案（按当前 UI 语言选择，不经过 i18n 字典，集中维护）
 var FRIENDLY_ZH = {
   quota: "余额不足，任务中断",
+  usage_limit: "使用额度已达上限，任务中断",
+  rate_limit: "请求过于频繁，任务中断",
   timeout: "请求超时，任务中断",
   network: "连接失败，任务中断",
   not_found: "资源不存在，任务中断",
+  context_overflow: "上下文超出模型支持的长度，任务中断",
   cancel: "操作已取消",
   step_cap: "本轮已达步数上限，任务暂停",
   unknown: "操作失败，任务中断",
 };
 var FRIENDLY_EN = {
   quota: "Insufficient balance. Task interrupted.",
+  usage_limit: "Usage limit reached. Task interrupted.",
+  rate_limit: "Too many requests. Task interrupted.",
   timeout: "Request timed out. Task interrupted.",
   network: "Connection failed. Task interrupted.",
   not_found: "Resource not found. Task interrupted.",
+  context_overflow: "Context length exceeded. Task interrupted.",
   cancel: "Operation canceled.",
   step_cap: "Step limit reached. Task paused.",
   unknown: "Operation failed. Task interrupted.",
@@ -184,9 +262,15 @@ export function friendlyError(err, opts) {
   var cls = classifyError(err);
   var prefix = opts.prefix ? t(opts.prefix) : "";
   var hint = opts.hint ? t(opts.hint) : "";
-  // quota 类固定文案（不附加原始错误，避免把英文报错带进提示）
-  if (cls === ERROR_QUOTA) {
-    return getLanguage() === "zh" ? FRIENDLY_ZH.quota : FRIENDLY_EN.quota;
+  // 配额类错误固定文案（不附加原始错误，避免把英文报错带进提示）：
+  //   quota         —— 余额不足 / 授权失败
+  //   usage_limit   —— 月度使用配额限制（OpenCode/Go 等订阅服务的月度额度用尽）
+  //   rate_limit    —— 速率限制（rpm/tpm exceeded）
+  // 这三类都属于"用户操作无关的硬性限制"，无需附加英文细节，但仍保留 prefix/hint
+  // 让调用方能拼上"本轮对话中断: ..."等场景化前缀
+  if (cls === ERROR_QUOTA || cls === ERROR_USAGE_LIMIT || cls === ERROR_RATE_LIMIT) {
+    var clsText = getLanguage() === "zh" ? (FRIENDLY_ZH[cls] || FRIENDLY_ZH.unknown) : (FRIENDLY_EN[cls] || FRIENDLY_EN.unknown);
+    return prefix + clsText + hint;
   }
   if (getLanguage() === "zh") {
     var detail = translateEn2Zh(raw);
