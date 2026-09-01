@@ -296,9 +296,10 @@ function handleSSEEvent(payload, ctx) {
       break;
     case "run_complete":
       // 防御：子 Agent（agent 工具嵌套调用）的 run_complete 携带复合 session_id
-      //（格式 `{parentMsgId}$$call_{toolCallId}`）且 run_id 为空，
-      // 绝不能让它误触发父运行的收尾逻辑。
-      if (typeof actualData.session_id === "string" && actualData.session_id.indexOf("$$call_") !== -1) {
+      //（格式 `{parentMsgId}$${toolCallId}`，tool call id 前缀随 provider 不同，
+      // 如 OpenAI `call_`、Qwen `chatcmpl-tool-`），且 run_id 继承父运行，
+      // 绝不能让它误触发父运行的收尾逻辑（正常会话 id 为纯 UUID，不含 `$$`）。
+      if (typeof actualData.session_id === "string" && actualData.session_id.indexOf("$$") !== -1) {
         console.log("[agent] 忽略子 Agent 的 run_complete:", actualData.session_id);
         break;
       }

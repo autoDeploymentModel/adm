@@ -1861,13 +1861,10 @@ async fn forward_sse_events(
                     else if let Some(d) = line.strip_prefix("data: ") { event_data = d.to_string(); }
                 }
                 if !event_data.is_empty() {
-                    // 子 Agent（agent 工具嵌套调用）的 SSE 事件携带复合 session_id
-                    //（格式 `{parentMsgId}$$call_{toolCallId}`），前端不处理。
-                    // 但仍需写日志（run_complete / agent_event 等关键事件），方便排查
-                    // 子 Agent 出错问题；只是不转发到前端，避免 SSE 带宽浪费和日志洪泛。
-                    let is_sub_agent = event_data.contains("$$call_");
                     let payload: serde_json::Value = serde_json::from_str(&event_data)
                         .unwrap_or(serde_json::json!({ "raw": event_data }));
+                    // 子 Agent 事件只记日志不转发，避免 SSE 带宽浪费和日志洪泛。
+                    let is_sub_agent = is_sub_agent_event(&payload);
                     // 只写关键事件；流式增量/快照等噪音返回 None 不落盘。
                     if is_sub_agent {
                         // 子 Agent 事件只记关键节点（run_complete/agent_event/error），不记流式噪音
@@ -2053,6 +2050,19 @@ pub(crate) fn api_debug_log<F: FnOnce() -> String>(line: F) {
     }
 }
 
+/// 判断是否子 Agent（agent 工具嵌套调用）的 SSE 事件：其 session_id 为
+/// 复合格式 `{parentMsgId}$${toolCallId}`（tool call id 前缀随 provider 不同，
+/// 如 OpenAI `call_`、Qwen `chatcmpl-tool-`），前端不处理，不应转发。
+/// 注意：只能看 session_id 字段，不能对整个事件 JSON 做 contains("$$")——
+/// tool 消息正文（如 shell 的 `$$` 变量）可能含该字符，会导致误判丢弃。
+fn is_sub_agent_event(payload: &serde_json::Value) -> bool {
+    payload
+        .pointer("/payload/payload/session_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .contains("$$")
+}
+
 /// 把一条 SSE 事件精简为一行可排查摘要；返回 None 表示这类事件是噪音
 /// （流式 message updated 增量、session token 快照等），不写日志。
 /// 只保留能定位“对话为何中断/卡住”的关键节点：运行收尾、错误、权限、
@@ -2077,9 +2087,11 @@ fn summarize_sse_event(payload: &serde_json::Value) -> Option<String> {
             let err = field("error");
             let has_err = !err.is_empty() && err != "null";
             let flag = if has_err { "! run_complete" } else { "< run_complete" };
+            let empty = field("empty_output");
+            let empty_s = if empty.is_empty() { "false" } else { empty.as_str() };
             Some(format!(
-                "{} run_id={} session={} error={} cancelled={} msg_id={}",
-                flag, field("run_id"), field("session_id"), err, field("cancelled"), field("message_id")
+                "{} run_id={} session={} error={} cancelled={} msg_id={} empty_output={}",
+                flag, field("run_id"), field("session_id"), err, field("cancelled"), field("message_id"), empty_s
             ))
         }
         // Agent 事件：错误 / 摘要（summarize）。
@@ -3041,5 +3053,48 @@ mod adm_agent_config_tests {
             .filter(|n| n.ends_with(".tmp"))
             .collect();
         assert!(leftovers.is_empty(), "残留临时文件: {:?}", leftovers);
+    }
+}
+
+#[cfg(test)]
+mod sse_sub_agent_filter_tests {
+    use super::*;
+
+    fn ev(data: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({ "type": "message", "payload": { "type": "created", "payload": data } })
+    }
+
+    #[test]
+    fn normal_session_uuid_is_forwarded() {
+        let p = ev(serde_json::json!({ "id": "m1", "session_id": "05068656-be01-43b1-aaa5-f9dffaa95e3d", "role": "assistant" }));
+        assert!(!is_sub_agent_event(&p));
+    }
+
+    #[test]
+    fn openai_style_nested_session_dropped() {
+        let p = ev(serde_json::json!({ "session_id": "f16a88b6-fc15-496b-a03c-6ebdfe54b1c3$$call_abc123" }));
+        assert!(is_sub_agent_event(&p));
+    }
+
+    #[test]
+    fn qwen_style_nested_session_dropped() {
+        // 真实事故样本（adm_api_debug 2026-09）：$$call_ 前缀不匹配导致误转发
+        let p = serde_json::json!({ "type": "run_complete", "payload": { "type": "updated", "payload": {
+            "session_id": "c5a4abbd-ec37-42ef-9e4f-e691f131b83a$$chatcmpl-tool-b577aa9f6c9ceb61",
+            "run_id": "run-1788225954786-v2gyqeynm", "error": "context deadline exceeded" } } });
+        assert!(is_sub_agent_event(&p));
+    }
+
+    #[test]
+    fn tool_body_with_dollarsigns_not_misjudged() {
+        // shell `$$` 出现在消息正文中不得误判为子 Agent（event_data.contains 旧写法会踩）
+        let p = ev(serde_json::json!({ "session_id": "05068656-be01-43b1-aaa5-f9dffaa95e3d", "role": "tool", "content": "kill -INT -$$ 12345" }));
+        assert!(!is_sub_agent_event(&p));
+    }
+
+    #[test]
+    fn events_without_session_id_forwarded() {
+        assert!(!is_sub_agent_event(&serde_json::json!({ "type": "config_changed" })));
+        assert!(!is_sub_agent_event(&serde_json::json!({ "raw": "not-json" })));
     }
 }
