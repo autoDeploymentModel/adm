@@ -282,7 +282,7 @@ function appendErrorBubble(err, opts) {
   if (wsId === S.activeWsId) renderMessages();
 }
 
-// 步数触顶提示：模型已用完本轮 64 步预算但仍在干活，不再自动续跑，提示用户手动继续。
+// 步数触顶提示：模型已用完本轮 256 步预算但仍在干活，不再自动续跑，提示用户手动继续。
 function showStepCapDialog(sessionId) {
   if (!sessionId) return;
   showInfo(_t("模型已用完本轮预算，您可手动发送“继续”让它继续干活，或先查看中间结果再决定"));
@@ -386,7 +386,7 @@ function handleSSEEvent(payload, ctx) {
           // 取消后状态栏切回就绪（排队接管时新运行即将开始，保持 busy 由 run_start 接管）
           if (!tookOverQueued) updateStatusBar("ready", null, S.contextUsage.used);
         } else if (classifyError(actualData.error) === ERROR_STEP_CAP) {
-          // 步数触顶：模型仍在干活但本轮 64 步预算耗尽，不是故障。弹决策卡让用户查看或手动续跑
+          // 步数触顶：模型仍在干活但本轮 256 步预算耗尽，不是故障。弹决策卡让用户查看或手动续跑
           updateStatusBar("ready", null, S.contextUsage.used);
           showStepCapDialog(actualData.session_id);
         } else {
