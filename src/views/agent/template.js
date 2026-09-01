@@ -1397,6 +1397,25 @@ export const template = `
   .memory-tag.constraint { background: #e67e22; }
   .memory-tag.decision { background: #3498db; }
   .memory-why { color: var(--c-text-4); }
+  .memory-item-text { flex: 1; min-width: 0; word-break: break-word; }
+  .memory-actions { display: flex; gap: 4px; flex-shrink: 0; margin-left: auto; }
+  .memory-action {
+    background: transparent;
+    border: 1px solid var(--c-border);
+    color: var(--c-text-2);
+    width: 22px; height: 22px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+  }
+  .memory-action:hover { background: var(--c-raise); color: var(--c-text); }
+  .memory-action.del:hover { color: #e74c3c; border-color: #e74c3c; }
+  .memory-textarea { resize: vertical; min-height: 56px; font-family: inherit; }
 
   /* 云端模型管理 */
   .provider-list {
@@ -1930,7 +1949,7 @@ export const template = `
       <!-- 项目记忆（跨会话持久记忆，只读展示） -->
       <div class="param-group">
         <div class="param-group-title">${_t("项目记忆")}</div>
-        <div class="param-desc" style="margin-bottom:6px;">${_t("Agent 跨会话自动沉淀的持久约束与决策（保存在 workspace 的 project_memory.json，随上下文压缩自动更新，仅展示不可修改）")}</div>
+        <div class="param-desc" style="margin-bottom:6px;">${_t("Agent 跨会话自动沉淀的持久约束与决策（保存在 workspace 的 project_memory.json，可手动新增/修改/删除；下次上下文压缩时会与 Agent 自动沉淀结果合并）")}</div>
         <div class="memory-collapse" id="agent-memory-collapse">
           <div class="memory-collapse-header" id="agent-memory-toggle">
             <span class="memory-collapse-arrow">▶</span>
@@ -1939,6 +1958,7 @@ export const template = `
           </div>
           <div class="memory-collapse-body" id="agent-memory-body"></div>
         </div>
+        <button class="btn-add-cloud" id="agent-memory-add-btn" style="margin-top:6px;">+ ${_t("添加记忆")}</button>
       </div>
 
       <!-- 云端模型管理 -->
@@ -1973,6 +1993,31 @@ export const template = `
         </label>
         <div id="add-model-msg" style="font-size:12px;min-height:18px;line-height:18px;"></div>
         <button class="settings-btn settings-btn-primary" id="add-model-submit" style="align-self:flex-start;">${_t("添加")}</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 项目记忆 添加/修改弹窗（标题/提交文案由 settings_dialog.js 按模式切换） -->
+<div class="add-model-overlay" id="agent-memory-overlay">
+  <div class="settings-modal" style="width:440px;">
+    <div class="settings-header">
+      <span class="settings-title" id="memory-dialog-title">${_t("添加记忆")}</span>
+      <button class="settings-close" id="agent-memory-dialog-close">✕</button>
+    </div>
+    <div class="settings-body">
+      <div class="param-row" style="flex-direction:column;gap:6px;">
+        <div class="param-label" style="margin-bottom:2px;">${_t("类型")}</div>
+        <select class="settings-select" id="memory-dialog-kind">
+          <option value="constraint">${_t("约束")}</option>
+          <option value="decision">${_t("决策")}</option>
+        </select>
+        <div class="param-label">${_t("内容")}</div>
+        <textarea class="settings-input memory-textarea" id="memory-dialog-value" rows="3"></textarea>
+        <div class="param-label">${_t("原因/备注 (可选)")}</div>
+        <input type="text" class="settings-input" id="memory-dialog-why">
+        <div id="memory-dialog-msg" style="font-size:12px;min-height:18px;line-height:18px;"></div>
+        <button class="settings-btn settings-btn-primary" id="memory-dialog-submit" style="align-self:flex-start;">${_t("添加")}</button>
       </div>
     </div>
   </div>
