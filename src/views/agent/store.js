@@ -287,6 +287,20 @@ class Store {
     var ws = this.workspaces.get(wsId);
     if (!ws) return;
     _log("debug", "STORE", "startRun ws=" + wsId.slice(0, 8) + " session=" + (sessionId || "").slice(0, 8) + " run=" + runId);
+    // 新一轮 run 开始 → 清掉当前会话上一轮的本地错误气泡（_error），让错误信息
+    // 只挂在"出错的轮次"，新轮次干净，避免同会话内历史错误持续挂载让人误以为"还在报"。
+    // 折叠插入不走 startRun、不进此分支，不影响；多 tab 场景按 _sessionId 限定只清当前会话
+    var prevCount = ws.messages.length;
+    ws.messages = ws.messages.filter(function(m) {
+      if (!m._error) return true;
+      // 防御：sessionId 或 m._sessionId 缺失时不清（避免误删其他会话的 _error 气泡）
+      if (!sessionId || !m._sessionId) return true;
+      return m._sessionId !== sessionId;
+    });
+    var removed = prevCount - ws.messages.length;
+    if (removed > 0) {
+      _log("debug", "STORE", "startRun 清掉 " + removed + " 条旧错误气泡 session=" + (sessionId || "").slice(0, 8));
+    }
     ws.isSending = true;
     ws.activeRun = { workspaceId: wsId, sessionId: sessionId, runId: runId };
     ws.queuedRun = null;
