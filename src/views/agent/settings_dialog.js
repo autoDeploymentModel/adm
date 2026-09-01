@@ -7,7 +7,7 @@ import { showConfirm, reportError } from "./ui.js";
 import { updateWorkspaceSelector } from "./workspace.js";
 import { updateModelDropdown, switchModel, refreshServerProviders } from "./model.js";
 import { isAutoContinueEnabled } from "./autocontinue.js";
-import { refreshProjectMemory } from "./memory.js";
+import { refreshProjectMemory, openMemoryEditor, closeMemoryEditor, submitMemoryEditor, deleteMemoryEntry } from "./memory.js";
 
 // ===== 设置弹窗 =====
 export function showSettings() {
@@ -21,14 +21,57 @@ export function hideSettings() {
   document.getElementById("agent-settings-overlay").classList.remove("show");
 }
 
-// 项目记忆折叠块交互：点击头部展开/收起（默认折叠）
+// 项目记忆折叠块交互：点击头部展开/收起（默认折叠）；行内编辑/删除、新增弹窗
 export function initProjectMemoryUI() {
   var toggle = document.getElementById("agent-memory-toggle");
   var collapse = document.getElementById("agent-memory-collapse");
-  if (!toggle || !collapse) return;
-  toggle.addEventListener("click", function() {
-    collapse.classList.toggle("open");
-  });
+  if (toggle && collapse) {
+    toggle.addEventListener("click", function() {
+      collapse.classList.toggle("open");
+    });
+  }
+
+  // 行内编辑/删除按钮（事件委托：行内容由 memory.js 动态生成）
+  var body = document.getElementById("agent-memory-body");
+  if (body) {
+    body.addEventListener("click", function(e) {
+      var target = /** @type {Element|null} */ (e.target);
+      var btn = target && target.closest ? target.closest(".memory-action") : null;
+      if (!btn) return;
+      var item = btn.closest(".memory-item");
+      var idx = item ? parseInt(item.getAttribute("data-idx") || "-1", 10) : -1;
+      if (idx < 0) return;
+      if (btn.getAttribute("data-act") === "edit") {
+        openMemoryEditor(idx);
+      } else if (btn.getAttribute("data-act") === "del") {
+        deleteMemoryEntry(idx);
+      }
+    });
+  }
+
+  // 折叠块外的「添加记忆」按钮
+  var addBtn = document.getElementById("agent-memory-add-btn");
+  if (addBtn) {
+    addBtn.addEventListener("click", function() {
+      // 自动展开，确保添加完能立即看到
+      if (collapse && !collapse.classList.contains("open")) {
+        collapse.classList.add("open");
+      }
+      openMemoryEditor(null);
+    });
+  }
+
+  // 编辑弹窗：关闭、提交、点遮罩关闭
+  var overlay = document.getElementById("agent-memory-overlay");
+  var closeBtn = document.getElementById("agent-memory-dialog-close");
+  var submitBtn = document.getElementById("memory-dialog-submit");
+  if (closeBtn) closeBtn.addEventListener("click", closeMemoryEditor);
+  if (submitBtn) submitBtn.addEventListener("click", submitMemoryEditor);
+  if (overlay) {
+    overlay.addEventListener("click", function(e) {
+      if (e.target === overlay) closeMemoryEditor();
+    });
+  }
 }
 
 export function updateSettingsUI() {

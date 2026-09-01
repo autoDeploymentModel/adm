@@ -2279,6 +2279,108 @@ pub async fn read_project_memory(
     }
 }
 
+// 取 workspace 的 data_dir（admAgent 侧维护，project_memory.json 与其同级）。
+// server 未运行、超时或响应异常时返回错误。
+async fn fetch_workspace_data_dir(
+    state: &tauri::State<'_, AppState>,
+    workspace_id: &str,
+) -> Result<String, AppError> {
+    if !server_process_alive(state) {
+        bail!("admAgent server 未运行");
+    }
+    let client = build_client(&AgentTransport::default_host(), Duration::from_secs(5))
+        .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+    let (status, bytes) = tokio::time::timeout(
+        Duration::from_secs(30),
+        agent_http::send(&client, "GET", &format!("/v1/workspaces/{}", workspace_id), None),
+    )
+    .await
+    .map_err(|_| "获取 workspace 信息超时".to_string())?
+    .map_err(|e| format!("HTTP 请求失败: {}", e))?;
+    if !(200..300).contains(&status) {
+        bail!("HTTP {} 获取 workspace 信息失败", status);
+    }
+    let ws: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|e| format!("解析 workspace 响应失败: {}", e))?;
+    Ok(ws.get("data_dir").and_then(|v| v.as_str()).unwrap_or("").to_string())
+}
+
+/// 新增/修改/删除 workspace 的项目记忆（写 project_memory.json）。
+/// 前端以「完整 anchor 数组」整表提交（新增/修改/删除在数组上完成后落盘），
+/// Rust 侧负责：过滤非法条目（非 constraint/decision、value 为空）、按 key
+/// （kind:value）去重、补齐 key/updated_at，并原子写盘（.tmp + rename，与
+/// admAgent Sync 的写法一致，避免写入半截文件）。
+/// 注意：admAgent 每次上下文压缩仍会把内存中持有的持久 anchors 合并回写本文件，
+/// 因此手工删除的条目可能被之后的压缩重新沉淀（同名条目以下次沉淀为准）。
+#[tauri::command]
+pub async fn update_project_memory(
+    state: tauri::State<'_, AppState>,
+    workspace_id: String,
+    anchors: serde_json::Value,
+) -> Result<(), AppError> {
+    let data_dir = fetch_workspace_data_dir(&state, &workspace_id).await?;
+    if data_dir.is_empty() {
+        bail!("workspace data_dir 为空");
+    }
+
+    let arr = anchors.as_array().ok_or("anchors 必须是数组")?;
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // admAgent 侧锚点的时间戳是 unix 秒（time.Now().Unix()），保持一致
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    for item in arr {
+        let Some(obj) = item.as_object() else {
+            continue;
+        };
+        let kind = obj.get("kind").and_then(|v| v.as_str()).unwrap_or("constraint");
+        if kind != "constraint" && kind != "decision" {
+            continue;
+        }
+        let value = obj.get("value").and_then(|v| v.as_str()).unwrap_or("").trim();
+        if value.is_empty() {
+            continue;
+        }
+        let key = obj.get("key").and_then(|v| v.as_str()).filter(|k| !k.trim().is_empty())
+            .map(|k| k.trim().to_string())
+            .unwrap_or_else(|| format!("{}:{}", kind, value));
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        let mut o = serde_json::Map::new();
+        o.insert("kind".into(), serde_json::json!(kind));
+        o.insert("key".into(), serde_json::json!(key));
+        o.insert("value".into(), serde_json::json!(value));
+        if let Some(why) = obj.get("why").and_then(|v| v.as_str()) {
+            let why = why.trim();
+            if !why.is_empty() {
+                o.insert("why".into(), serde_json::json!(why));
+            }
+        }
+        if let Some(src) = obj.get("source").and_then(|v| v.as_str()) {
+            if !src.is_empty() {
+                o.insert("source".into(), serde_json::json!(src));
+            }
+        }
+        if let Some(sal) = obj.get("salience").and_then(|v| v.as_f64()) {
+            o.insert("salience".into(), serde_json::json!(sal));
+        }
+        o.insert("updated_at".into(), serde_json::json!(now));
+        out.push(serde_json::Value::Object(o));
+    }
+
+    let path = std::path::Path::new(&data_dir).join("project_memory.json");
+    let dir = path.parent().ok_or("project_memory.json 所在目录无效")?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("创建目录失败: {}", e))?;
+    let tmp = dir.join(format!("project_memory.json.{}.tmp", std::process::id()));
+    let data = serde_json::to_vec_pretty(&out).map_err(|e| format!("序列化失败: {}", e))?;
+    std::fs::write(&tmp, &data).map_err(|e| format!("写入临时文件失败: {}", e))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("写入失败: {}", e))?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn agent_subscribe_events(
     app: tauri::AppHandle,

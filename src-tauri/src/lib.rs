@@ -214,6 +214,7 @@ pub fn run() {
             agent::save_attachment_file,
             agent::read_clipboard_files,
             agent::read_project_memory,
+            agent::update_project_memory,
             // ilink.rs - 微信 Bot 桥接
             ilink::start_ilink_login,
             ilink::cancel_ilink_login,
