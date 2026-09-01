@@ -1861,7 +1861,7 @@ async fn forward_sse_events(
                     else if let Some(d) = line.strip_prefix("data: ") { event_data = d.to_string(); }
                 }
                 if !event_data.is_empty() {
-                    let payload: serde_json::Value = serde_json::from_str(&event_data)
+                    let mut payload: serde_json::Value = serde_json::from_str(&event_data)
                         .unwrap_or(serde_json::json!({ "raw": event_data }));
                     // 子 Agent 事件只记日志不转发，避免 SSE 带宽浪费和日志洪泛。
                     let is_sub_agent = is_sub_agent_event(&payload);
@@ -1874,7 +1874,27 @@ async fn forward_sse_events(
                         }
                     } else {
                         api_debug_log(|| summarize_sse_event(&payload).unwrap_or_default());
-                        let _ = app.emit("agent-sse-event", serde_json::json!({ "type": event_type, "data": payload, "workspace_id": workspace_id }));
+                        // run_complete 的 payload 携带整轮文本（text 字段），会话上下文增长后
+                        // 可能很大；Tauri IPC 对大 payload 偶发投递失败（表现：前端收不到
+                        // run_complete → UI 卡"运行中"，需手动点停止），转发前截断防御。
+                        // 用 payload 内部 type 判断（event: 行个别实现可能缺失），与
+                        // summarize_sse_event 的判定保持一致。
+                        if payload.get("type").and_then(|v| v.as_str()) == Some("run_complete") {
+                            if let Some(v) = payload.pointer_mut("/payload/payload/text") {
+                                if let Some(s) = v.as_str() {
+                                    let total = s.chars().count();
+                                    if total > 200_000 {
+                                        let head: String = s.chars().take(200_000).collect();
+                                        *v = serde_json::json!(format!("{}...[正文过长已截断 {} 字符]", head, total - 200_000));
+                                        api_debug_log(|| format!("SSE ! run_complete text 超长截断 len={}", total));
+                                    }
+                                }
+                            }
+                        }
+                        let evt = serde_json::json!({ "type": event_type, "data": payload, "workspace_id": workspace_id });
+                        if let Err(e) = app.emit("agent-sse-event", evt) {
+                            api_debug_log(|| format!("SSE ! emit 失败 type={} err={}", event_type, e));
+                        }
                     }
                 }
             }

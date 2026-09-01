@@ -28,6 +28,64 @@ function tickMessageDelta(msgId) {
 var curDeltaLogged = true;
 var lastLspEventLogTs = 0;
 
+// ===== run_complete 丢失兜底 =====
+// 正常运行结束时服务端依序推送 agent_finished → run_complete；若 run_complete 在
+// 转发/投递链路上丢失（日志曾见 "< run_complete" 有、前端 "event: run_complete" 无），
+// 前端 isSending 会卡在 true（"停止"按钮常驻、无法继续发送，只能手动点停止）。
+// 收到 agent_finished 后启动检查：超时未收到对应 run_complete 且服务端已空闲时强制收尾。
+var RUN_COMPLETE_FALLBACK_DELAY_MS = 15000;
+var RUN_COMPLETE_FALLBACK_MAX_TRIES = 4;
+var runCompleteFallbackTimer = null;
+var runCompleteFallbackTries = 0;
+
+function clearRunCompleteFallback() {
+  if (runCompleteFallbackTimer) { clearTimeout(runCompleteFallbackTimer); runCompleteFallbackTimer = null; }
+}
+// 视图卸载时解除布防(agent.js unmount 调用),避免定时器在视图切走后继续收尾
+export function cancelRunCompleteFallback() { clearRunCompleteFallback(); }
+
+// 只对"当前正在运行的会话"布防，且排除子 Agent（含 $$ 的复合 session_id）事件
+function armRunCompleteFallback(wsId, sessionId, runId) {
+  clearRunCompleteFallback();
+  if (!sessionId || sessionId.indexOf("$$") !== -1) return;
+  if (!S.isSending || !S.activeRun || S.activeRun.sessionId !== sessionId) return;
+  runCompleteFallbackTries = 0;
+  log.debug("SSE", "run_complete 兜底布防 session=" + sessionId.slice(0, 8));
+  scheduleRunCompleteFallbackCheck(wsId, sessionId, runId);
+}
+
+function scheduleRunCompleteFallbackCheck(wsId, sessionId, runId) {
+  runCompleteFallbackTimer = setTimeout(async function() {
+    runCompleteFallbackTimer = null;
+    var currentRun = S.activeRun;
+    if (!S.isSending || !currentRun || currentRun.sessionId !== sessionId) return; // 正常收尾或已取消
+    if (runCompleteFallbackTries >= RUN_COMPLETE_FALLBACK_MAX_TRIES) {
+      log.warn("SSE", "run_complete 兜底重试耗尽，交给 180s 安全计时器 session=" + sessionId.slice(0, 8));
+      return;
+    }
+    runCompleteFallbackTries++;
+    try {
+      // 会话不忙且工作区不忙（后者兜底排队场景）才认定为真正结束
+      var sess = await api("GET", "/v1/workspaces/" + wsId + "/sessions/" + sessionId);
+      if (sess && sess.is_busy) { scheduleRunCompleteFallbackCheck(wsId, sessionId, runId); return; }
+      var agentInfo = await api("GET", "/v1/workspaces/" + wsId + "/agent");
+      if (agentInfo && agentInfo.is_busy) { scheduleRunCompleteFallbackCheck(wsId, sessionId, runId); return; }
+    } catch (_) {
+      // 查询失败不认定为空闲，稍后重试
+      scheduleRunCompleteFallbackCheck(wsId, sessionId, runId);
+      return;
+    }
+    if (!S.isSending || !S.activeRun || S.activeRun.sessionId !== sessionId) return;
+    log.warn("SSE", "run_complete 未到达且服务端已空闲，兜底收尾 session=" + sessionId + " run=" + (runId || ""));
+    store.completeRun(wsId);
+    updateSendButton();
+    updateStatusBar("ready", null, S.contextUsage.used);
+    loadConversations();
+    if (S.currentConvId) refreshMessages();
+    refreshAgentInfo();
+  }, RUN_COMPLETE_FALLBACK_DELAY_MS);
+}
+
 // 工具状态事件（lsp/mcp/skills）合并刷新：1s 窗口内最多执行一次 loadTools，
 // 窗口结束时有新事件则补执行一次（尾随），连续事件流下既不超频也不漏掉最后一次。
 // 诊断事件是编辑文件期间的噪音大户（每次保存一次），而工具面板不显示诊断计数，
@@ -68,6 +126,7 @@ export function cancelScheduledLoadTools() {
 
 export async function setupSSEListener() {
   console.log("[agent] setupSSEListener() workspace:", S.serverInfo ? S.serverInfo.workspace_id : "unknown");
+  clearRunCompleteFallback();
   if (S.sseListener) { try { S.sseListener(); } catch (_) {} S.sseListener = null; }
   if (typeof listen !== "function") { console.warn("[agent] listen 不是函数"); return; }
 
@@ -303,6 +362,10 @@ function handleSSEEvent(payload, ctx) {
         console.log("[agent] 忽略子 Agent 的 run_complete:", actualData.session_id);
         break;
       }
+      // 非子 Agent 的 run_complete 到达：解除丢失兜底（下面逻辑照常收尾）。
+      // 注意必须放在 $$ 判断之后：子 Agent 完成事件可能晚于父 agent_finished 到达，
+      // 若提前解除，父运行的布防会被误清，本轮完成事件丢失时将失去兜底。
+      clearRunCompleteFallback();
       // SSE 是 workspace 级事件流；只让当前运行自己的完成事件收尾发送态，
       // 避免同 workspace 其它会话/排队任务的 run_complete 提前结束当前运行。
       // 用 store 处理前的 activeRun 做判定：store.completeRun 可能已把
@@ -409,6 +472,10 @@ function handleSSEEvent(payload, ctx) {
       break;
     case "agent_event":
       // Agent 事件（错误/响应/摘要/思考中）：error 可能是字符串或对象，统一展示并留完整日志便于排查
+      // agent_finished = 运行正常收尾信号，通常其后紧跟 run_complete；布防兜底防其丢失
+      if (actualData && actualData.type === "agent_finished") {
+        armRunCompleteFallback((S.activeRun && S.activeRun.workspaceId) || S.activeWsId, actualData.session_id || "", actualData.run_id || "");
+      }
       if (actualData && actualData.error) {
         if (classifyError(actualData.error) === ERROR_STEP_CAP) {
           // 步数触顶：服务端会同时发 agent_event error + run_complete error（与输出退化
