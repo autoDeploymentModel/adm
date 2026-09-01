@@ -824,7 +824,7 @@ export const template = `
   }
   .input-textarea::placeholder { color: var(--c-text-4); }
 
-  /* 底部工具栏: ⚡Agent | 模型▾ | 上下文用量 | 📎 📤发送 */
+  /* 底部工具栏: 模型▾ | 上下文用量 | 📎 📤发送 */
   .agent-input-toolbar {
     display: flex;
     align-items: center;
@@ -832,24 +832,6 @@ export const template = `
     padding: 6px 12px 8px;
     border-top: 1px solid var(--c-raise-2);
   }
-
-  .toolbar-mode-btn {
-    background: rgba(255,255,255,0.08);
-    border: none;
-    color: var(--c-text);
-    padding: 4px 10px;
-    border-radius: 6px;
-    font-size: 13px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    transition: all 0.15s;
-    white-space: nowrap;
-  }
-  .toolbar-mode-btn:hover { background: rgba(255,255,255,0.15); }
-  .toolbar-mode-btn.plan { background: #2b6cb0; color: #fff; }
-  .toolbar-mode-btn.plan:hover { background: #245a94; }
 
   /* 微信消息跟随开关（模型选择旁）：开启时微信 Bot 消息注入当前打开的会话 */
   .toolbar-wx-btn {
@@ -1807,14 +1789,9 @@ export const template = `
         <textarea class="input-textarea" id="agent-input" placeholder="${_t("输入消息... (Enter 发送, Shift+Enter 换行)")}" rows="1"></textarea>
         <!-- 附件预览区 -->
         <div class="attach-preview-area" id="agent-attach-preview"></div>
-        <!-- 底部工具栏: ⚡Agent | 模型▾ | 上下文用量 | 📎 📤发送 -->
+        <!-- 底部工具栏: 模型▾ | 上下文用量 | 📎 📤发送 -->
         <div class="agent-input-toolbar">
-          <!-- ① 工作模式切换：执行 ↔ Plan（只读计划） -->
-          <button class="toolbar-mode-btn" id="agent-mode-toggle" title="${_t("点击切换 Plan 模式（只读调研并产出计划，不修改文件）")}">
-            <span class="mode-icon">⚡</span>
-            <span class="mode-text">${_t("执行")}</span>
-          </button>
-          <!-- ② 模型选择下拉 -->
+          <!-- ① 模型选择下拉 -->
           <div class="toolbar-model-selector">
             <button class="model-current" id="agent-model-btn">
               <span id="agent-model-name">Local Model</span>
@@ -1885,26 +1862,6 @@ export const template = `
       <!-- 基础设置 -->
       <div class="param-group">
         <div class="param-group-title">${_t("基础设置")}</div>
-        <div class="param-row">
-          <div class="param-label">${_t("Plan 模式")}</div>
-          <div class="param-input">
-            <div class="checkbox-wrap">
-              <input type="checkbox" id="settings-plan">
-              <span>${_t("只读计划模式")}</span>
-            </div>
-            <div class="param-desc">${_t("开启后 Agent 只能读取/检索代码并产出实施计划，不会修改任何文件；关闭则为执行模式（直接执行修改）")}</div>
-          </div>
-        </div>
-        <div class="param-row">
-          <div class="param-label">${_t("自动续跑")}</div>
-          <div class="param-input">
-            <div class="checkbox-wrap">
-              <input type="checkbox" id="settings-auto-continue">
-              <span>${_t("任务未完成自动继续")}</span>
-            </div>
-            <div class="param-desc">${_t("本轮结束时若任务清单仍有未完成项，自动发送“继续”推进（最多 10 轮，连续 2 轮无进展自动停止）")}</div>
-          </div>
-        </div>
         <div class="param-row">
           <div class="param-label">${_t("调试模式")}</div>
           <div class="param-input">

@@ -39,7 +39,6 @@ export async function switchModel(providerKey, displayName, ctxLen) {
   try {
     var s = await invoke("load_settings");
     s.agent_default_provider = S.settings.agent_default_provider || "local";
-    s.agent_plan_mode = !!S.settings.agent_plan_mode;
     s.agent_reasoning_effort = normalizeReasoningEffort(S.settings.agent_reasoning_effort);
     s.agent_temperature = S.settings.agent_temperature || null;
     await invoke("save_settings", { settings: s });

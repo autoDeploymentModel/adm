@@ -3,13 +3,12 @@ import { t as _t } from "../../i18n.js";
 import { S, invoke, listen, store } from "./store.js";
 import { api } from "./api.js";
 import { getErrorMessage, classifyError, friendlyError, ERROR_STEP_CAP, ERROR_CANCEL } from "./error.js";
-import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showInfo, showChoice, reportError, updateContextUsage } from "./ui.js";
+import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showInfo, reportError, updateContextUsage } from "./ui.js";
 import { renderMessages, renderTodos } from "./render.js";
 import { loadConversations, refreshMessages, renderConversationList, selectConversation, syncWxFollowSession } from "./session.js";
 import { handlePermissionRequest, resetPermissionState } from "./permission.js";
 import { loadTools } from "./tools.js";
 import { refreshAgentInfo, reloadAgentConfig } from "./model.js";
-import { maybeAutoContinue, resetAutoContinue, continueAfterStepCap } from "./autocontinue.js";
 import { log } from "./log.js";
 
 // ===== SSE 事件 =====
@@ -168,12 +167,10 @@ export async function setupSSEListener() {
       // 当前 tab 的事件数据已在 store 更新，下方 handleSSEEvent 只做 UI 副作用
       //
       // store.handleSSEEvent 可能已执行 queued 接管（completeRun 把 activeRun
-      // 切到排队运行、非接管时清空 runStats），handleSSEEvent 里的 mismatch
-      // 判定、tookOverQueued 检测和 maybeAutoContinue 的 runStats 都需要用
-      // store 处理前的状态，否则会误杀前序运行/拿到 null 统计
+      // 切到排队运行），handleSSEEvent 里的 mismatch 判定和 tookOverQueued 检测
+      // 都需要用 store 处理前的状态，否则会误杀前序运行
       var prevActiveRun = S.activeRun;
       var prevQueuedRun = S.queuedRun;
-      var prevRunStats = S.runStats;
       var prevCurrentConvId = S.currentConvId;
       store.handleSSEEvent(eventWsId, payload);
 
@@ -200,7 +197,7 @@ export async function setupSSEListener() {
 
       // 当前 tab 的事件继续走原有 UI 处理逻辑
       if (eventWsId === S.activeWsId) {
-        handleSSEEvent(payload, { prevActiveRun: prevActiveRun, prevQueuedRun: prevQueuedRun, prevRunStats: prevRunStats, prevCurrentConvId: prevCurrentConvId });
+        handleSSEEvent(payload, { prevActiveRun: prevActiveRun, prevQueuedRun: prevQueuedRun, prevCurrentConvId: prevCurrentConvId });
       }
     });
 
@@ -285,25 +282,10 @@ function appendErrorBubble(err, opts) {
   if (wsId === S.activeWsId) renderMessages();
 }
 
-// 步数触顶决策卡：模型用完了本轮 64 步预算但仍在干活，由用户显式决定去留。
-// 只针对激活 tab 的当前运行（run_complete 的 activeRun 匹配过滤在上游已完成），
-// 后台 workspace 触顶仍走错误气泡，避免多 tab 弹窗互相遮挡。
+// 步数触顶提示：模型已用完本轮 64 步预算但仍在干活，不再自动续跑，提示用户手动继续。
 function showStepCapDialog(sessionId) {
   if (!sessionId) return;
-  showChoice({
-    title: _t("大模型已经推理很久啦"),
-    message: _t("还是没有解决您的问题吗？您是否要大模型继续干活不解决不罢休，还是终止本次交互，查看下原因先？后续您还可以给我说“继续”来完成本次任务。"),
-    okText: _t("继续干活，不解决不罢休"),
-    cancelText: _t("终止，查看原因"),
-    onOk: function() {
-      continueAfterStepCap(sessionId).catch(function(e) {
-        log.debug("AUTOC", "step_cap 续跑发送失败: " + getErrorMessage(e));
-      });
-    },
-    onCancel: function() {
-      showInfo(_t("可随时发送“继续”恢复本次任务"));
-    },
-  });
+  showInfo(_t("模型已用完本轮预算，您可手动发送“继续”让它继续干活，或先查看中间结果再决定"));
 }
 
 function handleSSEEvent(payload, ctx) {
@@ -401,13 +383,10 @@ function handleSSEEvent(payload, ctx) {
         // 不能当成运行失败：按用户主动取消走「本轮对话已取消」分支，避免误标"中断"
         if (actualData.cancelled || classifyError(actualData.error) === ERROR_CANCEL) {
           showError(_t("本轮对话已取消"));
-          resetAutoContinue();
           // 取消后状态栏切回就绪（排队接管时新运行即将开始，保持 busy 由 run_start 接管）
           if (!tookOverQueued) updateStatusBar("ready", null, S.contextUsage.used);
         } else if (classifyError(actualData.error) === ERROR_STEP_CAP) {
-          // 步数触顶：模型仍在干活但本轮 64 步预算耗尽，不是故障。
-          // 弹决策卡让用户选"继续干活"（人工确认，绝不静默连跑）或"终止查原因"。
-          resetAutoContinue();
+          // 步数触顶：模型仍在干活但本轮 64 步预算耗尽，不是故障。弹决策卡让用户查看或手动续跑
           updateStatusBar("ready", null, S.contextUsage.used);
           showStepCapDialog(actualData.session_id);
         } else {
@@ -417,8 +396,6 @@ function handleSSEEvent(payload, ctx) {
           // 常驻错误气泡写进聊天列表（不弹窗、不进 LLM 上下文）
           appendErrorBubble(actualData.error, { prefix: _t("本轮对话中断: "), hint: ctxHint });
           updateStatusBar("error", null, S.contextUsage.used);
-          // 运行出错时不自动续跑（避免在持续性错误上循环烧 token）
-          resetAutoContinue();
         }
       } else {
         if (actualData && actualData.empty_output) {
@@ -427,18 +404,10 @@ function handleSSEEvent(payload, ctx) {
           console.warn("[agent] run_complete empty_output:", JSON.stringify(actualData));
           showWarning(_t("模型未产生有效输出（输出全部消耗在思考中），本轮已结束"));
           updateStatusBar("error", null, S.contextUsage.used);
-          // 未产生任何输出时不自动续跑（避免继续空转烧 token）
-          resetAutoContinue();
         } else if (actualData && actualData.cancelled) {
           // error 字段空 + cancelled=true：服务端在某些路径（少见）下只标 cancelled 不带 error；
           // 大多数取消场景已在上方 ERROR_CANCEL 分支处理，这里兜底保持原行为
           showError(_t("本轮对话已取消"));
-          resetAutoContinue();
-        } else {
-          // 正常收尾：检查 todos 未完成时自动续跑（内部自带开关/进度守卫/轮数熔断）
-          // 排队接管时不续跑已结束的前序会话（用户已转向其它会话，且其 prompt 正排队）
-          // runStats 用 store 处理前的快照：store.completeRun 非接管时已清空 S.runStats
-          if (!tookOverQueued) maybeAutoContinue(actualData, ctx.prevRunStats || S.runStats);
         }
         // 排队接管时仍有运行在队列中，状态栏保持运行中，不切回就绪；
         // empty_output 分支上面已置 error 态（模型未产生有效输出），此处不得覆盖

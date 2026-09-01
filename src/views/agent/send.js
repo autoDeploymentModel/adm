@@ -10,7 +10,6 @@ import { renderMessages } from "./render.js";
 import { newConversation, renderConversationList } from "./session.js";
 import { refreshAgentInfo, reloadAgentConfig } from "./model.js";
 import { clearPendingFiles } from "./attach.js";
-import { armAutoContinue, resetAutoContinue } from "./autocontinue.js";
 import { clearAttachedSkillsAfterSend } from "./skill_selector.js";
 
 // ===== 发送消息 =====
@@ -51,8 +50,6 @@ function getModelReadiness() {
 export async function cancelCurrentRun() {
   var activeRun = S.activeRun;
   if (!S.isSending || !activeRun || activeRun.sessionId !== S.currentConvId) return;
-  // 用户主动取消 → 同时解除自动续跑，避免取消后又被自动拉起
-  resetAutoContinue();
   try {
     await api("POST", "/v1/workspaces/" + activeRun.workspaceId + "/agent/sessions/" + activeRun.sessionId + "/cancel");
   } catch (e) {
@@ -217,8 +214,8 @@ export async function sendMessage() {
       await api("POST", "/v1/workspaces/" + workspaceId + "/agent", body);
     }
     log.debug("SEND", "sendMessage: 消息已发送, runId=" + (runId || "(fold)") + " wsId=" + workspaceId + " sessionId=" + sessionId);
-    // 独立轮次才初始化本轮运行统计（假完成检测 + 自动续跑进度）并武装自动续跑；
-    // 折叠插入复用当前轮的统计与续跑状态，不重开
+    // 独立轮次才初始化本轮运行统计（假完成检测）
+    // 折叠插入复用当前轮的统计，不重开
     if (!foldIn) {
       store.setRunStats(workspaceId, {
         sessionId: sessionId,
@@ -229,8 +226,6 @@ export async function sendMessage() {
         seenMsgIds: {},
         startedAt: Date.now(),
       });
-      // 手动发送成功 → 武装自动续跑（重置轮数/进度计数，绑定本会话）
-      armAutoContinue(sessionId);
     } else {
       showInfo(_t("消息已发送，将在当前对话的下一步插入并继续处理"));
     }

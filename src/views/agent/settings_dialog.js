@@ -6,7 +6,6 @@ import { parseContextSize, escapeHtml, $input, normalizeReasoningEffort } from "
 import { showConfirm, reportError } from "./ui.js";
 import { updateWorkspaceSelector } from "./workspace.js";
 import { updateModelDropdown, switchModel, refreshServerProviders } from "./model.js";
-import { isAutoContinueEnabled } from "./autocontinue.js";
 import { refreshProjectMemory, openMemoryEditor, closeMemoryEditor, submitMemoryEditor, deleteMemoryEntry } from "./memory.js";
 
 // ===== 设置弹窗 =====
@@ -75,15 +74,8 @@ export function initProjectMemoryUI() {
 }
 
 export function updateSettingsUI() {
-  var planCheck = $input("settings-plan");
   var reasoningSelect = $input("settings-reasoning-effort");
   var tempInput = $input("settings-temperature");
-
-  // Plan 模式
-  planCheck.checked = !!S.settings.agent_plan_mode;
-
-  // 自动续跑（localStorage 持久化，默认开启）
-  $input("settings-auto-continue").checked = isAutoContinueEnabled();
 
   // 调试模式（持久化到 config.json 的 debug_logging，由后端开关控制）
   $input("settings-debug-logging").checked = !!S.settings.debug_logging;
@@ -173,7 +165,6 @@ export async function saveSettings() {
   try {
     // 保存 agent 设置到 config
     var s = await invoke("load_settings");
-    s.agent_plan_mode = S.settings.agent_plan_mode || false;
     s.agent_default_provider = S.settings.agent_default_provider || "local";
     s.agent_reasoning_effort = normalizeReasoningEffort(S.settings.agent_reasoning_effort);
     s.agent_temperature = S.settings.agent_temperature || null;
