@@ -17,7 +17,8 @@ import { renderMessageOutline } from "./session.js";
 // （保住 <details> 元素身份，流式期间可点开/收起）；结构变化才重建该消息节点。
 
 // 该 part 是否需要渲染（用户消息不显示 finish 标记）
-// hiddenCallIds: 因工具不可用（如 Plan 模式下 edit/write）而应隐藏的 tool_call id 集合，
+// hiddenCallIds: 因工具不可用而应隐藏的 tool_call id 集合（如工具被移除/未注册，
+// 服务端返回 "Tool not found: xxx"，对应工具调用与结果成对隐藏避免噪音）
 // 对应的 tool_call 与 tool_result 一并不渲染。
 function isPartRenderable(part, role, hiddenCallIds) {
   if (!part || !part.type) return false;
@@ -30,8 +31,8 @@ function isPartRenderable(part, role, hiddenCallIds) {
   return true;
 }
 
-// 收集"工具不可用"的 tool_call id：Plan 模式下模型仍会尝试 edit/write 等被移除的工具，
-// 服务端必须回 "Tool not found: xxx" 让模型自我纠正，但这类失败对用户无意义，不展示。
+// 收集"工具不可用"的 tool_call id：模型尝试调用不存在/被禁用的工具时，
+// 服务端回 "Tool not found: xxx" 让模型自我纠正，但这类失败对用户无意义，不展示。
 // 返回需隐藏的 tool_call id 集合（tool_call 与其 tool_result 成对隐藏）。
 function unavailableToolCallIds(parts) {
   var ids = new Set();

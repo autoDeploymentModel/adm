@@ -7,7 +7,7 @@ import { S, invoke, listen, store } from "./agent/store.js";
 import { setLogEnabled } from "./agent/log.js";
 import { api } from "./agent/api.js";
 import { generateUUID, isMsgAreaAtBottom, autoResize, $input, normalizeReasoningEffort } from "./agent/utils.js";
-import { updateStatusBar, updateContextUsage, updateModeToggle, updateSendButton, exitManualScrollMode, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showConfirm, showCopyPasteMenu, updateScrollBottomBtn, reportError, showInitProgress, hideInitProgress } from "./agent/ui.js";
+import { updateStatusBar, updateContextUsage, updateSendButton, exitManualScrollMode, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showConfirm, showCopyPasteMenu, updateScrollBottomBtn, reportError, showInitProgress, hideInitProgress } from "./agent/ui.js";
 import { loadConversations, renderConversationList, selectConversation, newConversation, toggleOutlinePanel, setOutlinePanelOpen } from "./agent/session.js";
 import { syncWorkingIndicator } from "./agent/render.js";
 import { sendMessage, cancelCurrentRun } from "./agent/send.js";
@@ -18,7 +18,6 @@ import { switchModel, refreshServerProviders, resolveAgentModel, updateModelDrop
 import { enableAutoCompact, updateWorkspaceSelector, toggleWorkDirDropdown, closeWorkDirDropdown, validateWorkDirs } from "./agent/workspace.js";
 import { showSettings, hideSettings, updateSettingsUI, saveSettings, showAddModelDialog, hideAddModelDialog, addModel, initProjectMemoryUI, renderVisionModelSelect } from "./agent/settings_dialog.js";
 import { addPendingFiles, parseUriListPaths, addPastedPaths, looksLikeFilePath } from "./agent/attach.js";
-import { setAutoContinueEnabled } from "./agent/autocontinue.js";
 import { bindSkillSelectorEvents, initSkillSelector, clearAttachedSkillsAfterSend } from "./agent/skill_selector.js";
 
 // ===== 初始化 =====
@@ -163,7 +162,7 @@ async function _doInit(seq) {
       console.warn("[agent] 获取 agentInfo 失败:", e);
     }
 
-    // 把本地模式（skip 直通 + Plan 开关）同步到服务端（复用已有工作区时服务端保留的是旧状态，可能与本地不一致）
+    // 把本地权限模式（skip 直通）同步到服务端（复用已有工作区时服务端保留的是旧状态，可能与本地不一致）
     // + 全局默认开启自动压缩（Compact 模式）。两者独立，并行执行
     await Promise.all([
       syncModeToServer().catch(function(e) { console.warn("[agent] syncModeToServer 失败:", e); }),
@@ -207,7 +206,6 @@ async function _doInit(seq) {
   }
 
   updateModelDropdown();
-  updateModeToggle();
   updateSettingsUI();
   if (seq !== S.initSeq) return;
 
@@ -245,7 +243,7 @@ async function setupWorkspace(workdir) {
         if (!S.workspaceInfo) {
           const newWs = await api("POST", "/v1/workspaces", {
             path: workdir,
-            yolo: true, // 审批模式已移除：权限请求直通，Plan 模式靠服务端只读工具集约束
+            yolo: true, // 审批模式已移除：权限请求直通
             client_id: S.clientId
           });
           S.workspaceInfo = { id: newWs.id, path: newWs.path, name: newWs.path.split(/[\\/]/).pop() };
@@ -464,7 +462,7 @@ function bindEvents() {
   }
 
   // 设置项即时生效：任一字段变更立即应用并持久化（无保存/取消按钮）
-  ["settings-plan", "settings-auto-continue", "settings-debug-logging", "settings-reasoning-effort", "settings-temperature", "settings-vision-model"].forEach(function(id) {
+  ["settings-debug-logging", "settings-reasoning-effort", "settings-temperature", "settings-vision-model"].forEach(function(id) {
     $input(id).addEventListener("change", applySettings);
   });
 
@@ -482,9 +480,7 @@ function bindEvents() {
     S.settings.agent_reasoning_effort = normalizeReasoningEffort($input("settings-reasoning-effort").value);
     var tempVal = $input("settings-temperature").value;
     S.settings.agent_temperature = tempVal ? parseFloat(tempVal) : null;
-    S.settings.agent_plan_mode = $input("settings-plan").checked;
     S.settings.agent_vision_model = $input("settings-vision-model").value || "admAgent/admImage-model";
-    setAutoContinueEnabled($input("settings-auto-continue").checked);
     // 调试模式：先同步后端开关（实时生效 + 开启时首次截断日志），再随 settings 持久化。
     // 后端切换失败（如日志文件创建失败）时必须回滚状态，否则会把 debug_logging=true
     // 写盘，造成“勾选着、配置为开、实际没记录”的假开启态（且跨重启延续）。
@@ -500,8 +496,6 @@ function bindEvents() {
       reportError(e, { prefix: _t("开启调试日志失败: ") });
     }
     await saveSettings();
-    await syncModeToServer();
-    updateModeToggle();
     updateModelBtn();
     var selectedKey = S.settings.agent_default_provider || "local";
     var resolved = resolveAgentModel(selectedKey);
@@ -513,15 +507,6 @@ function bindEvents() {
 
   // 云端模型管理
   document.getElementById("agent-add-cloud-btn").addEventListener("click", showAddModelDialog);
-
-  // 模式切换 (工具栏)：执行 ↔ Plan（只读计划）
-  document.getElementById("agent-mode-toggle").addEventListener("click", async function() {
-    S.settings.agent_plan_mode = !S.settings.agent_plan_mode;
-    updateModeToggle();
-    await saveSettings();
-    // 实时同步到服务端，对话中途切换下一轮生效
-    await syncModeToServer();
-  });
 
   // 模型下拉
   document.getElementById("agent-model-btn").addEventListener("click", function(e) {
@@ -820,15 +805,6 @@ export default {
     // 监听 admAgent server 意外退出（unmount 时经 S.unlisteners 统一解绑）
     if (typeof listen === "function") {
       listen("agent-server-died", handleServerDied)
-        .then(function(u) { S.unlisteners.push(u); })
-        .catch(function() {});
-      // 微信端 /plan、/yolo 切换模式后，Rust 发此事件让 Agent 页按钮跟随（两端一致）。
-      // 仅更新内存态 + 按钮：config.json 已由微信端写盘、服务端已同步，无需再 save/sync 避免回环。
-      listen("agent-mode-changed", function(e) {
-        if (!S.settings) return;
-        S.settings.agent_plan_mode = !!(e && e.payload && e.payload.plan);
-        updateModeToggle();
-      })
         .then(function(u) { S.unlisteners.push(u); })
         .catch(function() {});
     }

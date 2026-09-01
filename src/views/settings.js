@@ -389,10 +389,6 @@ const template = `
             <div class="param-label">${_t("工作目录")}</div>
             <div class="param-input"><span style="font-size:13px;color:var(--c-text-2);">${_t("跟随 Agent 页工作目录")}</span><div class="param-desc">${_t("微信 Bot 与 Agent 页使用同一工作目录，在 Agent 页修改")}</div></div>
           </div>
-          <div class="param-row">
-            <div class="param-label">${_t("模式")}</div>
-            <div class="param-input"><span style="font-size:13px;color:var(--c-text-2);">${_t("跟随 Agent 页模式设置")}</span><div class="param-desc">${_t("执行模式直接执行修改；Plan 模式只读调研并产出计划，不修改任何文件")}</div></div>
-          </div>
         </div>
 
         <div class="param-group">

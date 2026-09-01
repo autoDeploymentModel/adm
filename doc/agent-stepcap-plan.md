@@ -16,7 +16,7 @@
 
 ### A1. `internal/agent/agent_loop_llm.go`
 
-1. 上限提高：`const maxAgentSteps = 64` → `128`（line 27；保持原注释语义）
+1. 上限提高：`const maxAgentSteps = 64` → `256`（line 27；保持原注释语义）
 2. 哨兵错误（放 errStepCap 变量区，注释注明 `max_steps_reached` 为前端分类依赖的稳定 token，改文案不得删除）：
 
 ```go
@@ -29,7 +29,7 @@ var errStepCap = fmt.Errorf(
 
 ```go
 // 仅"自然耗尽"才判触顶：endTurn/stopTurn/硬失败/重复环/summarize 均显式 break 到此判定之外。
-// genCtx 已取消（收尾恰在第 128 步的竞态）不设 step_cap，由 Run defer 标 cancelled。
+// genCtx 已取消（收尾恰在第 256 步的竞态）不设 step_cap，由 Run defer 标 cancelled。
 if stepIdx >= maxAgentSteps && loopErr == nil && !shouldSummarize && genCtx.Err() == nil {
     loopErr = errStepCap
     slog.Warn("Agent loop: reached max step cap, ending turn with visible error",
@@ -98,7 +98,7 @@ if (actualData && actualData.error) {
 | 前端类型 | `pnpm typecheck` | 0 错误 |
 | 决策卡 | devtools 注入含哨兵 error 的 run_complete | 弹卡、双按钮、无红色气泡、状态栏就绪 |
 | 继续干活 | 点主按钮 | 新 run 启动、用户气泡出现、续跑守卫重新生效 |
-| 端到端 | 新 sidecar + >64 步真实大任务 | 不再 64 步静默；128 步弹卡；续跑后接着干 |
+| 端到端 | 新 sidecar + >64 步真实大任务 | 不再 64 步静默；256 步弹卡；续跑后接着干 |
 | 回归 | 正常完成/手动取消/quota/empty_output/后台 workspace 触顶 | 各分支行为不变 |
 
 ## 工作量
@@ -111,7 +111,7 @@ if (actualData && actualData.error) {
 
 1. 旧桌面端 + 新 server：触顶显示红色"本轮对话中断: max_steps_reached…"气泡——可见但样式普通
 2. 哨兵是文本约定：server 改文案必须保留 `max_steps_reached`（注释 + 单测锁 token）
-3. 128 上限使最坏单轮耗时/成本约翻倍：由用户点"继续干活"知情消费
+3. 256 上限使最坏单轮耗时/成本约翻倍：由用户点"继续干活"知情消费
 
 ---
 

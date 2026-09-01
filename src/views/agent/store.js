@@ -337,9 +337,7 @@ class Store {
       _log("debug", "STORE", "completeRun ws=" + wsId.slice(0, 8) + " → isSending=false");
       ws.isSending = false;
       ws.activeRun = null;
-      // 非接管：清理 runStats。active ws 的 maybeAutoContinue 用的是
-      // sse.js listener 在处理前快照的 prevRunStats，不受此处清空影响；
-      // 后台 ws 没有 sse.js 清理逻辑，必须在此清理避免残留
+      // 非接管：清理 runStats。后台 ws 没有 sse.js 清理逻辑，必须在此清理避免残留
       ws.runStats = null;
     }
     this.workspacesObj[wsId] = ws.snapshot();
@@ -487,7 +485,6 @@ export const S = {
   toolsTab: "skill",
   toolsData: { skill: [], lsp: [], mcp: [] },
   todosCollapsed: false,
-  autoContinue: { armedSession: null, rounds: 0, lastIncomplete: -1, noProgress: 0 },
   initSeq: 0,
   sseListener: null,
   sseErrorUnlisten: null,
