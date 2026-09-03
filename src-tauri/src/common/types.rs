@@ -105,13 +105,10 @@ pub launch_params: LaunchParams,
 /// 已弃用：单个工作目录（迁移到 agent_workdirs 后仅用于向后兼容读取）
 #[serde(default)]
 pub agent_workdir: String,
-/// 工作目录列表（数组模式），is_default=true 的为当前默认目录
-#[serde(default)]
-pub agent_workdirs: Vec<WorkDirEntry>,
-/// Agent Plan 模式：只读调研并产出计划，不修改任何文件（false = 执行模式直通）
-#[serde(default)]
-pub agent_plan_mode: bool,
-/// Agent 默认 Provider（如 "local" / "xiaomimimo" 等）
+    /// 工作目录列表（数组模式），is_default=true 的为当前默认目录
+    #[serde(default)]
+    pub agent_workdirs: Vec<WorkDirEntry>,
+    /// Agent 默认 Provider（如 "local" / "xiaomimimo" 等）
 #[serde(default)]
 pub agent_default_provider: String,
 /// Agent 推理强度（auto / low / medium / high）

@@ -669,27 +669,6 @@ fn load_settings(app: &tauri::AppHandle) -> Settings {
     }
 }
 
-/// 写回 config.json 的 agent_plan_mode（读-改-写，保留其它字段）。
-/// 供微信端 /plan、/yolo 指令切换模式持久化，与 Agent 页共享同一份 config.json。
-fn save_agent_plan_mode(app: &tauri::AppHandle, plan: bool) -> Result<(), AppError> {
-    let state = app.state::<AppState>();
-    let _lock = state.config_write_lock.lock().map_err(|e| e.to_string())?;
-    let data_dir = config::get_data_dir(Some(app))?;
-    let config_path = data_dir.join("config.json");
-    let mut settings = if config_path.exists() {
-        let json = std::fs::read_to_string(&config_path)
-            .map_err(|e| format!("读取配置文件失败: {}", e))?;
-        serde_json::from_str::<Settings>(&json).map_err(|e| format!("解析配置文件失败: {}", e))?
-    } else {
-        Settings::default()
-    };
-    settings.agent_plan_mode = plan;
-    let json =
-        serde_json::to_string_pretty(&settings).map_err(|e| format!("序列化配置失败: {}", e))?;
-    std::fs::write(&config_path, &json).map_err(|e| format!("写入配置文件失败: {}", e))?;
-    Ok(())
-}
-
 /// admAgent HTTP POST（返回 HTTP 状态码 + 宽容解析的 JSON）
 async fn agent_post(rt: &IlinkRuntime, path: &str, body: &Value) -> Result<(u16, Value), AppError> {
     let (st, bytes) = tokio::time::timeout(
@@ -885,7 +864,7 @@ async fn handle_incoming(rt: &Arc<IlinkRuntime>, msg: wechatbot::IncomingMessage
 
 /// 微信端指令帮助文案。供 /help 指令与每次启动的首条问候复用，保证两处同步。
 fn command_help_text() -> &'static str {
-    "🤖 ADM Agent 指令：\n/plan  切换只读计划模式\n/yolo  切换执行模式\n/stop  取消当前任务\n/status  查看运行状态\n/help  显示本帮助\n\n消息会进入电脑端当前打开的会话。"
+    "🤖 ADM Agent 指令：\n/stop  取消当前任务\n/status  查看运行状态\n/help  显示本帮助\n\n消息会进入电脑端当前打开的会话。"
 }
 
 /// 微信端控制指令：/stop /status /help
@@ -911,11 +890,10 @@ async fn handle_command(rt: &Arc<IlinkRuntime>, from: &str, text: &str) {
             let ws = backend_of(rt).await;
             let s = load_settings(&rt.app);
             let workdir = if s.agent_workdir.is_empty() { "（跟随 Agent 页）".to_string() } else { s.agent_workdir.clone() };
-            let mode = if s.agent_plan_mode { "Plan（只读计划）" } else { "执行（直接修改）" };
             let mut lines = vec![
                 "📊 状态".to_string(),
                 format!("工作目录：{}", workdir),
-                format!("模式：{}", mode),
+                "模式：执行（直接修改）".to_string(),
             ];
             if let Some(ws) = ws {
                 match agent_get(rt, &format!("/v1/workspaces/{}/agent", ws)).await {
@@ -941,8 +919,6 @@ async fn handle_command(rt: &Arc<IlinkRuntime>, from: &str, text: &str) {
             }
             send_wx_text(rt, from, &lines.join("\n")).await;
         }
-        "/plan" => set_plan_mode(rt, from, true).await,
-        "/yolo" | "/execute" => set_plan_mode(rt, from, false).await,
         "/help" | "/h" => {
             send_wx_text(rt, from, command_help_text()).await;
         }
@@ -950,29 +926,6 @@ async fn handle_command(rt: &Arc<IlinkRuntime>, from: &str, text: &str) {
             send_wx_text(rt, from, "未知指令，发送 /help 查看可用指令。").await;
         }
     }
-}
-
-/// 切换 Agent 模式（Plan / 执行），供微信端 /plan、/yolo 指令复用：
-/// 写回 config.json → 若后端就绪则实时同步 agent/mode → 发 Tauri 事件让 Agent 页按钮跟随 → 回微信确认。
-async fn set_plan_mode(rt: &Arc<IlinkRuntime>, from: &str, plan: bool) {
-    if let Err(e) = save_agent_plan_mode(&rt.app, plan) {
-        send_wx_text(rt, from, &format!("❌ 切换模式失败：{}", e)).await;
-        return;
-    }
-    // 后端就绪时实时同步到当前工作区（旧版 admAgent 无此接口时忽略失败，写盘仍生效）
-    let ws = backend_of(rt).await;
-    if let Some(ws) = ws {
-        let _ = agent_post(rt, &format!("/v1/workspaces/{}/agent/mode", ws), &json!({ "plan": plan })).await;
-    }
-    // 通知前端 Agent 页更新模式按钮/输入框，保持两端一致
-    let _ = rt.app.emit("agent-mode-changed", json!({ "plan": plan }));
-    flow_log(&rt.app, "set_mode", &format!("plan={}", plan));
-    let reply = if plan {
-        "📋 已切换到 Plan 模式（只读计划，不修改文件）。"
-    } else {
-        "⚡ 已切换到执行模式（直接执行修改）。"
-    };
-    send_wx_text(rt, from, reply).await;
 }
 
 /// 读取当前后端（工作区）。直接实时读 AppState（前端当前订阅的工作区），
@@ -1231,15 +1184,14 @@ async fn adopt_workspace(rt: &Arc<IlinkRuntime>, ws: &str) -> Result<(), AppErro
         let _ = agent_post(rt, &format!("/v1/workspaces/{}/permissions/skip", ws), &json!({ "skip": true })).await;
         flow_log(&rt.app, "adopt_skip", &format!("ws={} skip {:?} -> true", ws, cur_skip));
     }
-    // 同步 Plan 模式（跟随 Agent 页设置；旧版 admAgent 无此接口时忽略失败）
-    let want_plan = load_settings(&rt.app).agent_plan_mode;
+    // 强制 yolo（plan=false）：覆盖历史被切到 plan=true 的工作区（可能来自 TUI）
     let cur_plan = match agent_get(rt, &format!("/v1/workspaces/{}/agent/mode", ws)).await {
         Ok((200, v)) => v.get("plan").and_then(|b| b.as_bool()),
         _ => None,
     };
-    if cur_plan != Some(want_plan) {
-        let _ = agent_post(rt, &format!("/v1/workspaces/{}/agent/mode", ws), &json!({ "plan": want_plan })).await;
-        flow_log(&rt.app, "adopt_plan", &format!("ws={} plan {:?} -> {}", ws, cur_plan, want_plan));
+    if cur_plan == Some(true) {
+        let _ = agent_post(rt, &format!("/v1/workspaces/{}/agent/mode", ws), &json!({ "plan": false })).await;
+        flow_log(&rt.app, "adopt_yolo", &format!("ws={} plan {:?} -> false", ws, cur_plan));
     }
     let mut s = rt.shared.lock().await;
     s.workspace_id = Some(ws.to_string());
