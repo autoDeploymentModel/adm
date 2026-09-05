@@ -49,6 +49,7 @@ const EN = {
   "正在解压安装...": "Extracting and installing...",
   "安装完成！": "Installation complete!",
   "该功能即将开放，敬请期待": "This feature is coming soon",
+  "大模型正在工作，请勿切换页面": "The model is still working. Please do not switch pages.",
   "当前仅支持 Apple Silicon (M 系列) Mac": "Currently only supported on Apple Silicon (M-series) Macs",
   "当前未启动本地模型，进入 Agent 后可能无法使用本地模型对话。\n是否继续进入？": "No local model is running. Local model chat may be unavailable in Agent.\nContinue?",
   "取消": "Cancel",

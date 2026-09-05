@@ -377,11 +377,11 @@
   <div id="app">
     <div id="view-root"></div>
     <div id="hardware-bar">
-      <div id="home-btn" onclick="location.hash='#/list'">
+      <div id="home-btn" onclick="navigateTo('/list')">
         <span class="btn-icon">&#8962;</span>
         <span class="btn-text" data-i18n="首页">首页</span>
       </div>
-      <div id="settings-btn" onclick="location.hash='#/settings'">
+      <div id="settings-btn" onclick="navigateTo('/settings')">
         <span class="btn-icon">&#9881;</span>
         <span class="btn-text" data-i18n="设置">设置</span>
       </div>
@@ -389,7 +389,7 @@
         <span class="btn-icon">&#129302;</span>
         <span class="btn-text" data-i18n="Agent">Agent</span>
       </div>
-      <div id="skills-btn" onclick="location.hash='#/skills'">
+      <div id="skills-btn" onclick="navigateTo('/skills')">
         <span class="btn-icon">🧩</span>
         <span class="btn-text" data-i18n="技能管理">技能管理</span>
       </div>
@@ -448,7 +448,8 @@
       modelList: [],
       modelTypes: [],
       currentTypeFilter: "all",
-
+      // agent 是否正在工作（由 agent 视图 store.js syncAgentBusy 维护，用于导航拦截）
+      agentBusy: false,
     };
 
     let systemInfo = null;
@@ -760,6 +761,32 @@
       showComingSoon._t = setTimeout(function () { tip.style.display = "none"; }, 2500);
     }
 
+    // ===== 导航拦截 =====
+    // Agent 正在工作时禁止切换到其它页面（壳层底部导航统一入口）。
+    // agentBusy 由 agent 视图 store.js syncAgentBusy 维护（startRun/completeRun/cancelRun 时更新）。
+    function navigateTo(path) {
+      if (window.__adm_state && window.__adm_state.agentBusy) {
+        showAgentBusyTip();
+        return;
+      }
+      location.hash = "#" + path;
+    }
+
+    let _agentBusyTipTimer = null;
+    function showAgentBusyTip() {
+      let tip = document.getElementById("agent-busy-tip");
+      if (!tip) {
+        tip = document.createElement("div");
+        tip.id = "agent-busy-tip";
+        tip.className = "global-toast";
+        document.body.appendChild(tip);
+      }
+      tip.textContent = t("大模型正在工作，请勿切换页面");
+      tip.style.display = "block";
+      clearTimeout(_agentBusyTipTimer);
+      _agentBusyTipTimer = setTimeout(function () { tip.style.display = "none"; }, 2500);
+    }
+
     // 暴露给视图模块（如 settings 调用）
     window.ADM = {
       showUpdateDialog,
@@ -768,6 +795,7 @@
     };
     window.hideUpdateDialog = hideUpdateDialog;
     window.goAgent = goAgent;
+    window.navigateTo = navigateTo;
     window.openUrl = openUrl;
     window.onSystemUpdateDismiss = onSystemUpdateDismiss;
     window.downloadVcRedist = downloadVcRedist;
