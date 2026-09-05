@@ -445,6 +445,10 @@ export async function selectConversation(convId) {
     // 渲染 Todo 列表
     renderTodos(S.currentConv.todos);
 
+    // 通知手动压缩按钮刷新可用性（消息数 / 当前会话已变化）
+    document.dispatchEvent(new CustomEvent("agent-conversation-changed"));
+    document.dispatchEvent(new CustomEvent("agent-messages-changed"));
+
     // 启用操作按钮
     /** @type {HTMLButtonElement} */ (document.getElementById("agent-undo-btn")).disabled = false;
   } catch (e) {
