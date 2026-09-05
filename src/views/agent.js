@@ -19,6 +19,7 @@ import { enableAutoCompact, updateWorkspaceSelector, toggleWorkDirDropdown, clos
 import { showSettings, hideSettings, updateSettingsUI, saveSettings, showAddModelDialog, hideAddModelDialog, addModel, initProjectMemoryUI, renderVisionModelSelect } from "./agent/settings_dialog.js";
 import { addPendingFiles, parseUriListPaths, addPastedPaths, looksLikeFilePath } from "./agent/attach.js";
 import { bindSkillSelectorEvents, initSkillSelector, clearAttachedSkillsAfterSend } from "./agent/skill_selector.js";
+import { bindCompactBtnEvents } from "./agent/compact.js";
 
 // ===== 初始化 =====
 //
@@ -696,6 +697,9 @@ function bindEvents() {
   document.getElementById("agent-send-btn").addEventListener("click", sendMessage);
   // 独立「停止」按钮：当前会话运行中显示，中断运行（不折叠、不排队）
   document.getElementById("agent-stop-btn").addEventListener("click", function() { cancelCurrentRun(); });
+
+  // 手动压缩上下文：触发服务端生成摘要并替换历史。运行中禁用，防止与当前 run 的消息流冲突。
+  bindCompactBtnEvents();
 
   // 右键菜单：消息区域 → 复制/粘贴
   var msgArea = document.getElementById("agent-msg-area");

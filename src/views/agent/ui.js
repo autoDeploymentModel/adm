@@ -165,6 +165,11 @@ export function updateSendButton() {
   // 独立「停止」按钮：仅当前会话正在运行时显示，用于中断运行（不折叠、不排队）
   var stopBtn = document.getElementById("agent-stop-btn");
   if (stopBtn) stopBtn.style.display = isCurrentRun ? "" : "none";
+
+  // 通知其他模块（如手动压缩按钮）同步刷新按钮可用性：
+  // 共享同一组状态（S.isSending / activeRun.sessionId / currentConvId），
+  // 用事件解耦避免 ui.js 反向依赖 agent.js。
+  document.dispatchEvent(new CustomEvent("agent-toolbar-state-changed"));
 }
 
 // ===== 上下文用量 =====
@@ -278,9 +283,9 @@ export function hideInitProgress() {
  * @param {string} msg 提示文本
  * @param {"error"|"warn"|"info"} [level] 级别，默认 error
  */
-export function showNotice(msg, level) {
+export function showNotice(msg, level, keep = false) {
   var area = document.getElementById("agent-msg-area");
-  if (!area || !msg) return;
+  if (!area || !msg) return null;
   var cls = level === "warn" ? "warn" : level === "info" ? "info" : "error";
   var div = document.createElement("div");
   div.className = "msg " + cls;
@@ -291,8 +296,12 @@ export function showNotice(msg, level) {
   if (!S.manualScrollMode) area.scrollTop = area.scrollHeight;
   S.programmaticScroll = false;
   updateScrollBottomBtn();
-  // 3 秒后自动消失（增量渲染会保留提示节点，需自行清理避免堆积）
-  setTimeout(function() { if (div.parentNode) div.remove(); }, 3000);
+  // 默认 3 秒后自动消失（增量渲染会保留提示节点，需自行清理避免堆积）；
+  // keep=true 时保持显示直到调用方手动移除（如压缩进行中的状态提示）
+  if (!keep) {
+    setTimeout(function() { if (div.parentNode) div.remove(); }, 3000);
+  }
+  return div;
 }
 
 // 统一错误展示入口：传入原始错误（字符串 / Error / 结构化对象均可），

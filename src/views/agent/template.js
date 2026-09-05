@@ -852,6 +852,37 @@ export const template = `
   .toolbar-wx-btn.on { background: #07c160; color: #fff; }
   .toolbar-wx-btn.on:hover { background: #06a552; }
 
+  /* 手动压缩上下文按钮（技能按钮旁）：运行中禁用防止竞态 */
+  .toolbar-compact-btn {
+    background: rgba(255,255,255,0.08);
+    border: none;
+    color: var(--c-text-2);
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .toolbar-compact-btn:hover:not(:disabled) {
+    background: rgba(255,255,255,0.15);
+    color: var(--c-text);
+  }
+  .toolbar-compact-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .toolbar-compact-btn.compacting {
+    background: rgba(var(--c-accent-rgb), 0.18);
+    color: var(--c-accent);
+    cursor: progress;
+  }
+  .compact-icon { font-size: 14px; }
+  .compact-text { font-size: 13px; }
+
   .toolbar-model-selector {
     position: relative;
   }
@@ -1810,6 +1841,11 @@ export const template = `
             <div class="model-dropdown" id="agent-skill-dropdown">
             </div>
           </div>
+          <!-- ②a+ 手动压缩上下文：触发服务端生成摘要并替换历史；运行中按钮禁用 -->
+          <button class="toolbar-compact-btn" id="agent-compact-btn" title="${_t("手动压缩上下文：将当前会话的历史消息生成摘要以释放上下文窗口")}" disabled>
+            <span class="compact-icon">🗜️</span>
+            <span class="compact-text">${_t("压缩上下文")}</span>
+          </button>
           <!-- ②b 微信消息开关：开 = 微信 Bot 消息进入当前打开的会话；关 = 不接收微信消息 -->
           <button class="toolbar-wx-btn" id="agent-wx-follow-btn" title="${_t("微信消息开关：开启后微信 Bot 消息进入当前打开的会话；关闭后不再接收微信消息")}">
             <span class="wx-icon">💬</span>

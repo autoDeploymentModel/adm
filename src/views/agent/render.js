@@ -92,6 +92,8 @@ export function renderMessages() {
     updateScrollBottomBtn();
     // 消息清空（如切到新会话尚未加载）→ 同步刷新右侧大纲为空态
     renderMessageOutline();
+    // 消息列表变化通知（空消息场景也要派发，否则手动压缩按钮无法根据 hasContent=0 切到禁用态）
+    document.dispatchEvent(new CustomEvent("agent-messages-changed"));
     return;
   }
   if (area.querySelector(".empty-state")) area.innerHTML = "";
@@ -155,6 +157,8 @@ export function renderMessages() {
   updateScrollBottomBtn();
   // 同步刷新右侧「对话记录」大纲面板（SSE 流式期间 message 增量会持续触发）
   renderMessageOutline();
+  // 消息列表变化通知（如手动压缩按钮：消息数影响按钮启用条件）
+  document.dispatchEvent(new CustomEvent("agent-messages-changed"));
 }
 
 // 「正在思考」指示器同步：运行中确保持久节点存在并置于消息区末尾；结束则移除。

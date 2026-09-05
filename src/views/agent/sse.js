@@ -10,6 +10,7 @@ import { handlePermissionRequest, resetPermissionState } from "./permission.js";
 import { loadTools } from "./tools.js";
 import { refreshAgentInfo, reloadAgentConfig } from "./model.js";
 import { log } from "./log.js";
+import { onSessionUpdated } from "./compact.js";
 
 // ===== SSE 事件 =====
 
@@ -525,6 +526,9 @@ function handleSessionSSEEvent(action, sessData, ctx) {
     renderConversationList();
   } else if (action === "updated") {
     renderConversationList();
+    // 手动压缩完成信号：压缩成功后服务端写回 summary_message_id（session.Save →
+    // Publish UpdatedEvent），由 compact.js 判断是否匹配进行中的压缩并收尾
+    onSessionUpdated(sessData);
     // 如果是当前会话，更新标题、上下文和 Todo 面板
     if (S.currentConvId === sessData.id) {
       document.getElementById("agent-conv-title").textContent = sessData.title || _t("会话");
