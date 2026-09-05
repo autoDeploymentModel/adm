@@ -121,6 +121,7 @@ class Store {
     S.workspaces = this.workspacesObj;
     S.activeWsId = this.activeWsId;
     if (S.serverInfo) S.serverInfo.workspace_id = this.activeWsId;
+    this.syncAgentBusy();
   }
 
   setActive(wsId) {
@@ -283,6 +284,20 @@ class Store {
   }
 
   // ===== 运行状态 =====
+  // 同步「agent 是否正在工作」到共享状态，供壳层（index.html）导航拦截使用。
+  // 语义：任一 workspace 正在运行即视为工作中——sse.js 对后台 workspace 事件也
+  // 会调 completeRun/startRun，若只按单个 ws 判断，后台 run 结束会错误清除
+  // agentBusy，导致激活 workspace 还在跑时导航拦截失效。
+  syncAgentBusy() {
+    try {
+      var busy = false;
+      this.workspaces.forEach(function(ws) {
+        if (ws && ws.isSending) busy = true;
+      });
+      window.__adm_state.agentBusy = busy;
+    } catch (_) {}
+  }
+
   startRun(wsId, sessionId, runId) {
     var ws = this.workspaces.get(wsId);
     if (!ws) return;
@@ -304,6 +319,7 @@ class Store {
     ws.isSending = true;
     ws.activeRun = { workspaceId: wsId, sessionId: sessionId, runId: runId };
     ws.queuedRun = null;
+    this.syncAgentBusy();
     this.workspacesObj[wsId] = ws.snapshot();
     if (wsId === this.activeWsId) this.bindToS();
   }
@@ -340,6 +356,7 @@ class Store {
       // 非接管：清理 runStats。后台 ws 没有 sse.js 清理逻辑，必须在此清理避免残留
       ws.runStats = null;
     }
+    this.syncAgentBusy();
     this.workspacesObj[wsId] = ws.snapshot();
     if (wsId === this.activeWsId) this.bindToS();
   }
@@ -352,6 +369,7 @@ class Store {
     ws.activeRun = null;
     ws.queuedRun = null;
     ws.runStats = null;
+    this.syncAgentBusy();
     this.workspacesObj[wsId] = ws.snapshot();
     if (wsId === this.activeWsId) this.bindToS();
   }
