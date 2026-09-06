@@ -249,6 +249,11 @@ function scrollToMessage(msgKey, sourceItem) {
     showError(_t("未找到对应消息（可能已被折叠或删除）"));
     return;
   }
+  var round = target.closest(".msg-round");
+  if (round) {
+    round.classList.remove("msg-round-collapsed");
+    /** @type {any} */ (round)._admRoundOpen = true;
+  }
   // 退出手动滚动模式 + 跳到底部命令互斥状态，确保后续 scroll 事件判定为程序触发
   S.programmaticScroll = true;
   S.lastProgrammaticScroll = Date.now();
@@ -257,6 +262,17 @@ function scrollToMessage(msgKey, sourceItem) {
     target.scrollIntoView({ behavior: "smooth", block: "center" });
   } catch (_) {
     target.scrollIntoView();
+  }
+  if (round) {
+    var roundBody = round.querySelector(":scope > .msg-round-body");
+    if (roundBody) {
+      var bodyTop = roundBody.getBoundingClientRect().top;
+      var targetTop = target.getBoundingClientRect().top;
+      var bodyHeight = roundBody.clientHeight;
+      var targetHeight = target.getBoundingClientRect().height;
+      var centerOffset = targetTop - bodyTop - (bodyHeight - targetHeight) / 2;
+      round.scrollTop += centerOffset;
+    }
   }
   // 闪烁高亮：复用模板内 .msg.flash-highlight 动画
   target.classList.remove("flash-highlight");
