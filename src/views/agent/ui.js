@@ -2,7 +2,7 @@
 import { t as _t } from "../../i18n.js";
 import { S, store } from "./store.js";
 import { api } from "./api.js";
-import { formatTokens, isMsgAreaAtBottom } from "./utils.js";
+import { formatTokens, isMsgAreaAtBottom, isFullyAtBottom } from "./utils.js";
 import { getErrorMessage, friendlyError } from "./error.js";
 
 // 退出手动滚动模式（切换会话/工作区时调用，避免把旧会话的滚动位置带到新会话）
@@ -11,12 +11,13 @@ export function exitManualScrollMode() {
   S.lastProgrammaticScroll = 0;
 }
 
-// 更新「回到底部」悬浮圆球的显隐：未滚到底部时显示，到底/无滚动条时隐藏
+// 更新「回到底部」悬浮圆球的显隐：未滚到底部时显示，到底/无滚动条时隐藏。
+// 轮内独立滚动也算“未到底”——只看 area 不够（isMsgAreaAtBottom）。
 export function updateScrollBottomBtn() {
   var btn = document.getElementById("agent-scroll-bottom-btn");
   var area = document.getElementById("agent-msg-area");
   if (!btn || !area) return;
-  if (area.scrollHeight <= area.clientHeight || isMsgAreaAtBottom(area)) {
+  if (area.scrollHeight <= area.clientHeight || isFullyAtBottom(area)) {
     btn.classList.remove("show");
   } else {
     btn.classList.add("show");
@@ -291,6 +292,7 @@ export function showNotice(msg, level, keep = false) {
   div.className = "msg " + cls;
   div.textContent = msg;
   area.appendChild(div);
+  // 错误/警告/提示节点是 area 的直接子节点，挂在所有轮之外（不影响轮内滚动）
   S.programmaticScroll = true;
   S.lastProgrammaticScroll = Date.now();
   if (!S.manualScrollMode) area.scrollTop = area.scrollHeight;

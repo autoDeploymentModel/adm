@@ -6,10 +6,10 @@ import { template } from "./agent/template.js";
 import { S, invoke, listen, store } from "./agent/store.js";
 import { setLogEnabled } from "./agent/log.js";
 import { api } from "./agent/api.js";
-import { generateUUID, isMsgAreaAtBottom, autoResize, $input, normalizeReasoningEffort } from "./agent/utils.js";
+import { generateUUID, isFullyAtBottom, autoResize, $input, normalizeReasoningEffort } from "./agent/utils.js";
 import { updateStatusBar, updateContextUsage, updateSendButton, exitManualScrollMode, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showConfirm, showCopyPasteMenu, updateScrollBottomBtn, reportError, showInitProgress, hideInitProgress } from "./agent/ui.js";
 import { loadConversations, renderConversationList, selectConversation, newConversation, toggleOutlinePanel, setOutlinePanelOpen } from "./agent/session.js";
-import { syncWorkingIndicator } from "./agent/render.js";
+import { syncWorkingIndicator, onAreaScroll, scrollChatToBottom } from "./agent/render.js";
 import { sendMessage, cancelCurrentRun } from "./agent/send.js";
 import { setupSSEListener, cancelScheduledLoadTools, cancelRunCompleteFallback } from "./agent/sse.js";
 import { syncModeToServer } from "./agent/permission.js";
@@ -711,8 +711,10 @@ function bindEvents() {
     // 手动/自动滚动模式：鼠标进入消息区且不在底部 → 手动模式（暂停自动滚底，可上滑、可点开/合上推理过程）；
     // 移开鼠标不自动恢复——处于手动模式时停留在当前浏览位置，恢复跟随只能
     // 靠滚回底部或点击「回到底部」悬浮圆球
+    // 「在底部」要算到所有展开的轮：用户可能在某轮内部向上滑动，area 的
+    // scrollTop 不变但实际离开了"看到最新内容"的状态
     msgArea.addEventListener("mouseenter", function() {
-      S.manualScrollMode = !isMsgAreaAtBottom(msgArea);
+      S.manualScrollMode = !isFullyAtBottom(msgArea);
     });
 
     // 滚轮向上是用户浏览意图的直接信号，立即进入手动模式。
@@ -723,7 +725,7 @@ function bindEvents() {
       if (e.deltaY < 0) S.manualScrollMode = true;
     }, { passive: true });
 
-    // 滚动到底部 → 立即进入自动浏览模式；不在底部 → 进入手动模式（暂停自动滚底）。
+    // area 滚动到底部 → 立即进入自动浏览模式；不在底部 → 进入手动模式。
     // 用 programmaticScroll 标志区分代码触发的滚动与用户操作，不依赖 :hover，
     // 避免 macOS 触控板滚动时光标不在消息区内导致手动模式无法激活。
     // 注意：程序滚动（renderMessages/回到底部）后浏览器异步派发的 scroll 事件无法用
@@ -731,27 +733,15 @@ function bindEvents() {
     // 远快于 100ms，仅凭时间窗口会把用户滚动全部吞掉（thinking 时滚轮无法上滑翻页）。
     // 程序滚动目标恒为底部：时间窗口内且仍在底部才视为程序滚动自身事件；
     // 位置不在底部（必为用户上滑）必须立即进入手动模式，不能等窗口过期。
-    msgArea.addEventListener("scroll", function() {
-      if (S.programmaticScroll) { updateScrollBottomBtn(); return; }
-      if (Date.now() - S.lastProgrammaticScroll < 100 && isMsgAreaAtBottom(msgArea)) { updateScrollBottomBtn(); return; }
-      if (isMsgAreaAtBottom(msgArea)) {
-        S.manualScrollMode = false;
-      } else {
-        S.manualScrollMode = true;
-      }
-      updateScrollBottomBtn();
-    });
+    // scroll 事件不冒泡，轮内滚动由各 .msg-round 上的监听处理（render.js 的 buildRoundNode）。
+    msgArea.addEventListener("scroll", function() { onAreaScroll(msgArea); });
 
     // 回到底部悬浮圆球：点击滚到底部并进入自动浏览模式，圆球随之隐藏
     var scrollBottomBtn = document.getElementById("agent-scroll-bottom-btn");
     if (scrollBottomBtn) {
       scrollBottomBtn.addEventListener("click", function() {
         S.manualScrollMode = false;
-        S.programmaticScroll = true;
-        S.lastProgrammaticScroll = Date.now();
-        msgArea.scrollTop = msgArea.scrollHeight;
-        S.programmaticScroll = false;
-        updateScrollBottomBtn();
+        scrollChatToBottom(msgArea);
       });
     }
   }
@@ -800,12 +790,33 @@ function showProjectInitDialog() {
 }
 
 // ===== 生命周期 =====
+// 单轮对话容器最大高度 = 聊天区可视区域（.msg-area-wrap 的 clientHeight）。
+// 写入 :root 的 --round-max-h，CSS 里 .msg-round 的 max-height 引用之。
+// 必须在 mount 时测一次，并监听 window resize 跟随窗口尺寸变化；unmount 时解绑。
+function updateRoundMaxHeight() {
+  var wrap = document.querySelector(".msg-area-wrap");
+  if (!wrap) return;
+  var h = wrap.clientHeight;
+  if (h > 0) document.documentElement.style.setProperty("--round-max-h", h + "px");
+}
+var roundMaxHeightRafId = 0;
+function onResizeUpdateRoundMaxHeight() {
+  // requestAnimationFrame 节流，避免连续 resize 事件频繁写 CSS 变量
+  if (roundMaxHeightRafId) return;
+  roundMaxHeightRafId = requestAnimationFrame(function() {
+    roundMaxHeightRafId = 0;
+    updateRoundMaxHeight();
+  });
+}
+
 export default {
   template,
   mount(root, params) {
     console.log("[agent] mount() params:", params);
     root.innerHTML = template;
     bindEvents();
+    updateRoundMaxHeight();
+    window.addEventListener("resize", onResizeUpdateRoundMaxHeight);
     // 监听 admAgent server 意外退出（unmount 时经 S.unlisteners 统一解绑）
     if (typeof listen === "function") {
       listen("agent-server-died", handleServerDied)
@@ -822,6 +833,13 @@ export default {
     });
   },
   unmount() {
+    // 解除窗口 resize 监听（聊天区尺寸变化时刷新轮容器 max-height）
+    window.removeEventListener("resize", onResizeUpdateRoundMaxHeight);
+    if (roundMaxHeightRafId) {
+      cancelAnimationFrame(roundMaxHeightRafId);
+      roundMaxHeightRafId = 0;
+    }
+    document.documentElement.style.removeProperty("--round-max-h");
     console.log("[agent] unmount() isSending=" + S.isSending + " activeRun=" + JSON.stringify(S.activeRun));
     // 使在途 init() 失效，防止切走后旧 init 继续执行、或与下次 mount 的新 init 并发互踩
     S.initSeq++;
