@@ -2191,8 +2191,10 @@ pub async fn agent_http_request(
     }
     let client = build_client(&AgentTransport::default_host(), Duration::from_secs(5))
         .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+    // 180s：与 admAgent 服务端图片直调识别的整体超时（describeOverallTimeout）
+    // 保持一致——识别在 HTTP 超时前返回或降级，避免“前端报错、后台继续跑”。
     let (status, bytes) = tokio::time::timeout(
-        Duration::from_secs(120),
+        Duration::from_secs(180),
         agent_http::send(&client, &method, &path, body),
     )
     .await
