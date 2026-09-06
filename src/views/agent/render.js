@@ -16,13 +16,13 @@ import { renderMessageOutline } from "./session.js";
 // 因此按 data-msgid 逐条对齐：内容未变的消息节点原样保留；结构未变的就地更新文本
 // （保住 <details> 元素身份，流式期间可点开/收起）；结构变化才重建该消息节点。
 
-// 该 part 是否需要渲染（用户消息不显示 finish 标记）
+// 该 part 是否需要渲染（finish 分隔线整体不渲染，工具调用状态已足以表达完成）
 // hiddenCallIds: 因工具不可用而应隐藏的 tool_call id 集合（如工具被移除/未注册，
 // 服务端返回 "Tool not found: xxx"，对应工具调用与结果成对隐藏避免噪音）
 // 对应的 tool_call 与 tool_result 一并不渲染。
 function isPartRenderable(part, role, hiddenCallIds) {
   if (!part || !part.type) return false;
-  if (part.type === "finish" && role === "user") return false;
+  if (part.type === "finish") return false;
   if (hiddenCallIds && hiddenCallIds.size) {
     var d = part.data || {};
     if (part.type === "tool_call" && d.id && hiddenCallIds.has(d.id)) return false;
@@ -526,6 +526,9 @@ function buildMessageNode(msg, key, callResultMap) {
   } else {
     return null; // 无内容则跳过
   }
+
+  // 所有 part 均不可渲染（如仅 finish 标记的结束消息）→ 不渲染空消息节点
+  if (div.childNodes.length === 0) return null;
 
   // 折叠插入的消息：本地临时气泡在真正插入当前轮之前标注「插入中」，便于用户确认已发出
   if (msg._fold) {
