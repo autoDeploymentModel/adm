@@ -34,6 +34,19 @@ export function isMsgAreaAtBottom(area) {
   return area.scrollHeight - area.scrollTop - area.clientHeight <= 4;
 }
 
+// 消息区“完全滚到底部”：area 在底部，且所有展开的轮容器（.msg-round，
+// 内部独立滚动）也在底部。轮内向上滑动 area 的 scrollTop 不变，仅靠
+// isMsgAreaAtBottom 会误判为“已到底”，导致回到底部圆球不显示、自动跟随误判。
+export function isFullyAtBottom(area) {
+  if (area.scrollHeight - area.scrollTop - area.clientHeight > 4) return false;
+  var rounds = area.querySelectorAll(".msg-round:not(.msg-round-collapsed)");
+  for (var i = 0; i < rounds.length; i++) {
+    var r = rounds[i];
+    if (r.scrollHeight - r.scrollTop - r.clientHeight > 4) return false;
+  }
+  return true;
+}
+
 // 从 parts 中提取文本内容（用于临时消息匹配）
 export function getTextFromParts(parts) {
   if (!parts || !Array.isArray(parts)) return "";

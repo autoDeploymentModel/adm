@@ -438,15 +438,82 @@ export const template = `
   .msg-area {
     flex: 1;
     overflow-y: auto;
-    padding: 16px 20px;
+    padding: 12px 20px 16px;
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 12px;
     user-select: text;
   }
   .msg-area::-webkit-scrollbar { width: 8px; }
   .msg-area::-webkit-scrollbar-track { background: var(--c-bg-deep); }
   .msg-area::-webkit-scrollbar-thumb { background: var(--c-border); border-radius: 4px; }
+
+  /* 单轮对话容器：高度上限约一屏，内部独立滚动；多轮上下排列。
+     结构：<div.msg-round><div.msg-round-header/><div.msg-round-body>…msgs…</div></div>
+     运行中的轮默认展开；已结束的轮默认折叠为标题条，点击 header 切换 */
+  .msg-round {
+    max-height: var(--round-max-h, 100vh);
+    direction: rtl;
+    overflow-y: auto;
+    padding: 14px 18px;
+    border: 1px solid var(--c-raise-2);
+    border-radius: 8px;
+    background: var(--c-panel-2, var(--c-panel));
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-right: 28px;
+    flex-shrink: 0;
+  }
+  .msg-round:not(.msg-round-collapsed) { min-height: 200px; }
+  .msg-round::-webkit-scrollbar { width: 8px; }
+  .msg-round::-webkit-scrollbar-track { background: transparent; }
+  .msg-round::-webkit-scrollbar-thumb { background: var(--c-border); border-radius: 4px; }
+  /* 首轮无外上边距、末轮无外下边距，与 .msg-area 的 padding 形成紧凑视觉 */
+  .msg-area > .msg-round:first-child { margin-top: 0; }
+  .msg-area > .msg-round:last-child { margin-bottom: 0; }
+
+  /* 轮标题条：折叠后仅显示此条；点击切换展开/折叠 */
+  .msg-round-header {
+    direction: ltr;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    margin: -6px -8px 0;
+    border-radius: 6px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .msg-round-header:hover { background: var(--c-raise); }
+  .msg-round-chevron {
+    color: var(--c-text-3);
+    font-size: 11px;
+    flex-shrink: 0;
+    transition: transform 0.15s;
+  }
+  .msg-round:not(.msg-round-collapsed) .msg-round-chevron { transform: rotate(90deg); }
+  .msg-round-title {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--c-text-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* 轮内容体：消息的挂载点 */
+  .msg-round-body {
+    direction: ltr;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-height: 0;
+  }
+  .msg-round-collapsed { min-height: 0; }
+  .msg-round-collapsed .msg-round-body { display: none; }
 
   /* 回到底部悬浮圆球（未滚到底部时显示） */
   .scroll-bottom-btn {
