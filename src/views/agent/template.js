@@ -455,7 +455,7 @@ export const template = `
     max-height: var(--round-max-h, 100vh);
     direction: rtl;
     overflow-y: auto;
-    padding: 14px 18px;
+    padding: 0 18px 14px;
     border: 1px solid var(--c-raise-2);
     border-radius: 8px;
     background: var(--c-panel-2, var(--c-panel));
@@ -476,12 +476,16 @@ export const template = `
   /* 轮标题条：折叠后仅显示此条；点击切换展开/折叠 */
   .msg-round-header {
     direction: ltr;
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--c-panel-2, var(--c-panel));
     flex-shrink: 0;
     display: flex;
     align-items: center;
     gap: 8px;
     padding: 6px 8px;
-    margin: -6px -8px 0;
+    margin: 0 -18px;
     border-radius: 6px;
     cursor: pointer;
     user-select: none;
