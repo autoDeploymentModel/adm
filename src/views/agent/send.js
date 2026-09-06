@@ -139,16 +139,25 @@ export async function sendMessage() {
     }
   }
 
-  // 发送前先把全部附件落盘为真实磁盘路径（统一"路径模式"，不再区分大小/类型）：
-  // 内容一律不内联进 prompt（避免内联 base64 触发 70% 上下文守卫死循环），
-  // 路径统一由 coordinator 收集并注入 <system_info> 读取引导（文本→view、图片→vision）。
-  // 粘贴路径场景前端已持有 path；浏览器选择/拖拽的 File 无路径则先落盘到持久附件目录。
-  // 落盘失败：明确报错并中止发送（不静默降级内联，避免模型看不到附件内容）。
+  // 附件发送策略：
+  // - 图片：统一以 base64 内联传输（content 必带）——服务端负责落盘缓存并
+  //   按主模型能力决定：支持图片 → 当轮 wire 层内联给模型（base64 不落库，
+  //   后续轮次通过本地缓存路径 + admAgent vision 再次识别）；不支持 → 注入
+  //   vision 命令引导。前端不感知模型能力。
+  // - 文本：保持"路径模式"（内容不内联进 prompt，避免内联内容触发 70%
+  //   上下文守卫死循环），统一落盘传路径，由 coordinator 注入 view 读取引导。
+  // 粘贴路径场景图片已持有 path，一并传上（服务端判定磁盘存在则跳过重复写盘）；
+  // 浏览器选择/拖拽的 File 无路径，服务端自动落盘。
   var filesToSend = S.pendingFiles.slice();
   var attachments = [];
   if (filesToSend.length > 0) {
     for (var i = 0; i < filesToSend.length; i++) {
       var f = filesToSend[i];
+      var isImage = f.type && f.type.indexOf("image/") === 0;
+      if (isImage) {
+        attachments.push({ file_path: f.path || "", file_name: f.name, mime_type: f.type, content: f.base64 });
+        continue;
+      }
       var realPath = f.path || null;
       if (!realPath) {
         try {
