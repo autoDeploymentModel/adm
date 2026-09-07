@@ -349,6 +349,16 @@ function buildRoundNode(round) {
     ref._admRoundOpen = willOpen;
     div.classList.toggle("msg-round-collapsed", !willOpen);
   });
+  // 容器内空白区域右键 → 折叠当前轮：仅命中轮容器/body 自身的空白（padding、消息间隙），
+  // 右键消息气泡、header 等子元素不触发；已折叠则放行默认菜单
+  div.addEventListener("contextmenu", function(e) {
+    var t = e.target;
+    if (t !== div && t !== body) return;
+    if (div.classList.contains("msg-round-collapsed")) return;
+    e.preventDefault();
+    /** @type {any} */ (div)._admRoundOpen = false;
+    div.classList.add("msg-round-collapsed");
+  });
   // 轮内独立滚动：scroll 事件不冒泡，必须在轮本身挂监听才能识别轮内向上滑动
   // （wheel 事件会冒泡到 area，所以手动模式的进入已经在 area 的 wheel 监听里覆盖；
   // 这里只负责刷新圆球显隐 + 双向判顶/判底以纠正手动模式状态）
