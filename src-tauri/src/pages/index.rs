@@ -403,7 +403,9 @@ pub async fn download_and_extract_llamacpp(app: tauri::AppHandle, url: String) -
     let file_name = url.split('/').next_back().unwrap_or("download");
     let temp_dir = llamacpp_dir.join(".tmp_download");
     let archive_path = temp_dir.join(file_name);
-
+    // 下载地址固定不含版本号，残留的旧压缩包/续传分片会让 download_with_resume
+    // 误判"已下载完成"或拼接出损坏的包，必须每次清空后全新下载
+    let _ = std::fs::remove_dir_all(&temp_dir);
     std::fs::create_dir_all(&temp_dir).map_err(|e| format!("创建临时目录失败: {}", e))?;
 
     app.emit(
@@ -443,9 +445,19 @@ pub async fn download_and_extract_llamacpp(app: tauri::AppHandle, url: String) -
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_dir() && !path.ends_with(".tmp_download") {
-                    let _ = std::fs::remove_dir_all(&path);
+                    std::fs::remove_dir_all(&path).map_err(|e| {
+                        format!(
+                            "删除旧版本文件失败（llama-server 可能正在运行或被杀软占用，请先停止模型后重试）: {}",
+                            e
+                        )
+                    })?;
                 } else if path.is_file() {
-                    let _ = std::fs::remove_file(&path);
+                    std::fs::remove_file(&path).map_err(|e| {
+                        format!(
+                            "删除旧版本文件失败（llama-server 可能正在运行或被杀软占用，请先停止模型后重试）: {}",
+                            e
+                        )
+                    })?;
                 }
             }
         }
