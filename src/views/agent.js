@@ -7,14 +7,14 @@ import { S, invoke, listen, store } from "./agent/store.js";
 import { setLogEnabled } from "./agent/log.js";
 import { api } from "./agent/api.js";
 import { generateUUID, isFullyAtBottom, autoResize, $input, normalizeReasoningEffort } from "./agent/utils.js";
-import { updateStatusBar, updateContextUsage, updateSendButton, exitManualScrollMode, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showConfirm, showCopyPasteMenu, updateScrollBottomBtn, reportError, showInitProgress, hideInitProgress } from "./agent/ui.js";
+import { updateStatusBar, updateContextUsage, updateSendButton, exitManualScrollMode, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showInfo, showConfirm, showCopyPasteMenu, updateScrollBottomBtn, reportError, showInitProgress, hideInitProgress } from "./agent/ui.js";
 import { loadConversations, renderConversationList, selectConversation, newConversation, toggleOutlinePanel, setOutlinePanelOpen } from "./agent/session.js";
 import { syncWorkingIndicator, onAreaScroll, scrollChatToBottom } from "./agent/render.js";
 import { sendMessage, cancelCurrentRun } from "./agent/send.js";
 import { setupSSEListener, cancelScheduledLoadTools, cancelRunCompleteFallback } from "./agent/sse.js";
 import { syncModeToServer } from "./agent/permission.js";
 import { loadTools, renderToolsList } from "./agent/tools.js";
-import { switchModel, refreshServerProviders, resolveAgentModel, updateModelDropdown, updateModelBtn } from "./agent/model.js";
+import { switchModel, refreshServerProviders, resolveAgentModel, updateModelDropdown, updateModelBtn, refreshAgentInfo } from "./agent/model.js";
 import { enableAutoCompact, updateWorkspaceSelector, toggleWorkDirDropdown, closeWorkDirDropdown, validateWorkDirs } from "./agent/workspace.js";
 import { showSettings, hideSettings, updateSettingsUI, saveSettings, showAddModelDialog, hideAddModelDialog, addModel, initProjectMemoryUI, renderVisionModelSelect } from "./agent/settings_dialog.js";
 import { addPendingFiles, parseUriListPaths, addPastedPaths, looksLikeFilePath } from "./agent/attach.js";
@@ -363,6 +363,34 @@ async function handleServerDied() {
     reportError(e, { prefix: _t("admAgent 自动重启失败: ") });
   } finally {
     serverRestarting = false;
+  }
+}
+
+// ===== admAgent.json 损坏恢复后的自愈 =====
+// 后端检测到配置文件损坏时弹原生对话框引导从备份恢复；恢复成功 emit
+// "agent-config-restored"：若服务此前因配置损坏未能启动（init 在启动阶段
+// 失败返回），在这里重跑 init 把服务带起来；服务已在运行则仅提示
+// （后端已触发 /config/set 热重载）。
+var configRestoreHandling = false;
+async function handleConfigRestored(ev) {
+  if (configRestoreHandling) return;
+  configRestoreHandling = true;
+  try {
+    var payload = (ev && ev.payload) || {};
+    if (!payload.ok) {
+      showError(_t("admAgent 配置文件恢复失败: ") + (payload.error || ""));
+      return;
+    }
+    showInfo(_t("admAgent 配置文件已从备份恢复，服务配置已重新加载"));
+    if (!S.serverInfo || !S.serverInfo.workspace_id) {
+      await init();
+    } else {
+      refreshAgentInfo().catch(function() {});
+    }
+  } catch (e) {
+    console.error("[agent] 配置恢复后的自愈失败:", e);
+  } finally {
+    configRestoreHandling = false;
   }
 }
 
@@ -820,6 +848,10 @@ export default {
     // 监听 admAgent server 意外退出（unmount 时经 S.unlisteners 统一解绑）
     if (typeof listen === "function") {
       listen("agent-server-died", handleServerDied)
+        .then(function(u) { S.unlisteners.push(u); })
+        .catch(function() {});
+      // 配置文件损坏恢复完成（后端原生弹窗确认后）：服务未起来时自动重跑 init
+      listen("agent-config-restored", handleConfigRestored)
         .then(function(u) { S.unlisteners.push(u); })
         .catch(function() {});
     }

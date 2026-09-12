@@ -78,6 +78,9 @@ pub fn run() {
             // 早于任何 admAgent 交互，确保本次会话从头开始记录。
             agent::init_debug_logging(app.handle());
 
+            // admAgent.json 备份与损坏恢复：首次启动备份；检测到损坏时弹窗引导从备份恢复
+            agent::init_agent_config_recovery(app.handle());
+
             // ===== 系统托盘 =====
             let show_item = MenuItem::with_id(app, "show", "显示窗口", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "退出 ADM", true, None::<&str>)?;

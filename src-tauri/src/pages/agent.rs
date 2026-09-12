@@ -215,8 +215,8 @@ fn migrate_legacy_config(new_dir: &std::path::Path) {
             merge_json(&mut new_value, &legacy_value);
             // 迁移在 adm_agent_config_dir() 内部触发，此时不能走
             // update_adm_agent_config（它会再调 adm_agent_config_dir → 递归 + Mutex 重入）。
-            // 直接用原子写：临时文件 + rename，不截断目标文件。
-            write_json_atomic(&new_path, &new_value)?;
+            // 直接用原子写：临时文件 + rename，不截断目标文件（写前照常备份旧内容）。
+            write_json_atomic(&new_path, &new_value, true)?;
         } else {
             if let Some(parent) = new_path.parent() {
                 std::fs::create_dir_all(parent)
@@ -529,17 +529,28 @@ fn acquire_config_lock() -> Result<ConfigFileLock, AppError> {
 ///
 /// rename 是原子的，并发读者要么看到旧内容要么看到新内容，
 /// 不可能看到空文件或半截 JSON —— 这正是旧实现的致命伤。
-fn write_json_atomic(path: &std::path::Path, value: &serde_json::Value) -> Result<(), AppError> {
+fn write_json_atomic(
+    path: &std::path::Path,
+    value: &serde_json::Value,
+    keep_backup: bool,
+) -> Result<(), AppError> {
     let json = serde_json::to_string_pretty(value)
         .map_err(|e| format!("序列化 admAgent 配置失败: {}", e))?;
 
     let dir = path.parent().ok_or_else(|| AppError::msg("配置路径缺少父目录"))?;
     std::fs::create_dir_all(dir).map_err(|e| format!("创建配置目录失败: {}", e))?;
 
-    // 写前备份：保留最近一份可用快照，便于人工回滚（失败不影响主流程）
-    if let Ok(meta) = std::fs::metadata(path) {
-        if meta.len() > 0 {
-            let _ = std::fs::copy(path, dir.join("admAgent.json.bak"));
+    // 写前备份：保留最近一份可用快照，便于人工回滚（失败不影响主流程）。
+    // 从备份恢复时必须传 false —— 此时目标文件已损坏，复制会把唯一的好备份覆盖掉。
+    if keep_backup {
+        if let Ok(meta) = std::fs::metadata(path) {
+            if meta.len() > 0 {
+                // 原子复制：admAgent server（Go）也在写同一个 .bak（同一把 flock，
+                // 但读取方无锁），避免读者看到半截备份
+                if let Err(e) = copy_file_atomic(path, &dir.join("admAgent.json.bak")) {
+                    api_debug_log(|| format!("Config ! 写前备份失败: {}", e));
+                }
+            }
         }
     }
 
@@ -586,19 +597,270 @@ fn update_adm_agent_config<T>(
         let s = std::fs::read_to_string(&path)
             .map_err(|e| format!("读取 admAgent.json 失败: {}", e))?;
         if s.trim().is_empty() {
-            return Err(AppError::msg(
-                "admAgent.json 为空，拒绝写入（可能有并发写正在截断文件）",
-            ));
+            let msg = "admAgent.json 为空，拒绝写入（可能有并发写正在截断文件）";
+            notify_config_corrupt(msg);
+            return Err(AppError::msg(msg));
         }
-        serde_json::from_str::<serde_json::Value>(&s)
-            .map_err(|e| format!("解析 admAgent.json 失败: {}", e))?
+        serde_json::from_str::<serde_json::Value>(&s).map_err(|e| {
+            let msg = format!("解析 admAgent.json 失败: {}", e);
+            notify_config_corrupt(&msg);
+            AppError::msg(msg)
+        })?
     } else {
         serde_json::json!({})
     };
 
     let out = mutate(&mut v)?;
-    write_json_atomic(&path, &v)?;
+    write_json_atomic(&path, &v, true)?;
+    // 改动后校验：落盘内容必须仍是合法 JSON（防御并发写 / 磁盘异常造成的损坏）。
+    // 失败不自动回滚，统一交给损坏恢复流程：弹窗提示 → 用户确认 → 从备份恢复。
+    if let Err(e) = read_config_json(&path) {
+        let msg = format!("写入后校验失败: {}", e);
+        notify_config_corrupt(&msg);
+        return Err(AppError::msg(msg));
+    }
     Ok(out)
+}
+
+// ===== admAgent.json 备份与损坏恢复 =====
+// 目标：首次启动即保留一份可用备份；每次改动前自动备份（见 write_json_atomic）；
+// 检测到损坏时弹原生提示，用户确认后自动从备份恢复并触发服务端重载。
+
+/// 恢复流程使用的 AppHandle（setup 阶段写入；未初始化时所有提示静默跳过）
+static CONFIG_RECOVERY_APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
+/// 恢复提示是否正在展示（并发检测只弹一个对话框）
+static CONFIG_PROMPT_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// 用户本次会话选择「暂不恢复」（不再重复弹窗骚扰）
+static CONFIG_PROMPT_DECLINED: AtomicBool = AtomicBool::new(false);
+
+/// admAgent.json 主文件与备份文件的完整路径
+fn adm_agent_config_file_paths() -> Result<(PathBuf, PathBuf), AppError> {
+    let dir = adm_agent_config_dir()?;
+    Ok((dir.join("admAgent.json"), dir.join("admAgent.json.bak")))
+}
+
+/// 读取并校验一份配置：非空且必须是合法 JSON
+fn read_config_json(path: &std::path::Path) -> Result<serde_json::Value, String> {
+    let s = std::fs::read_to_string(path)
+        .map_err(|e| format!("读取 {} 失败: {}", path.display(), e))?;
+    if s.trim().is_empty() {
+        return Err(format!("{} 为空", path.display()));
+    }
+    serde_json::from_str::<serde_json::Value>(&s)
+        .map_err(|e| format!("解析 {} 失败: {}", path.display(), e))
+}
+
+/// 读取可用备份；不存在 / 为空 / 非法 JSON 一律视为不可用
+fn read_valid_backup() -> Result<serde_json::Value, String> {
+    let (_, bak) = adm_agent_config_file_paths().map_err(|e| e.to_string())?;
+    if !bak.exists() {
+        return Err(format!("未找到备份文件 {}", bak.display()));
+    }
+    read_config_json(&bak)
+}
+
+/// 原子复制文件（先写临时文件再 rename），避免留下半截备份
+fn copy_file_atomic(src: &std::path::Path, dst: &std::path::Path) -> Result<(), AppError> {
+    let dir = dst.parent().ok_or_else(|| AppError::msg("备份路径缺少父目录"))?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("创建配置目录失败: {}", e))?;
+    let name = dst
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "admAgent.json.bak".to_string());
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = dir.join(format!("{}.{}.{}.tmp", name, std::process::id(), nanos));
+    std::fs::copy(src, &tmp).map_err(|e| format!("复制备份失败: {}", e))?;
+    match std::fs::rename(&tmp, dst) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(AppError::msg(format!("替换备份失败: {}", e)))
+        }
+    }
+}
+
+/// 首次启动备份：主文件有效、且备份缺失或已损坏时，用当前配置创建 .bak。
+/// 已有有效备份时不覆盖 —— 它是上一份可用快照，损坏恢复依赖它。
+fn ensure_agent_config_backup() {
+    let (main, bak) = match adm_agent_config_file_paths() {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    if !main.exists() || read_config_json(&main).is_err() {
+        return; // 主文件缺失/已损坏：保留现有备份供恢复使用
+    }
+    if bak.exists() && read_config_json(&bak).is_ok() {
+        return;
+    }
+    match copy_file_atomic(&main, &bak) {
+        Ok(()) => api_debug_log(|| "Config: 已创建 admAgent.json 首次启动备份".to_string()),
+        Err(e) => api_debug_log(|| format!("Config ! 创建 admAgent.json 备份失败: {}", e)),
+    }
+}
+
+/// 检测主配置是否损坏；损坏时走统一的恢复提示（正常时静默）
+fn check_agent_config_corruption() {
+    let (main, _) = match adm_agent_config_file_paths() {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    if !main.exists() {
+        return;
+    }
+    if let Err(e) = read_config_json(&main) {
+        notify_config_corrupt(&e);
+    }
+}
+
+/// 启动时初始化配置备份与损坏恢复：
+/// 1) 首次启动备份（主文件有效且备份缺失/损坏时创建 .bak）；
+/// 2) 延时等主窗口显示后检测主文件，损坏则弹恢复提示。
+pub fn init_agent_config_recovery(app: &tauri::AppHandle) {
+    let _ = CONFIG_RECOVERY_APP.set(app.clone());
+    tauri::async_runtime::spawn(async move {
+        ensure_agent_config_backup();
+        // 稍等主窗口渲染完成再弹窗，避免对话框早于界面出现
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        check_agent_config_corruption();
+    });
+}
+
+/// 检测到 admAgent.json 损坏时弹出原生提示（每次会话最多一次）：
+/// - 备份可用：询问是否恢复；确认后自动恢复并触发服务端重载，再 emit
+///   `agent-config-restored` 通知前端（服务未起来时前端会重跑 init）；
+/// - 备份不可用：仅提示文件路径，引导手动处理，不自动改动文件。
+fn notify_config_corrupt(detail: &str) {
+    let app = match CONFIG_RECOVERY_APP.get() {
+        Some(a) => a.clone(),
+        None => return, // setup 之前的早期检测：由启动检查负责提示
+    };
+    if CONFIG_PROMPT_DECLINED.load(Ordering::Relaxed) {
+        return;
+    }
+    if CONFIG_PROMPT_ACTIVE.swap(true, Ordering::SeqCst) {
+        return; // 已有提示在展示
+    }
+
+    api_debug_log(|| format!("Config ! admAgent.json 异常: {}", detail));
+    let main_path = adm_agent_config_file_paths()
+        .map(|(m, _)| m.display().to_string())
+        .unwrap_or_default();
+
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+
+    match read_valid_backup() {
+        Ok(_) => {
+            app.dialog()
+                .message(format!(
+                    "检测到 admAgent 配置文件异常，无法读取：\n{}\n\n文件：{}\n\n是否从备份恢复？恢复后会自动重新加载服务配置。",
+                    detail, main_path
+                ))
+                .title("admAgent 配置文件异常")
+                .kind(MessageDialogKind::Error)
+                .buttons(MessageDialogButtons::OkCancelCustom(
+                    "恢复备份".to_string(),
+                    "暂不恢复".to_string(),
+                ))
+                .show(move |confirmed| {
+                    CONFIG_PROMPT_ACTIVE.store(false, Ordering::SeqCst);
+                    if !confirmed {
+                        CONFIG_PROMPT_DECLINED.store(true, Ordering::SeqCst);
+                        api_debug_log(|| "Config: 用户选择暂不恢复".to_string());
+                        return;
+                    }
+                    let app = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        match restore_agent_config_from_backup(&app) {
+                            Ok(()) => {
+                                api_debug_log(|| "Config: 已从备份恢复 admAgent.json，触发服务端重载".to_string());
+                                let _ = app.emit("agent-config-restored", serde_json::json!({ "ok": true }));
+                            }
+                            Err(e) => {
+                                api_debug_log(|| format!("Config ! 从备份恢复失败: {}", e));
+                                let _ = app.emit(
+                                    "agent-config-restored",
+                                    serde_json::json!({ "ok": false, "error": e.to_string() }),
+                                );
+                            }
+                        }
+                    });
+                });
+        }
+        Err(reason) => {
+            app.dialog()
+                .message(format!(
+                    "检测到 admAgent 配置文件异常，无法读取：\n{}\n\n备份不可用：{}\n\n请手动检查或删除该文件后重启 ADM（删除会丢失其中保存的云端模型配置）：\n{}",
+                    detail, reason, main_path
+                ))
+                .title("admAgent 配置文件异常")
+                .kind(MessageDialogKind::Error)
+                .buttons(MessageDialogButtons::Ok)
+                .show(move |_| {
+                    CONFIG_PROMPT_ACTIVE.store(false, Ordering::SeqCst);
+                    CONFIG_PROMPT_DECLINED.store(true, Ordering::SeqCst);
+                });
+        }
+    }
+}
+
+/// 从备份恢复 admAgent.json（原子写），并触发服务端从磁盘全量重载。
+/// 不走 update_adm_agent_config：当前主文件已损坏，其写前备份会把唯一的好备份覆盖掉。
+fn restore_agent_config_from_backup(app: &tauri::AppHandle) -> Result<(), AppError> {
+    let (main, _) = adm_agent_config_file_paths()?;
+    // 与常规写入共用同一把进程内/跨进程锁，避免与并发写互相踩踏；
+    // 先加锁再读备份：Go/Rust 都会在写前重写 .bak，无锁读可能读到半截文件
+    let _inproc = ADM_AGENT_CONFIG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _filelock = acquire_config_lock()?;
+    let value = read_valid_backup().map_err(AppError::msg)?;
+    write_json_atomic(&main, &value, false)?;
+    request_server_config_reload(app);
+    Ok(())
+}
+
+/// 请求 admAgent server 从磁盘全量重载配置（POST /config/set 写一个无害标量触发）。
+/// 服务未运行 / 无活跃工作区时静默跳过 —— 下次启动会自然读到新配置。
+/// 失败仅记日志：重载不生效只是沿用旧配置，不影响主流程。
+fn request_server_config_reload(app: &tauri::AppHandle) {
+    let ws = {
+        let state = app.state::<AppState>();
+        let active = state.active_workspace_id.lock().map(|g| g.clone()).unwrap_or(None);
+        match active {
+            Some(ws_id) if !ws_id.is_empty() => ws_id,
+            _ => {
+                api_debug_log(|| "Config: 无活跃工作区，跳过服务端配置重载".to_string());
+                return;
+            }
+        }
+    };
+    let client = match build_client(&AgentTransport::default_host(), Duration::from_secs(3)) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    tauri::async_runtime::spawn(async move {
+        let set_body = serde_json::json!({ "scope": 0, "key": "providers.local.name", "value": "Local" });
+        match tokio::time::timeout(
+            Duration::from_secs(10),
+            agent_http::send(&client, "POST", &format!("/v1/workspaces/{}/config/set", ws), Some(set_body)),
+        )
+        .await
+        {
+            Ok(Ok((st, _))) if (200..300).contains(&st) => {
+                api_debug_log(|| "Config: /config/set 热重载完成".to_string());
+            }
+            Ok(Ok((st, _))) => {
+                api_debug_log(|| format!("Config ! /config/set HTTP {}", st));
+            }
+            Ok(Err(e)) => {
+                api_debug_log(|| format!("Config ! /config/set 失败: {}", e));
+            }
+            Err(_) => {
+                api_debug_log(|| "Config ! /config/set 超时".to_string());
+            }
+        }
+    });
 }
 
 /// 模型启动成功后同步本地模型能力（supports_images / can_reason / context_window）到 admAgent：
@@ -807,36 +1069,7 @@ pub fn sync_agent_proxy(app: &tauri::AppHandle, proxy: &crate::common::types::Ag
             return;
         }
         api_debug_log(|| "Proxy: admAgent.json 已更新，触发服务端热重载".to_string());
-        let ws = {
-            let state = app.state::<AppState>();
-            let active = state.active_workspace_id.lock().map(|g| g.clone()).unwrap_or(None);
-            match active {
-                Some(ws_id) if !ws_id.is_empty() => ws_id,
-                _ => return,
-            }
-        };
-        let client = match build_client(&AgentTransport::default_host(), Duration::from_secs(3)) {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-        let set_body = serde_json::json!({ "scope": 0, "key": "providers.local.name", "value": "Local" });
-        match tokio::time::timeout(
-            Duration::from_secs(10),
-            agent_http::send(&client, "POST", &format!("/v1/workspaces/{}/config/set", ws), Some(set_body)),
-        ).await {
-            Ok(Ok((st, _))) if (200..300).contains(&st) => {
-                api_debug_log(|| "Proxy: /config/set 热重载完成，代理配置已生效".to_string());
-            }
-            Ok(Ok((st, _))) => {
-                api_debug_log(|| format!("Proxy ! /config/set HTTP {}", st));
-            }
-            Ok(Err(e)) => {
-                api_debug_log(|| format!("Proxy ! /config/set 失败: {}", e));
-            }
-            Err(_) => {
-                api_debug_log(|| "Proxy ! /config/set 超时".to_string());
-            }
-        }
+        request_server_config_reload(&app);
     });
 }
 
