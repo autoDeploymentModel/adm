@@ -45,6 +45,9 @@ export const template = `
     padding: 10px 12px;
     border-bottom: 1px solid var(--c-border);
     flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
   }
 
   .new-chat-btn {
@@ -260,7 +263,7 @@ export const template = `
   .tool-status.yellow { color: #d29922; }
   .tool-status.red { color: #f85149; }
 
-  /* ③ 底部: 工作区选择 + 设置 (不滚动) */
+  /* ③ 底部: 设置 (不滚动) */
   .sidebar-footer {
     flex-shrink: 0;
     border-top: 1px solid var(--c-border);
@@ -283,6 +286,11 @@ export const template = `
     position: relative;
   }
   .workspace-icon { font-size: 14px; }
+  .workspace-label {
+    font-size: 12px;
+    color: var(--c-text-2);
+    flex-shrink: 0;
+  }
   .workspace-name {
     flex: 1;
     font-size: 12px;
@@ -295,13 +303,13 @@ export const template = `
 
   .workdir-dropdown {
     position: absolute;
-    bottom: calc(100% + 4px);
+    top: calc(100% + 4px);
     left: 0;
     right: 0;
     background: var(--c-bg-deep);
     border: 1px solid var(--c-border);
     border-radius: 6px;
-    box-shadow: 0 -4px 12px rgba(0,0,0,0.3);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
     z-index: 100;
     max-height: 300px;
     overflow-y: auto;
@@ -453,7 +461,6 @@ export const template = `
      运行中的轮默认展开；已结束的轮默认折叠为标题条，点击 header 切换 */
   .msg-round {
     max-height: var(--round-max-h, 100vh);
-    direction: rtl;
     overflow-y: auto;
     padding: 0 18px 14px;
     border: 1px solid var(--c-raise-2);
@@ -1794,6 +1801,11 @@ export const template = `
       <!-- ① session-block: 新建会话 + 会话列表 (内部滚动) -->
       <div class="session-block">
         <div class="sidebar-header">
+          <div class="workspace-selector" id="agent-workspace-selector">
+            <span class="workspace-label">${_t("工作目录")}</span>
+            <span class="workspace-icon">📁</span>
+            <span class="workspace-name" id="agent-workspace-name">${_t("默认工作区")}</span>
+          </div>
           <button class="new-chat-btn" id="agent-new-chat">＋ ${_t("新建会话")}</button>
         </div>
         <!-- 会话视图切换: ★当前对话 / ●全部对话 -->
@@ -1830,12 +1842,8 @@ export const template = `
         </div>
       </div>
 
-      <!-- ③ 底部: 工作区展示 + 设置 (不滚动) -->
+      <!-- ③ 底部: 设置 (不滚动) -->
       <div class="sidebar-footer">
-        <div class="workspace-selector" id="agent-workspace-selector">
-          <span class="workspace-icon">📁</span>
-          <span class="workspace-name" id="agent-workspace-name">${_t("默认工作区")}</span>
-        </div>
         <button class="settings-btn-sidebar" id="agent-settings-btn">
           <span>⚙</span>
           <span>${_t("设置")}</span>
