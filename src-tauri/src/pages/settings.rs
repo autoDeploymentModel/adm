@@ -66,6 +66,11 @@ pub async fn get_app_version(app: tauri::AppHandle) -> Result<String, AppError> 
 }
 
 #[tauri::command]
+pub async fn get_tauri_version() -> Result<String, AppError> {
+    Ok(tauri::VERSION.to_string())
+}
+
+#[tauri::command]
 pub async fn get_llamacpp_version(app: tauri::AppHandle) -> Result<String, AppError> {
     let server_path = config::get_llama_server_path(Some(&app))?;
     let server_path_str = server_path.to_string_lossy().to_string();

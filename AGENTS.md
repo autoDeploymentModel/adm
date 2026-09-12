@@ -15,7 +15,7 @@
 - 运行时日志：`%LOCALAPPDATA%\admAgent\cache\server-tcp___127.0.0.1_<port>\admAgent.log`（每次启动一个目录，按 LastWriteTime 找最新；注意 Windows 目录列表可能显示 0 字节，直接读内容为准）。排查“对话突然中断”类问题 grep `Loop step response|ending turn|nudg`：`text_bytes=0` 但 `output_tokens` 很大 = 模型输出全部漏进 reasoning（典型为 localModel 在 40k+ 上下文下退化）
 
 ## 架构
-- **Tauri 2.11.2** + Rust 后端 + **原生 HTML/CSS/JS**（无框架、无打包工具）。
+- **Tauri 2.11.5** + Rust 后端 + **原生 HTML/CSS/JS**（无框架、无打包工具）。
   所有前端源码在 `src/` 目录下，作为 `frontendDist` 原样提供。
 - **单窗口 SPA（单页应用）** + hash 路由：
   - `index.html`（外壳）含 `#view-root` 容器、底部硬件栏与导航。
