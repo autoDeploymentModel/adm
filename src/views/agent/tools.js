@@ -19,12 +19,14 @@ export async function loadTools() {
   };
 
   // 并行请求四个端点（工作区详情用于 skill 状态快照），外加本地磁盘扫描兜底
+  // + admAgent.json 中的 MCP 配置（可编辑来源）
   var results = await Promise.allSettled([
     api("GET", "/v1/workspaces/" + wsId + "/skills"),
     api("GET", "/v1/workspaces/" + wsId + "/mcp/states"),
     api("GET", "/v1/workspaces/" + wsId + "/lsps"),
     api("GET", "/v1/workspaces/" + wsId),
     invoke("list_installed_skills"),
+    invoke("list_mcp_servers"),
   ]);
 
   // Skill 状态快照 map: name → {state, error}（state: 0=正常 1=错误）
@@ -94,22 +96,55 @@ export async function loadTools() {
     });
   }
 
-  // MCP clients
-  var mcpTools = [];
+  // MCP clients：配置（admAgent.json 顶层 mcp）为可编辑来源，
+  // /mcp/states 提供运行状态；两者按名称合并展示：
+  // - 已配置：有点击编辑入口；有运行状态则显示状态，否则显示「待重启生效」（新增/修改需重启 server 初始化）
+  // - 仅运行状态存在（配置文件里没有）：只读展示
+  var runtimeStates = {};
   if (results[1].status === "fulfilled") {
     var mcpStates = results[1].value;
     if (mcpStates && typeof mcpStates === "object" && !Array.isArray(mcpStates)) {
       Object.values(mcpStates).forEach(function(m) {
-        var st = stateMap[m.state] || { label: m.state || _t("未知"), color: "gray" };
-        mcpTools.push({
-          name: m.name || "unknown",
-          status: st.label,
-          statusColor: st.color,
-          title: m.error || "",
-        });
+        if (m && m.name) runtimeStates[m.name] = m;
       });
     }
   }
+  function runtimeStatus(m) {
+    var st = stateMap[m.state] || { label: m.state || _t("未知"), color: "gray" };
+    return { label: st.label, color: st.color, title: m.error || "" };
+  }
+
+  var mcpTools = [];
+  var configViews = [];
+  if (results[5] && results[5].status === "fulfilled" && Array.isArray(results[5].value)) {
+    configViews = results[5].value;
+  }
+  configViews.forEach(function(view) {
+    var runtime = runtimeStates[view.name];
+    var status = runtime ? runtimeStatus(runtime) : (view.disabled
+      ? { label: _t("已禁用"), color: "gray", title: "" }
+      : { label: _t("待重启生效"), color: "gray", title: _t("新增或修改的 MCP 需重启 Agent 服务后生效") });
+    mcpTools.push({
+      name: view.name,
+      status: status.label,
+      statusColor: status.color,
+      title: status.title,
+      configed: true,
+      view: view,
+    });
+  });
+  Object.keys(runtimeStates).forEach(function(name) {
+    var exists = mcpTools.some(function(t) { return t.name === name; });
+    if (exists) return;
+    var status = runtimeStatus(runtimeStates[name]);
+    mcpTools.push({
+      name: name,
+      status: status.label,
+      statusColor: status.color,
+      title: status.title,
+      configed: false,
+    });
+  });
 
   // LSP clients
   var lspTools = [];
@@ -139,6 +174,10 @@ export function renderToolsList() {
   var countEl = document.getElementById("agent-tools-count");
   if (!container) return;
 
+  // 添加 MCP 按钮仅在 MCP tab 显示
+  var addBtn = document.getElementById("agent-mcp-add-btn");
+  if (addBtn) addBtn.classList.toggle("show", S.toolsTab === "mcp");
+
   var tools = S.toolsData[S.toolsTab] || [];
   if (countEl) countEl.textContent = String(tools.length);
   container.innerHTML = "";
@@ -152,6 +191,8 @@ export function renderToolsList() {
     var item = document.createElement("div");
     item.className = "tool-item";
     if (tool.title) item.title = tool.title;
+    // 已配置的 MCP 可点击进入编辑（点击事件由 mcp_dialog.js 在列表容器上委托）
+    if (tool.configed) item.setAttribute("data-mcp-name", tool.name);
     var dot = document.createElement("span");
     dot.className = "tool-dot " + (tool.statusColor || "gray");
     item.appendChild(dot);
@@ -159,10 +200,29 @@ export function renderToolsList() {
     name.className = "tool-name";
     name.textContent = tool.name;
     item.appendChild(name);
+    if (tool.configed) {
+      var hint = document.createElement("span");
+      hint.className = "tool-edit-hint";
+      hint.textContent = "✎";
+      hint.title = _t("点击修改");
+      item.appendChild(hint);
+    }
     var statusLabel = document.createElement("span");
     statusLabel.className = "tool-status " + (tool.statusColor || "gray");
     statusLabel.textContent = tool.status;
     item.appendChild(statusLabel);
     container.appendChild(item);
   });
+}
+
+// 切换工具 tab（Skill / LSP / MCP）并重绘列表；供 tab 点击与外部流程（如保存 MCP 后）调用
+export function activateToolsTab(tab) {
+  S.toolsTab = tab;
+  var toolsTabs = document.getElementById("agent-tools-tabs");
+  if (toolsTabs) {
+    toolsTabs.querySelectorAll(".tools-tab").forEach(function(t) {
+      t.classList.toggle("active", t.getAttribute("data-tab") === tab);
+    });
+  }
+  renderToolsList();
 }

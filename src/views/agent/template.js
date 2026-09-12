@@ -197,6 +197,24 @@ export const template = `
     color: var(--c-text-4);
     font-weight: 400;
   }
+  .tools-header-right { display: flex; align-items: center; gap: 8px; }
+  /* MCP tab 专用：添加 MCP（其余 tab 由 renderToolsList 隐藏） */
+  .tools-add-btn {
+    display: none;
+    background: none;
+    border: 1px solid var(--c-border);
+    border-radius: 4px;
+    color: var(--c-text-3);
+    font-size: 11px;
+    line-height: 14px;
+    height: 18px;
+    padding: 0 8px;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .tools-add-btn.show { display: inline-block; }
+  .tools-add-btn:hover { color: var(--c-text); border-color: var(--c-accent); }
 
   /* 工具 tab 切换: Skill / LSP / MCP */
   .tools-tabs {
@@ -262,6 +280,9 @@ export const template = `
   .tool-status.gray { color: var(--c-text-4); }
   .tool-status.yellow { color: #d29922; }
   .tool-status.red { color: #f85149; }
+  /* 已配置 MCP 条目的「修改」提示：悬停显现 */
+  .tool-edit-hint { opacity: 0; font-size: 10px; color: var(--c-text-4); flex-shrink: 0; transition: opacity 0.15s; }
+  .tool-item:hover .tool-edit-hint { opacity: 1; }
 
   /* ③ 底部: 设置 (不滚动) */
   .sidebar-footer {
@@ -1827,7 +1848,10 @@ export const template = `
       <div class="tools-section" id="agent-tools-section">
         <div class="tools-header">
           <span>${_t("工具")}</span>
-          <span class="tools-count" id="agent-tools-count">0</span>
+          <span class="tools-header-right">
+            <span class="tools-count" id="agent-tools-count">0</span>
+            <button class="tools-add-btn" id="agent-mcp-add-btn" title="${_t("添加 MCP")}">＋ ${_t("添加 MCP")}</button>
+          </span>
         </div>
         <div class="tools-tabs" id="agent-tools-tabs">
           <span class="tools-tab active" data-tab="skill">Skill</span>
@@ -2090,6 +2114,44 @@ export const template = `
         <input type="text" class="settings-input" id="memory-dialog-why">
         <div id="memory-dialog-msg" style="font-size:12px;min-height:18px;line-height:18px;"></div>
         <button class="settings-btn settings-btn-primary" id="memory-dialog-submit" style="align-self:flex-start;">${_t("添加")}</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MCP 添加/修改弹窗（配置写入 admAgent.json 顶层 mcp；保存后需重启 Agent 服务生效） -->
+<div class="add-model-overlay" id="agent-mcp-overlay">
+  <div class="settings-modal" style="width:480px;">
+    <div class="settings-header">
+      <span class="settings-title" id="mcp-dialog-title">${_t("添加 MCP")}</span>
+      <button class="settings-close" id="agent-mcp-dialog-close">✕</button>
+    </div>
+    <div class="settings-body">
+      <div class="param-row" style="flex-direction:column;gap:6px;">
+        <input type="text" class="settings-input" id="mcp-dialog-name" placeholder="${_t("名称（唯一标识，如 filesystem）")}">
+        <select class="settings-select" id="mcp-dialog-type">
+          <option value="stdio">${_t("stdio（本地进程）")}</option>
+          <option value="http">${_t("http（远程服务）")}</option>
+          <option value="sse">sse</option>
+        </select>
+        <div id="mcp-dialog-stdio-fields" style="display:flex;flex-direction:column;gap:6px;">
+          <input type="text" class="settings-input" id="mcp-dialog-command" placeholder="${_t("命令（如 npx）")}">
+          <textarea class="settings-input memory-textarea" id="mcp-dialog-args" rows="2" placeholder="${_t("参数（每行一个）")}"></textarea>
+          <textarea class="settings-input memory-textarea" id="mcp-dialog-env" rows="2" placeholder="${_t("环境变量（每行 KEY=VALUE）")}"></textarea>
+        </div>
+        <div id="mcp-dialog-net-fields" style="display:none;flex-direction:column;gap:6px;">
+          <input type="text" class="settings-input" id="mcp-dialog-url" placeholder="${_t("URL（如 http://localhost:3000/mcp）")}">
+          <textarea class="settings-input memory-textarea" id="mcp-dialog-headers" rows="2" placeholder="${_t("请求头（每行 KEY=VALUE）")}"></textarea>
+        </div>
+        <input type="text" class="settings-input" id="mcp-dialog-timeout" placeholder="${_t("超时秒数（可选，默认 10）")}">
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--c-text-2);cursor:pointer;user-select:none;">
+          <input type="checkbox" id="mcp-dialog-disabled" style="cursor:pointer;"> ${_t("禁用此 MCP")}
+        </label>
+        <div id="mcp-dialog-msg" style="font-size:12px;min-height:18px;line-height:18px;"></div>
+        <div style="display:flex;gap:8px;">
+          <button class="settings-btn settings-btn-primary" id="mcp-dialog-submit">${_t("添加")}</button>
+          <button class="settings-btn settings-btn-secondary" id="mcp-dialog-delete" style="display:none;">${_t("删除")}</button>
+        </div>
       </div>
     </div>
   </div>
