@@ -1415,6 +1415,278 @@ pub async fn update_cloud_provider(
     Ok(serde_json::json!({ "key": key, "success": true }))
 }
 
+// ===== MCP 服务配置（admAgent.json 顶层 `mcp` 映射）=====
+// 配置格式与 Go 端 config.MCPConfig 对齐：
+// {
+//   "mcp": {
+//     "filesystem": { "type": "stdio", "command": "npx", "args": ["-y", "..."], "env": { "K": "V" } },
+//     "remote":     { "type": "http",  "url": "https://...", "headers": { "K": "V" } }
+//   }
+// }
+// 注意：admAgent server 只在启动时初始化 MCP 客户端，新增/修改后需重启 server
+// 才会建立连接（/config/set 只触发配置内存重载，不重建 MCP 会话）。
+
+/// MCP 服务配置视图（同时作为前端提交结构，字段名与 admAgent.json 对齐）
+#[derive(Serialize, Deserialize, Default)]
+pub struct McpServerView {
+    /// 服务名称（mcp 映射的 key）
+    pub name: String,
+    /// 传输类型：stdio / http / sse（缺省 stdio）
+    #[serde(rename = "type", default)]
+    pub kind: String,
+    #[serde(default)]
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// 环境变量（stdio）
+    #[serde(default)]
+    pub env: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    pub url: String,
+    /// 请求头（http/sse）
+    #[serde(default)]
+    pub headers: std::collections::BTreeMap<String, String>,
+    /// 连接超时（秒），0 表示使用服务端默认值
+    #[serde(default)]
+    pub timeout: u32,
+    #[serde(default)]
+    pub disabled: bool,
+}
+
+/// MCP 配置的已知字段：更新时先剔除再由新值回填，其余未知字段
+/// （enabled_tools / disabled_tools 等）原样保留，避免编辑弹窗丢数据。
+const MCP_KNOWN_KEYS: [&str; 8] = ["type", "command", "args", "env", "url", "headers", "timeout", "disabled"];
+
+/// 校验并归一化前端提交的 MCP 配置，返回 (名称, 类型)
+fn validate_mcp_input(input: &McpServerView) -> Result<(String, String), AppError> {
+    let name = input.name.trim().to_string();
+    if name.is_empty() {
+        bail!("MCP 名称不能为空");
+    }
+    if name.chars().count() > 64 {
+        bail!("MCP 名称过长（最多 64 字符）");
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+    {
+        bail!("MCP 名称只能包含字母、数字、下划线、连字符和点");
+    }
+
+    let kind = {
+        let k = input.kind.trim().to_ascii_lowercase();
+        if k.is_empty() { "stdio".to_string() } else { k }
+    };
+    if !matches!(kind.as_str(), "stdio" | "http" | "sse") {
+        bail!("MCP 类型必须是 stdio / http / sse");
+    }
+    if kind == "stdio" {
+        if input.command.trim().is_empty() {
+            bail!("stdio 类型必须填写命令");
+        }
+    } else {
+        let url = input.url.trim();
+        if url.is_empty() {
+            bail!("{} 类型必须填写 URL", kind);
+        }
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            bail!("URL 必须以 http:// 或 https:// 开头");
+        }
+    }
+    if input.timeout > 3600 {
+        bail!("超时不能超过 3600 秒");
+    }
+    Ok((name, kind))
+}
+
+/// 把前端提交的配置转成写入 admAgent.json 的 JSON 对象（空字段省略，保持文件简洁）
+fn mcp_config_value(input: &McpServerView, kind: &str) -> serde_json::Value {
+    let mut obj = serde_json::Map::new();
+    obj.insert("type".to_string(), serde_json::json!(kind));
+    if kind == "stdio" {
+        obj.insert("command".to_string(), serde_json::json!(input.command.trim()));
+        let args: Vec<String> = input
+            .args
+            .iter()
+            .map(|a| a.trim().to_string())
+            .filter(|a| !a.is_empty())
+            .collect();
+        if !args.is_empty() {
+            obj.insert("args".to_string(), serde_json::json!(args));
+        }
+        if !input.env.is_empty() {
+            obj.insert("env".to_string(), serde_json::json!(input.env));
+        }
+    } else {
+        obj.insert("url".to_string(), serde_json::json!(input.url.trim()));
+        if !input.headers.is_empty() {
+            obj.insert("headers".to_string(), serde_json::json!(input.headers));
+        }
+    }
+    if input.timeout > 0 {
+        obj.insert("timeout".to_string(), serde_json::json!(input.timeout));
+    }
+    if input.disabled {
+        obj.insert("disabled".to_string(), serde_json::json!(true));
+    }
+    serde_json::Value::Object(obj)
+}
+
+/// 更新时合并到旧配置：已知字段用新值覆盖，未知字段保留
+fn merge_mcp_config(existing: &serde_json::Value, new_value: serde_json::Value) -> serde_json::Value {
+    let mut merged = existing.as_object().cloned().unwrap_or_default();
+    for key in MCP_KNOWN_KEYS {
+        merged.remove(key);
+    }
+    if let serde_json::Value::Object(new_obj) = new_value {
+        for (k, v) in new_obj {
+            merged.insert(k, v);
+        }
+    }
+    serde_json::Value::Object(merged)
+}
+
+/// 从 admAgent.json 根值解析 mcp 映射为视图列表（按名称排序）
+fn mcp_servers_from_value(root: &serde_json::Value) -> Vec<McpServerView> {
+    let mut out: Vec<McpServerView> = vec![];
+    if let Some(mcp) = root.get("mcp").and_then(|m| m.as_object()) {
+        for (name, cfg) in mcp {
+            let mut view = McpServerView {
+                name: name.clone(),
+                kind: cfg.get("type").and_then(|t| t.as_str()).unwrap_or("stdio").to_string(),
+                command: cfg.get("command").and_then(|c| c.as_str()).unwrap_or("").to_string(),
+                url: cfg.get("url").and_then(|u| u.as_str()).unwrap_or("").to_string(),
+                timeout: cfg.get("timeout").and_then(|t| t.as_u64()).unwrap_or(0) as u32,
+                disabled: cfg.get("disabled").and_then(|d| d.as_bool()).unwrap_or(false),
+                ..Default::default()
+            };
+            if let Some(args) = cfg.get("args").and_then(|a| a.as_array()) {
+                view.args = args.iter().filter_map(|a| a.as_str().map(|s| s.to_string())).collect();
+            }
+            if let Some(env) = cfg.get("env").and_then(|e| e.as_object()) {
+                view.env = env.iter().filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string()))).collect();
+            }
+            if let Some(headers) = cfg.get("headers").and_then(|h| h.as_object()) {
+                view.headers = headers.iter().filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string()))).collect();
+            }
+            out.push(view);
+        }
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
+
+/// 列出 admAgent.json 中已配置的 MCP 服务
+#[tauri::command]
+pub async fn list_mcp_servers(_app: tauri::AppHandle) -> Result<Vec<McpServerView>, AppError> {
+    let dir = adm_agent_config_dir()?;
+    let path = dir.join("admAgent.json");
+    if !path.exists() {
+        return Ok(vec![]);
+    }
+    let s = std::fs::read_to_string(&path)
+        .map_err(|e| format!("读取 admAgent.json 失败: {}", e))?;
+    let v: serde_json::Value = serde_json::from_str(&s)
+        .map_err(|e| format!("解析 admAgent.json 失败: {}", e))?;
+    Ok(mcp_servers_from_value(&v))
+}
+
+/// 新增 MCP 服务的核心逻辑（便于单测），返回归一化后的名称
+fn add_mcp_server_core(input: &McpServerView) -> Result<String, AppError> {
+    let (name, kind) = validate_mcp_input(input)?;
+    let value = mcp_config_value(input, &kind);
+    let name_for_write = name.clone();
+    update_adm_agent_config(move |config| {
+        if !config.get("mcp").is_some_and(|v| v.is_object()) {
+            config["mcp"] = serde_json::json!({});
+        }
+        let mcp = config["mcp"]
+            .as_object_mut()
+            .ok_or_else(|| AppError::msg("admAgent.json 结构异常：mcp 不是对象"))?;
+        if mcp.contains_key(&name_for_write) {
+            return Err(AppError::msg(format!("MCP「{}」已存在", name_for_write)));
+        }
+        mcp.insert(name_for_write, value);
+        Ok(())
+    })?;
+    Ok(name)
+}
+
+/// 新增 MCP 服务（写入 admAgent.json 顶层 mcp.<name>）
+#[tauri::command]
+pub async fn add_mcp_server(_app: tauri::AppHandle, input: McpServerView) -> Result<serde_json::Value, AppError> {
+    let name = add_mcp_server_core(&input)?;
+    Ok(serde_json::json!({ "name": name, "success": true }))
+}
+
+/// 修改 MCP 服务的核心逻辑（便于单测）：original_name 定位旧条目，名称可改
+fn update_mcp_server_core(original_name: &str, input: &McpServerView) -> Result<String, AppError> {
+    let original = original_name.trim().to_string();
+    if original.is_empty() {
+        bail!("缺少原始 MCP 名称");
+    }
+    let (name, kind) = validate_mcp_input(input)?;
+    let new_value = mcp_config_value(input, &kind);
+    let name_for_write = name.clone();
+    update_adm_agent_config(move |config| {
+        let mcp = config
+            .get_mut("mcp")
+            .and_then(|m| m.as_object_mut())
+            .ok_or_else(|| AppError::msg("admAgent.json 结构异常：缺少 mcp"))?;
+        let existing = mcp
+            .get(&original)
+            .cloned()
+            .ok_or_else(|| AppError::msg(format!("未找到 MCP「{}」", original)))?;
+        if name_for_write != original {
+            if mcp.contains_key(&name_for_write) {
+                return Err(AppError::msg(format!("MCP「{}」已存在", name_for_write)));
+            }
+            mcp.remove(&original);
+        }
+        mcp.insert(name_for_write, merge_mcp_config(&existing, new_value));
+        Ok(())
+    })?;
+    Ok(name)
+}
+
+/// 修改 MCP 服务（名称变更时迁移 key，未知字段保留）
+#[tauri::command]
+pub async fn update_mcp_server(
+    _app: tauri::AppHandle,
+    original_name: String,
+    input: McpServerView,
+) -> Result<serde_json::Value, AppError> {
+    let name = update_mcp_server_core(&original_name, &input)?;
+    Ok(serde_json::json!({ "name": name, "success": true }))
+}
+
+/// 删除 MCP 服务的核心逻辑（便于单测）
+fn delete_mcp_server_core(name: &str) -> Result<(), AppError> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        bail!("缺少 MCP 名称");
+    }
+    let name_for_write = name.clone();
+    update_adm_agent_config(move |config| {
+        let mcp = config
+            .get_mut("mcp")
+            .and_then(|m| m.as_object_mut())
+            .ok_or_else(|| AppError::msg("admAgent.json 结构异常：缺少 mcp"))?;
+        if mcp.remove(&name_for_write).is_none() {
+            return Err(AppError::msg(format!("未找到 MCP「{}」", name_for_write)));
+        }
+        Ok(())
+    })?;
+    Ok(())
+}
+
+/// 删除 MCP 服务
+#[tauri::command]
+pub async fn delete_mcp_server(_app: tauri::AppHandle, name: String) -> Result<serde_json::Value, AppError> {
+    delete_mcp_server_core(&name)?;
+    Ok(serde_json::json!({ "name": name, "success": true }))
+}
+
 // ===== 数据结构 =====
 
 #[derive(Serialize)]
@@ -3123,8 +3395,15 @@ mod adm_agent_config_tests {
                 .unwrap_or(0)
         ));
         let _ = std::fs::remove_dir_all(&base);
-        // adm_agent_config_dir() 返回 LOCALAPPDATA/admAgent，这里保持一致
+        // adm_agent_config_dir()：Windows 为 LOCALAPPDATA/admAgent，其它平台为 HOME/.config/admAgent，
+        // 两个环境变量都重定向到临时目录，保证测试在任意平台都不触碰真实用户配置。
+        #[cfg(target_os = "windows")]
         let dir = base.join("admAgent");
+        #[cfg(not(target_os = "windows"))]
+        let dir = {
+            std::env::set_var("HOME", &base);
+            base.join(".config").join("admAgent")
+        };
         std::fs::create_dir_all(&dir).expect("创建临时配置目录失败");
         std::env::set_var("LOCALAPPDATA", &base);
         TestDir { dir, _guard: guard }
@@ -3410,6 +3689,155 @@ mod adm_agent_config_tests {
             .filter(|n| n.ends_with(".tmp"))
             .collect();
         assert!(leftovers.is_empty(), "残留临时文件: {:?}", leftovers);
+    }
+
+    // ---- MCP 配置（add / update / delete / list） ----
+
+    fn mcp_default() -> McpServerView {
+        McpServerView {
+            name: "m1".to_string(),
+            kind: "stdio".to_string(),
+            command: "npx".to_string(),
+            args: vec!["-y".to_string(), "@modelcontextprotocol/server-filesystem".to_string()],
+            ..Default::default()
+        }
+    }
+
+    /// 新增：写入 mcp.<name>，不动其它字段；同名重复新增报错。
+    #[test]
+    fn mcp_add_writes_entry_and_rejects_duplicates() {
+        let t = temp_config_dir("mcp_add");
+        let path = t.dir.join("admAgent.json");
+        std::fs::write(&path, SAMPLE).expect("写入样本配置");
+
+        let name = add_mcp_server_core(&mcp_default()).expect("新增应成功");
+        assert_eq!(name, "m1");
+
+        let out: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("读回配置"))
+                .expect("合法 JSON");
+        assert_eq!(out["mcp"]["m1"]["command"], "npx");
+        assert_eq!(out["mcp"]["m1"]["args"][1], "@modelcontextprotocol/server-filesystem");
+        assert_eq!(
+            out["providers"]["mycloud"]["api_key"], "sk-test",
+            "新增 MCP 不得影响其它字段"
+        );
+
+        assert!(add_mcp_server_core(&mcp_default()).is_err(), "同名重复新增必须报错");
+
+        let listed = mcp_servers_from_value(&out);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].command, "npx");
+        assert_eq!(listed[0].kind, "stdio");
+    }
+
+    /// 更新：名称可改（迁移 key），未编辑字段（enabled_tools）保留，空字段省略。
+    #[test]
+    fn mcp_update_renames_and_preserves_unknown_fields() {
+        let t = temp_config_dir("mcp_update");
+        let path = t.dir.join("admAgent.json");
+        std::fs::write(
+            &path,
+            r#"{"mcp":{"old":{"type":"stdio","command":"npx","args":["a"],"enabled_tools":["t1"]}}}"#,
+        )
+        .expect("写入样本配置");
+
+        let input = McpServerView {
+            name: "new".to_string(),
+            kind: "stdio".to_string(),
+            command: "uvx".to_string(),
+            ..Default::default()
+        };
+        let name = update_mcp_server_core("old", &input).expect("更新应成功");
+        assert_eq!(name, "new");
+
+        let out: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("读回配置"))
+                .expect("合法 JSON");
+        assert!(out["mcp"].get("old").is_none(), "旧 key 必须移除");
+        assert_eq!(out["mcp"]["new"]["command"], "uvx");
+        assert!(out["mcp"]["new"].get("args").is_none(), "未填参数时应省略旧 args");
+        assert_eq!(out["mcp"]["new"]["enabled_tools"][0], "t1", "未知字段必须保留");
+
+        assert!(
+            update_mcp_server_core("missing", &input).is_err(),
+            "目标不存在必须报错"
+        );
+    }
+
+    /// 删除：移除条目；目标不存在时报错。
+    #[test]
+    fn mcp_delete_removes_entry() {
+        let t = temp_config_dir("mcp_delete");
+        let path = t.dir.join("admAgent.json");
+        std::fs::write(
+            &path,
+            r#"{"mcp":{"a":{"type":"stdio","command":"x"},"b":{"type":"http","url":"https://e.com/mcp"}}}"#,
+        )
+        .expect("写入样本配置");
+
+        delete_mcp_server_core("a").expect("删除应成功");
+        let out: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("读回配置"))
+                .expect("合法 JSON");
+        assert!(out["mcp"].get("a").is_none());
+        assert!(out["mcp"].get("b").is_some(), "其它 MCP 不得受影响");
+
+        assert!(delete_mcp_server_core("a").is_err(), "重复删除必须报错");
+    }
+
+    /// 校验：名称字符 / stdio 命令 / http URL / 超时上限 / 类型缺省。
+    #[test]
+    fn mcp_validation_rules() {
+        let validator = |v: McpServerView| validate_mcp_input(&v);
+
+        assert!(validator(McpServerView {
+            name: "  ".into(), kind: "stdio".into(), command: "npx".into(), ..Default::default()
+        })
+        .is_err(), "空名称");
+        assert!(validator(McpServerView {
+            name: "a b".into(), kind: "stdio".into(), command: "npx".into(), ..Default::default()
+        })
+        .is_err(), "非法字符");
+        assert!(validator(McpServerView {
+            name: "a".into(), kind: "stdio".into(), ..Default::default()
+        })
+        .is_err(), "stdio 缺命令");
+        assert!(validator(McpServerView {
+            name: "a".into(), kind: "http".into(), ..Default::default()
+        })
+        .is_err(), "http 缺 URL");
+        assert!(validator(McpServerView {
+            name: "a".into(), kind: "http".into(), url: "ftp://x".into(), ..Default::default()
+        })
+        .is_err(), "非 http(s) 协议");
+        assert!(validator(McpServerView {
+            name: "a".into(), kind: "stdio".into(), command: "npx".into(), timeout: 3601, ..Default::default()
+        })
+        .is_err(), "超时超上限");
+
+        let (name, kind) = validate_mcp_input(&McpServerView {
+            name: " ok ".into(), command: "npx".into(), ..Default::default()
+        })
+        .expect("合法配置应通过");
+        assert_eq!(name, "ok", "名称应去首尾空白");
+        assert_eq!(kind, "stdio", "缺省类型应为 stdio");
+    }
+
+    /// 列表：缺 type 视为 stdio，按名称排序。
+    #[test]
+    fn mcp_list_defaults_and_sorts() {
+        let root = serde_json::json!({ "mcp": {
+            "zeta": { "type": "http", "url": "https://z.example/mcp", "headers": { "Authorization": "Bearer x" } },
+            "alpha": { "command": "npx" }
+        }});
+        let list = mcp_servers_from_value(&root);
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].name, "alpha");
+        assert_eq!(list[0].kind, "stdio", "缺省 type 必须回退 stdio");
+        assert_eq!(list[1].name, "zeta");
+        assert_eq!(list[1].url, "https://z.example/mcp");
+        assert_eq!(list[1].headers["Authorization"], "Bearer x");
     }
 }
 

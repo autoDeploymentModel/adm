@@ -13,13 +13,14 @@ import { syncWorkingIndicator, onAreaScroll, scrollChatToBottom } from "./agent/
 import { sendMessage, cancelCurrentRun } from "./agent/send.js";
 import { setupSSEListener, cancelScheduledLoadTools, cancelRunCompleteFallback } from "./agent/sse.js";
 import { syncModeToServer } from "./agent/permission.js";
-import { loadTools, renderToolsList } from "./agent/tools.js";
+import { loadTools, activateToolsTab } from "./agent/tools.js";
 import { switchModel, refreshServerProviders, resolveAgentModel, updateModelDropdown, updateModelBtn, refreshAgentInfo } from "./agent/model.js";
 import { enableAutoCompact, updateWorkspaceSelector, toggleWorkDirDropdown, closeWorkDirDropdown, validateWorkDirs } from "./agent/workspace.js";
 import { showSettings, hideSettings, updateSettingsUI, saveSettings, showAddModelDialog, hideAddModelDialog, addModel, initProjectMemoryUI, renderVisionModelSelect } from "./agent/settings_dialog.js";
 import { addPendingFiles, parseUriListPaths, addPastedPaths, looksLikeFilePath } from "./agent/attach.js";
 import { bindSkillSelectorEvents, initSkillSelector, clearAttachedSkillsAfterSend } from "./agent/skill_selector.js";
 import { bindCompactBtnEvents } from "./agent/compact.js";
+import { initMcpDialogUI } from "./agent/mcp_dialog.js";
 
 // ===== 初始化 =====
 //
@@ -198,11 +199,7 @@ async function _doInit(seq) {
       if (!tab) return;
       var mode = /** @type {"skill" | "lsp" | "mcp"} */ (tab.getAttribute("data-tab"));
       if (!mode || mode === S.toolsTab) return;
-      S.toolsTab = mode;
-      toolsTabs.querySelectorAll(".tools-tab").forEach(function(t) {
-        t.classList.toggle("active", t === tab);
-      });
-      renderToolsList();
+      activateToolsTab(mode);
     });
   }
 
@@ -345,24 +342,37 @@ function lastAssistantTurnFinished() {
 // 后端 SSE 转发循环检测到 admAgent 进程消失时 emit "agent-server-died"，
 // 这里防重入地重跑一遍 init（重启 server、恢复工作区与会话）
 var serverRestarting = false;
-async function handleServerDied() {
+
+// 重启 Agent 服务并恢复工作区/会话（防重入），init() 负责最终收尾。
+// 供意外退出自愈复用；MCP 配置变更后（mcp_dialog.js 动态导入）也走这里。
+export async function restartAgentService() {
   if (serverRestarting) return;
   serverRestarting = true;
+  try {
+    // 运行中的任务会随服务重启中断：先清本地运行态，避免按钮/指示器残留
+    store.cancelRun(store.activeWsId);
+    updateSendButton();
+    clearSendSafetyTimer();
+    // 主动重启时先停掉旧服务，避免 start_agent_server 复用仍在运行的会话
+    await invoke("stop_agent_server").catch(function() {});
+    // 自愈流程与首次 init 共享同一进度条，init() 的 finally 会负责收尾
+    showInitProgress(_t("正在重启 Agent 服务..."));
+    await init();
+  } finally {
+    serverRestarting = false;
+  }
+}
+
+async function handleServerDied() {
+  if (serverRestarting) return;
   console.warn("[agent] admAgent server 意外退出，自动重启中...");
   showError(_t("admAgent 服务异常退出，正在自动重启..."));
-  store.cancelRun(store.activeWsId);
-  updateSendButton();
-  clearSendSafetyTimer();
   updateStatusBar("error", null, S.contextUsage.used);
-  // 自愈流程与首次 init 共享同一进度条，init() 的 finally 会负责收尾
-  showInitProgress(_t("正在重启 Agent 服务..."));
   try {
-    await init();
+    await restartAgentService();
   } catch (e) {
     console.error("[agent] admAgent 自动重启失败:", e);
     reportError(e, { prefix: _t("admAgent 自动重启失败: ") });
-  } finally {
-    serverRestarting = false;
   }
 }
 
@@ -561,6 +571,9 @@ function bindEvents() {
   // 模型添加
   document.getElementById("agent-add-model-close").addEventListener("click", hideAddModelDialog);
   document.getElementById("add-model-submit").addEventListener("click", addModel);
+
+  // MCP 管理（MCP tab 添加按钮 + 列表点击编辑 + 添加/修改弹窗）
+  initMcpDialogUI();
 
   // 附件按钮
   document.getElementById("agent-attach-btn").addEventListener("click", function() {
