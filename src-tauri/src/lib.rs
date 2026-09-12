@@ -183,6 +183,7 @@ pub fn run() {
             settings::save_settings,
             settings::load_settings,
             settings::get_app_version,
+            settings::get_tauri_version,
             settings::get_llamacpp_version,
             settings::delete_llamacpp,
             // agent.rs - server mode

@@ -428,7 +428,7 @@ const template = `
               <span id="update-status" style="font-size:12px;color:var(--c-text-3);margin-left:12px;"></span>
             </td>
           </tr>
-          <tr><td>${_t("Tauri 版本")}</td><td>2.11.2</td></tr>
+          <tr><td>${_t("Tauri 版本")}</td><td id="v-tauri">${_t("检测中...")}</td></tr>
           <tr>
             <td>${_t("llama.cpp 版本")}</td>
             <td><span id="v-llamacpp" style="margin-right:8px;">${_t("检测中...")}</span><button class="btn-delete-llamacpp" id="delete-llamacpp-btn">${_t("删除")}</button></td>
@@ -648,6 +648,12 @@ async function loadVersionInfo() {
     document.getElementById("v-adm").innerHTML = admVersion + ' <span id="update-badge" style="display:none;color:#4caf50;font-size:12px;margin-left:6px;">' + _t("✓ 最新") + '</span>';
   } catch (e) {
     document.getElementById("v-adm").textContent = _t("未知");
+  }
+  try {
+    const tauriVersion = await invoke()("get_tauri_version");
+    document.getElementById("v-tauri").textContent = tauriVersion || _t("未知");
+  } catch (e) {
+    document.getElementById("v-tauri").textContent = _t("未知");
   }
   try {
     const version = await invoke()("get_llamacpp_version");
