@@ -955,37 +955,7 @@ pub fn sync_agent_vision_model(app: &tauri::AppHandle, value: &str) {
         if !changed {
             return; // 值未变化：跳过服务端重载，避免不必要的配置抖动
         }
-        let ws = {
-            let state = app.state::<AppState>();
-            let active = state.active_workspace_id.lock().map(|g| g.clone()).unwrap_or(None);
-            match active {
-                Some(ws_id) if !ws_id.is_empty() => ws_id,
-                _ => return, // 无激活 workspace
-            }
-        };
-        let client = match build_client(&AgentTransport::default_host(), Duration::from_secs(3)) {
-            Ok(c) => c,
-            Err(_) => return,
-        };
-        // 写无害标量触发服务端重载（合并进刚更新的 admAgent.json 顶层 agent_vision_model）
-        let set_body = serde_json::json!({ "scope": 0, "key": "providers.local.name", "value": "Local" });
-        match tokio::time::timeout(
-            Duration::from_secs(10),
-            agent_http::send(&client, "POST", &format!("/v1/workspaces/{}/config/set", ws), Some(set_body)),
-        ).await {
-            Ok(Ok((st, _))) if (200..300).contains(&st) => {
-                eprintln!("[admAgent] 同步多模态模型：/config/set 触发重载完成");
-            }
-            Ok(Ok((st, _))) => {
-                eprintln!("[admAgent] 同步多模态模型：/config/set HTTP {}", st);
-            }
-            Ok(Err(e)) => {
-                eprintln!("[admAgent] 同步多模态模型：/config/set 失败: {}", e);
-            }
-            Err(_) => {
-                eprintln!("[admAgent] 同步多模态模型：/config/set 超时");
-            }
-        }
+        request_server_config_reload(&app);
     });
 }
 
@@ -2037,6 +2007,22 @@ fn stop_agent_server_internal(state: &tauri::State<'_, AppState>) -> Result<(), 
     Ok(())
 }
 
+// 兜底：前端未传时本地生成（不应发生，但避免空字符串导致服务端校验失败）
+fn generate_client_id(client_id: String) -> String {
+    if client_id.is_empty() {
+        format!(
+            "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+            rand::random::<u32>(),
+            rand::random::<u16>(),
+            rand::random::<u16>(),
+            rand::random::<u16>(),
+            rand::random::<u64>() & 0xFFFFFFFFFFFF
+        )
+    } else {
+        client_id
+    }
+}
+
 /// 启动 admAgent server 模式（默认本地传输：Unix socket / Windows named pipe）。
 ///
 /// 多客户端共享：先探测默认传输地址上是否已有 server 在跑（本进程或其它客户端/
@@ -2223,19 +2209,7 @@ pub async fn start_agent_server(
     // 使用前端传入的 client_id，确保 SSE 流、POST /v1/workspaces、
     // current-session 全用同一个 client_id（Go 服务端要求 current-session
     // 的 client_id 已挂活跃 SSE 流，否则返回 404 client not attached）。
-    let client_id = if client_id.is_empty() {
-        // 兜底：前端未传时本地生成（不应发生，但避免空字符串导致服务端校验失败）
-        format!(
-            "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
-            rand::random::<u32>(),
-            rand::random::<u16>(),
-            rand::random::<u16>(),
-            rand::random::<u16>(),
-            rand::random::<u64>() & 0xFFFFFFFFFFFF
-        )
-    } else {
-        client_id
-    };
+    let client_id = generate_client_id(client_id);
 
     let workspace_id = {
         let client = build_client(&transport, Duration::from_secs(5))
@@ -2752,31 +2726,12 @@ pub async fn read_project_memory(
     state: tauri::State<'_, AppState>,
     workspace_id: String,
 ) -> Result<serde_json::Value, AppError> {
-    if !server_process_alive(&state) {
-        bail!("admAgent server 未运行");
-    }
-
-    // GET /v1/workspaces/{id} → { id, path, data_dir, ... }
-    let client = build_client(&AgentTransport::default_host(), Duration::from_secs(5))
-        .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
-    let (status, bytes) = tokio::time::timeout(
-        Duration::from_secs(30),
-        agent_http::send(&client, "GET", &format!("/v1/workspaces/{}", workspace_id), None),
-    )
-    .await
-    .map_err(|_| "获取 workspace 信息超时".to_string())?
-    .map_err(|e| format!("HTTP 请求失败: {}", e))?;
-    if !(200..300).contains(&status) {
-        bail!("HTTP {} 获取 workspace 信息失败", status);
-    }
-    let ws: serde_json::Value = serde_json::from_slice(&bytes)
-        .map_err(|e| format!("解析 workspace 响应失败: {}", e))?;
-    let data_dir = ws.get("data_dir").and_then(|v| v.as_str()).unwrap_or("");
+    let data_dir = fetch_workspace_data_dir(&state, &workspace_id).await?;
     if data_dir.is_empty() {
         return Ok(serde_json::json!([]));
     }
 
-    let path = std::path::Path::new(data_dir).join("project_memory.json");
+    let path = std::path::Path::new(&data_dir).join("project_memory.json");
     match std::fs::read_to_string(&path) {
         Ok(content) => {
             // 文件存在但内容非法/为空时按空处理，绝不让展示层报错
@@ -2969,18 +2924,7 @@ pub async fn create_workspace(
 
     let transport = AgentTransport::default_host();
     // 使用前端传入的 client_id（同 start_agent_server）
-    let client_id = if client_id.is_empty() {
-        format!(
-            "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
-            rand::random::<u32>(),
-            rand::random::<u16>(),
-            rand::random::<u16>(),
-            rand::random::<u16>(),
-            rand::random::<u64>() & 0xFFFFFFFFFFFF
-        )
-    } else {
-        client_id
-    };
+    let client_id = generate_client_id(client_id);
 
     let client = build_client(&transport, Duration::from_secs(5))
         .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
