@@ -37,11 +37,12 @@ export function isMsgAreaAtBottom(area) {
 // 消息区“完全滚到底部”：area 在底部，且所有展开的轮容器（.msg-round，
 // 内部独立滚动）也在底部。轮内向上滑动 area 的 scrollTop 不变，仅靠
 // isMsgAreaAtBottom 会误判为“已到底”，导致回到底部圆球不显示、自动跟随误判。
-export function isFullyAtBottom(area) {
+// rounds 可选：调用方刚扫描过展开轮列表时透传，避免同一渲染流程内重复全量 query。
+export function isFullyAtBottom(area, rounds) {
   if (area.scrollHeight - area.scrollTop - area.clientHeight > 4) return false;
-  var rounds = area.querySelectorAll(".msg-round:not(.msg-round-collapsed)");
-  for (var i = 0; i < rounds.length; i++) {
-    var r = rounds[i];
+  var list = rounds || area.querySelectorAll(".msg-round:not(.msg-round-collapsed)");
+  for (var i = 0; i < list.length; i++) {
+    var r = list[i];
     if (r.scrollHeight - r.scrollTop - r.clientHeight > 4) return false;
   }
   return true;
@@ -143,8 +144,25 @@ export function generateRunId() {
 }
 
 // ===== Markdown 简易渲染 =====
+// 渲染结果按原文缓存：同一文本在流式节流、消息节点重建等场景会重复渲染。
+// Map 保持插入序，超限淘汰最早的；超长文本不缓存，避免大字符串常驻内存。
+var MD_CACHE_MAX_ENTRIES = 100;
+var MD_CACHE_MAX_TEXT = 20000;
+var mdCache = new Map();
 export function renderMarkdown(text) {
   if (!text) return "";
+  if (text.length > MD_CACHE_MAX_TEXT) return renderMarkdownUncached(text);
+  var hit = mdCache.get(text);
+  if (hit !== undefined) return hit;
+  var html = renderMarkdownUncached(text);
+  mdCache.set(text, html);
+  if (mdCache.size > MD_CACHE_MAX_ENTRIES) {
+    mdCache.delete(mdCache.keys().next().value);
+  }
+  return html;
+}
+
+function renderMarkdownUncached(text) {
   // 简易 Markdown 渲染：代码块、行内代码、粗体、斜体、标题、列表、链接
   var html = escapeHtml(text);
 

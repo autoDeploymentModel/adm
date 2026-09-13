@@ -13,11 +13,12 @@ export function exitManualScrollMode() {
 
 // 更新「回到底部」悬浮圆球的显隐：未滚到底部时显示，到底/无滚动条时隐藏。
 // 轮内独立滚动也算“未到底”——只看 area 不够（isMsgAreaAtBottom）。
-export function updateScrollBottomBtn() {
+// rounds 可选：调用方（scrollChatToBottom）刚扫描过展开轮列表时透传，避免重复全量 query。
+export function updateScrollBottomBtn(rounds) {
   var btn = document.getElementById("agent-scroll-bottom-btn");
   var area = document.getElementById("agent-msg-area");
   if (!btn || !area) return;
-  if (area.scrollHeight <= area.clientHeight || isFullyAtBottom(area)) {
+  if (area.scrollHeight <= area.clientHeight || isFullyAtBottom(area, rounds)) {
     btn.classList.remove("show");
   } else {
     btn.classList.add("show");

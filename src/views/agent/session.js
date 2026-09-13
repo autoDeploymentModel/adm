@@ -95,7 +95,7 @@ export async function loadConversations(restoreCurrent) {
 export function renderConversationList() {
   const container = document.getElementById("agent-conv-list");
   if (!container) return;
-  container.innerHTML = "";
+  ensureConvListDelegation(container);
 
   // 根据视图模式过滤
   var list = S.conversations;
@@ -109,10 +109,13 @@ export function renderConversationList() {
     return;
   }
 
+  // 批量构建后一次性挂载（Fragment），避免逐条 append 触发多次布局
+  var frag = document.createDocumentFragment();
   list.forEach(function(conv) {
     var item = document.createElement("div");
     var isActive = conv.id === S.currentConvId;
     item.className = "conv-item" + (isActive ? " active" : "");
+    if (conv.id != null) item.setAttribute("data-conv-id", String(conv.id));
     var msgCount = conv.message_count || conv.messages || 0;
     var lastTime = conv.updated_at || conv.last_time || "";
     // 运行/排队标识：以本客户端跟踪的 activeRun / queuedRun 为准（更实时），
@@ -139,87 +142,213 @@ export function renderConversationList() {
         '<button class="conv-action-btn delete" data-action="delete" title="' + _t("删除") + '">✕</button>' +
       "</div>";
 
-    item.addEventListener("click", function() { selectConversation(conv.id); });
-
-    // 悬停操作按钮
-    var actions = item.querySelectorAll(".conv-action-btn");
-    actions.forEach(function(btn) {
-      btn.addEventListener("click", function(e) {
-        e.stopPropagation();
-        var action = btn.getAttribute("data-action");
-        handleConvAction(action, conv.id);
-      });
-    });
-
-    container.appendChild(item);
+    frag.appendChild(item);
   });
+  container.innerHTML = "";
+  container.appendChild(frag);
 
-  // 同步刷新侧栏列表；聊天区右侧的消息大纲（outline）由 renderMessages 负责刷新，
+  // 同步刷新侧栏列表；聊天区右侧的消息大纲（outline）由 renderMessages 负责调度刷新，
   // 避免在切会话时与消息列表对账时机错位（消息未加载完时显示旧数据）。
 }
 
-// 渲染聊天区右侧的悬浮「对话记录」大纲面板。
+// 会话列表事件委托：列表项随渲染整体重建，click 委托在容器上只挂一次
+// （重新挂载后 DOM 换新会自动重挂）。动作按钮命中时阻止冒泡，避免误触选中会话。
+function ensureConvListDelegation(container) {
+  var cref = /** @type {any} */ (container);
+  if (cref._admConvDelegated) return;
+  cref._admConvDelegated = true;
+  container.addEventListener("click", function(e) {
+    var target = e.target instanceof Element ? e.target : null;
+    if (!target) return;
+    var btn = target.closest(".conv-action-btn");
+    if (btn) {
+      e.stopPropagation();
+      var actItem = btn.closest(".conv-item");
+      var action = btn.getAttribute("data-action") || "";
+      var actionConvId = actItem ? actItem.getAttribute("data-conv-id") : null;
+      if (actionConvId) handleConvAction(action, actionConvId);
+      return;
+    }
+    var item = target.closest(".conv-item");
+    if (item) {
+      var convId = item.getAttribute("data-conv-id");
+      if (convId) selectConversation(convId);
+    }
+  });
+}
+
+// ===== 右侧「对话记录」大纲面板（增量渲染） =====
 // 列出当前会话 S.messages 中有文本内容的每条消息（带角色色条 + 预览文本 + 时间），
 // 点击项定位到对应消息节点并短暂闪烁高亮，方便长对话快速跳转。
 // 纯工具调用 / 思考流（无文本 part）的消息直接跳过，避免大纲被噪声淹没。
+//
+// 旧实现每次全量重建（innerHTML 清空 + 逐条 innerHTML + 逐条监听），SSE 流式期间
+// 每个 delta 都会触发一次，是长会话下的主要渲染开销之一。现改为：
+//   1) scheduleMessageOutline 做 rAF 合并，单帧最多渲染一次；
+//   2) 按 data-msg-key 复用节点，仅就地更新变化的预览 / 时间 / 序号；
+//   3) 容器级事件委托，替代逐条 click 监听。
+// 预览文本按消息对象做 WeakMap 缓存：store 更新消息时对象整体替换，缓存自动失效。
+var OUTLINE_PREVIEW_CACHE = new WeakMap();
+
+function outlinePreviewOf(msg) {
+  var cached = OUTLINE_PREVIEW_CACHE.get(msg);
+  if (cached !== undefined) return cached;
+  var preview = getMessagePreview(msg);
+  OUTLINE_PREVIEW_CACHE.set(msg, preview);
+  return preview;
+}
+
+var outlineRenderScheduled = false;
+export function scheduleMessageOutline() {
+  if (outlineRenderScheduled) return;
+  outlineRenderScheduled = true;
+  requestAnimationFrame(function() {
+    outlineRenderScheduled = false;
+    // rAF 回调不在 SSE 处理器 try/catch 内，异常需在此兜底上报（保持与同步渲染一致的错误可见性）
+    try {
+      renderMessageOutline();
+    } catch (e) {
+      reportError(e, { prefix: _t("大纲渲染失败: ") });
+    }
+  });
+}
+
+// 事件委托只挂一次（容器在视图生命周期内复用；重新挂载后 DOM 换新会自动重挂）
+function ensureOutlineDelegation(container) {
+  var cref = /** @type {any} */ (container);
+  if (cref._admOutlineDelegated) return;
+  cref._admOutlineDelegated = true;
+  container.addEventListener("click", function(e) {
+    var target = e.target instanceof Element ? e.target : null;
+    var item = target ? target.closest(".outline-item") : null;
+    if (!item || !container.contains(item)) return;
+    setOutlinePanelOpen(false);
+    scrollToMessage(item.getAttribute("data-msg-key") || "", item);
+  });
+}
+
 export function renderMessageOutline() {
   var container = document.getElementById("agent-outline-list");
   if (!container) return;
-  container.innerHTML = "";
+  ensureOutlineDelegation(container);
 
   // 过滤：必须是带 id 的消息且能从 parts/content 抽到非空文本预览
   var messages = S.messages || [];
-  var visible = messages.filter(function(m) {
-    return m && m.id !== undefined && m.id !== null && getMessagePreview(m);
-  });
+  var visible = [];
+  for (var i = 0; i < messages.length; i++) {
+    var m = messages[i];
+    if (!m || m.id === undefined || m.id === null) continue;
+    var preview = outlinePreviewOf(m);
+    if (preview) visible.push({ key: String(m.id), msg: m, preview: preview });
+  }
 
   // 同步 header 计数
   var countEl = document.getElementById("agent-outline-count");
-  if (countEl) countEl.textContent = String(visible.length);
+  if (countEl && countEl.textContent !== String(visible.length)) countEl.textContent = String(visible.length);
+  updateOutlineFabBadge(visible.length);
 
+  var cref = /** @type {any} */ (container);
   if (visible.length === 0) {
-    container.innerHTML =
-      '<div class="agent-outline-empty">' +
-        '<div class="agent-outline-empty-icon">📑</div>' +
-        '<div>' + _t("暂无对话记录") + '</div>' +
-        '<div style="margin-top:6px;font-size:11px;">' + _t("在左侧开始对话后将自动出现") + '</div>' +
-      '</div>';
-    updateOutlineFabBadge();
+    container.querySelectorAll(".outline-item").forEach(function(el) { el.remove(); });
+    cref._admNodes = {};
+    if (!container.querySelector(".agent-outline-empty")) {
+      container.innerHTML =
+        '<div class="agent-outline-empty">' +
+          '<div class="agent-outline-empty-icon">📑</div>' +
+          '<div>' + _t("暂无对话记录") + '</div>' +
+          '<div style="margin-top:6px;font-size:11px;">' + _t("在左侧开始对话后将自动出现") + '</div>' +
+        '</div>';
+    }
     return;
   }
+  var emptyEl = container.querySelector(".agent-outline-empty");
+  if (emptyEl) emptyEl.remove();
 
-  visible.forEach(function(msg, idx) {
-    var item = document.createElement("div");
-    var role = msg.role || "assistant";
-    var msgKey = String(msg.id != null ? msg.id : ("idx" + idx));
-    item.className = "outline-item " + role;
-    item.setAttribute("data-msg-key", msgKey);
-
-    var preview = getMessagePreview(msg);
-    var time = formatTime(msg.created_at || msg.updated_at || "");
-    var roleLabel = role === "user" ? _t("你") : _t("Agent");
-    var roleIcon = role === "user" ? "👤" : "🤖";
-
-    item.innerHTML =
-      '<span class="outline-item-bar"></span>' +
-      '<div class="outline-item-body">' +
-        '<div class="outline-item-meta">' +
-          '<span class="outline-item-role">' + roleIcon + ' ' + roleLabel + '</span>' +
-          (time ? '<span>· ' + time + '</span>' : '') +
-          '<span style="margin-left:auto;color:var(--c-text-4);">#' + (idx + 1) + '</span>' +
-        '</div>' +
-        '<div class="outline-item-preview">' + escapeHtml(preview) + '</div>' +
-      '</div>';
-
-    item.addEventListener("click", function() {
-      setOutlinePanelOpen(false);
-      scrollToMessage(msgKey, item);
-    });
-
-    container.appendChild(item);
+  var nodes = cref._admNodes || (cref._admNodes = {});
+  var used = {};
+  // 从后向前插入/校正顺序：node.nextSibling 即期望位置，已就位的节点零移动
+  var nextRef = null;
+  for (var j = visible.length - 1; j >= 0; j--) {
+    var it = visible[j];
+    var node = nodes[it.key];
+    if (!node) {
+      node = buildOutlineItem(it, j);
+      nodes[it.key] = node;
+    } else {
+      updateOutlineItem(node, it, j);
+    }
+    used[it.key] = true;
+    // 新建节点（尚未在容器内）或其位置不对时插入到期望位置
+    if (node.parentNode !== container || node.nextSibling !== nextRef) container.insertBefore(node, nextRef);
+    nextRef = node;
+  }
+  // 移除已不在列表中的旧节点
+  Object.keys(nodes).forEach(function(k) {
+    if (!used[k]) {
+      var stale = nodes[k];
+      if (stale && stale.parentNode) stale.remove();
+      delete nodes[k];
+    }
   });
+}
 
-  updateOutlineFabBadge();
+// 构建大纲项：结构与旧版保持一致（bar + meta[role/time/#idx] + preview）
+function buildOutlineItem(item, idx) {
+  var node = document.createElement("div");
+  node.className = "outline-item";
+  node.setAttribute("data-msg-key", item.key);
+  var bar = document.createElement("span");
+  bar.className = "outline-item-bar";
+  var body = document.createElement("div");
+  body.className = "outline-item-body";
+  var meta = document.createElement("div");
+  meta.className = "outline-item-meta";
+  var roleEl = document.createElement("span");
+  roleEl.className = "outline-item-role";
+  var timeEl = document.createElement("span");
+  var idxEl = document.createElement("span");
+  idxEl.style.cssText = "margin-left:auto;color:var(--c-text-4);";
+  meta.appendChild(roleEl);
+  meta.appendChild(timeEl);
+  meta.appendChild(idxEl);
+  var previewEl = document.createElement("div");
+  previewEl.className = "outline-item-preview";
+  body.appendChild(meta);
+  body.appendChild(previewEl);
+  node.appendChild(bar);
+  node.appendChild(body);
+  /** @type {any} */ (node)._adm = { roleEl: roleEl, timeEl: timeEl, idxEl: idxEl, previewEl: previewEl, roleText: "", rawTime: "", idx: -1, preview: null };
+  updateOutlineItem(node, item, idx);
+  return node;
+}
+
+// 就地更新大纲项：只写变化的字段；.active 高亮类由 scrollToMessage 维护，不在此清除
+function updateOutlineItem(node, item, idx) {
+  var st = /** @type {any} */ (node)._adm;
+  var msg = item.msg;
+  var role = msg.role || "assistant";
+  var roleText = role === "user" ? "👤 " + _t("你") : "🤖 " + _t("Agent");
+  if (st.roleText !== roleText) {
+    st.roleText = roleText;
+    st.roleEl.textContent = roleText;
+    node.classList.remove("user", "assistant");
+    node.classList.add(role);
+  }
+  var rawTime = msg.created_at || msg.updated_at || "";
+  if (st.rawTime !== rawTime) {
+    st.rawTime = rawTime;
+    var time = formatTime(rawTime);
+    st.timeEl.textContent = time ? "· " + time : "";
+    st.timeEl.style.display = time ? "" : "none";
+  }
+  if (st.idx !== idx) {
+    st.idx = idx;
+    st.idxEl.textContent = "#" + (idx + 1);
+  }
+  if (st.preview !== item.preview) {
+    st.preview = item.preview;
+    st.previewEl.textContent = item.preview;
+  }
 }
 
 // 从消息中提取前 ~50 字文本预览（按 parts 顺序查找首个 text part，回退 content）
@@ -303,19 +432,15 @@ function cssEscape(s) {
 
 // 同步 FAB 角标：与面板里展示的大纲项数一致（即只计有文本内容的消息），
 // 否则用户看到角标是「总消息数」、打开后却少几条，体感不一致。
-function updateOutlineFabBadge() {
+// total 由 renderMessageOutline 传入（同一轮已统计），避免重复扫描 S.messages。
+function updateOutlineFabBadge(total) {
   var badge = document.getElementById("agent-outline-fab-badge");
   if (!badge) return;
-  var msgs = S.messages || [];
-  var total = 0;
-  for (var i = 0; i < msgs.length; i++) {
-    var m = msgs[i];
-    if (m && m.id !== undefined && m.id !== null && getMessagePreview(m)) total++;
-  }
   if (total > 0) {
-    badge.textContent = total > 99 ? "99+" : String(total);
-    badge.style.display = "";
-  } else {
+    var text = total > 99 ? "99+" : String(total);
+    if (badge.textContent !== text) badge.textContent = text;
+    if (badge.style.display === "none") badge.style.display = "";
+  } else if (badge.style.display !== "none") {
     badge.style.display = "none";
   }
 }

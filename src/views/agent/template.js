@@ -798,6 +798,10 @@ export const template = `
     white-space: pre-wrap;
     word-break: break-word;
     user-select: text;
+    /* 布局/绘制隔离：单条消息及其子树的变化不会波及整棵对话 DOM，
+       长会话（数百条消息）下可显著减少重排/重绘范围。
+       注意：元素自身的 box-shadow（flash-highlight 闪烁动画）不受 paint containment 影响。 */
+    contain: layout style paint;
   }
 
   .msg.user {

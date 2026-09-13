@@ -2,8 +2,70 @@
 import { t as _t } from "../../i18n.js";
 import { S, store } from "./store.js";
 import { renderMarkdown, formatTime, splitSystemInfo, isFullyAtBottom } from "./utils.js";
-import { updateScrollBottomBtn } from "./ui.js";
-import { renderMessageOutline } from "./session.js";
+import { updateScrollBottomBtn, reportError } from "./ui.js";
+import { scheduleMessageOutline } from "./session.js";
+import { log } from "./log.js";
+
+// ===== 渲染调度（rAF 合并）=====
+// SSE 流式 message updated 每个 delta 都会到达；逐个同步渲染时单帧内可能渲染多次。
+// 用脏标记 + requestAnimationFrame 把一帧内的多次请求合并为最多一次渲染；
+// 离散事件（切会话、发送、run_complete 收尾等）仍同步直调 renderMessages。
+var _msgRenderScheduled = false;
+export function scheduleRenderMessages() {
+  if (_msgRenderScheduled) return;
+  _msgRenderScheduled = true;
+  requestAnimationFrame(function() {
+    _msgRenderScheduled = false;
+    // rAF 回调不在 SSE 处理器 try/catch 内，异常需在此兜底上报（保持与同步渲染一致的错误可见性）
+    try {
+      renderMessages();
+    } catch (e) {
+      reportError(e, { prefix: _t("消息渲染失败: ") });
+    }
+  });
+}
+
+// ===== 流式文本 Markdown 更新节流 =====
+// 流式正文每个 delta 都在增长，全文重跑 markdown 正则（utils.renderMarkdown 约 10 轮
+// 正则）是单条消息的主要 CPU 开销，长文本下整体呈 O(n²)。策略：
+//   1) 无 Markdown 标记的纯文本走 textContent 快路径（.msg 已启用 pre-wrap，换行语义一致）；
+//   2) 含标记的文本合并到 ≥80ms 的窗口渲染，窗口结束用最新全文兜底（保证终态不丢）。
+var MD_MIN_INTERVAL_MS = 80;
+// 纯文本判定：renderMarkdown 只对 ` * # [ ] | 及行首 "- " 做转换
+var MD_PLAIN_RE = /^[^`*#\[\]|]*$/;
+var MD_LIST_LINE_RE = /^[ \t]*- /m;
+function isPlainMarkdownText(text) {
+  return MD_PLAIN_RE.test(text) && !MD_LIST_LINE_RE.test(text);
+}
+function scheduleMarkdownText(pe, text) {
+  var ref = /** @type {any} */ (pe);
+  if (ref._admMdText === text) return;
+  var st = ref._admMdSched;
+  if (!st) st = ref._admMdSched = { pending: null, timer: 0, ts: 0 };
+  st.pending = text;
+  var now = Date.now();
+  if (!st.timer && now - st.ts >= MD_MIN_INTERVAL_MS) {
+    flushMarkdownText(pe, st);
+    return;
+  }
+  if (!st.timer) {
+    st.timer = setTimeout(function() {
+      st.timer = 0;
+      flushMarkdownText(pe, st);
+    }, Math.max(0, MD_MIN_INTERVAL_MS - (now - st.ts)));
+  }
+}
+function flushMarkdownText(pe, st) {
+  var text = st.pending;
+  st.pending = null;
+  if (text === null) return;
+  st.ts = Date.now();
+  var ref = /** @type {any} */ (pe);
+  if (ref._admMdText === text) return;
+  ref._admMdText = text;
+  if (isPlainMarkdownText(text)) pe.textContent = text;
+  else pe.innerHTML = renderMarkdown(text);
+}
 
 // ===== 消息渲染 =====
 // Message 结构: { id, role, session_id, parts: ContentPart[], model, provider, created_at, updated_at }
@@ -87,6 +149,7 @@ function msgStructSig(msg, role, callResultMap) {
 export function renderMessages() {
   const area = document.getElementById("agent-msg-area");
   if (!area) return;
+  var perfT0 = performance.now();
   var prevScrollTop = area.scrollTop;
 
   if (S.messages.length === 0) {
@@ -100,10 +163,11 @@ export function renderMessages() {
     }
     syncWorkingIndicator(area, null);
     updateScrollBottomBtn();
-    // 消息清空（如切到新会话尚未加载）→ 同步刷新右侧大纲为空态
-    renderMessageOutline();
+    // 消息清空（如切到新会话尚未加载）→ 调度刷新右侧大纲为空态
+    scheduleMessageOutline();
     // 消息列表变化通知（空消息场景也要派发，否则手动压缩按钮无法根据 hasContent=0 切到禁用态）
     document.dispatchEvent(new CustomEvent("agent-messages-changed"));
+    logRenderPerf(perfT0, 0);
     return;
   }
   if (area.querySelector(".empty-state")) area.innerHTML = "";
@@ -161,21 +225,30 @@ export function renderMessages() {
   }
   syncWorkingIndicator(area, lastRoundEl);
 
-  // 手动模式：保留用户当前滚动位置；自动模式：滚到底部（area + 所有展开的轮）
+  // 手动模式：保留用户当前滚动位置；自动模式：滚到底部（area + 所有展开的轮）。
+  // scrollChatToBottom 内部已用本次扫描到的展开轮列表刷新圆球，避免重复全量查询。
   if (S.manualScrollMode) {
     S.programmaticScroll = true;
     S.lastProgrammaticScroll = Date.now();
     area.scrollTop = prevScrollTop;
     S.programmaticScroll = false;
+    // 流式输出时内容增长不一定触发 scroll 事件，渲染后主动刷新悬浮圆球显隐
+    updateScrollBottomBtn();
   } else {
     scrollChatToBottom(area);
   }
-  // 流式输出时内容增长不一定触发 scroll 事件，渲染后主动刷新悬浮圆球显隐
-  updateScrollBottomBtn();
-  // 同步刷新右侧「对话记录」大纲面板（SSE 流式期间 message 增量会持续触发）
-  renderMessageOutline();
+  // 调度刷新右侧「对话记录」大纲面板（rAF 合并；SSE 流式期间 message 增量会持续触发）
+  scheduleMessageOutline();
   // 消息列表变化通知（如手动压缩按钮：消息数影响按钮启用条件）
   document.dispatchEvent(new CustomEvent("agent-messages-changed"));
+  logRenderPerf(perfT0, S.messages.length);
+}
+
+// 渲染耗时埋点：仅在调试模式下输出（log 默认静默），超过一帧预算（16ms）时告警，
+// 便于在实际使用中定位长会话 / 长文本下的渲染瓶颈
+function logRenderPerf(t0, msgCount) {
+  var dur = performance.now() - t0;
+  if (dur > 16) log.warn("PERF", "renderMessages " + dur.toFixed(1) + "ms msgs=" + msgCount);
 }
 
 // 滚轮向上是用户浏览意图的直接信号，立即进入手动模式。
@@ -204,9 +277,10 @@ export function onAreaScroll(scroller) {
 }
 
 // 把对话区域真正滚到底：area 滚到底，且所有展开的轮容器也滚到底。
-// 用于「回到底部」圆球点击 + 自动跟随推流。
+// 用于「回到底部」圆球点击 + 自动跟随推流。返回本次扫描到的展开轮列表，
+// 供调用方（如 renderMessages）复用，避免同一流程内重复全量 query。
 export function scrollChatToBottom(area) {
-  if (!area) return;
+  if (!area) return null;
   S.programmaticScroll = true;
   S.lastProgrammaticScroll = Date.now();
   area.scrollTop = area.scrollHeight;
@@ -215,7 +289,8 @@ export function scrollChatToBottom(area) {
   var rounds = area.querySelectorAll(".msg-round:not(.msg-round-collapsed)");
   for (var i = 0; i < rounds.length; i++) rounds[i].scrollTop = rounds[i].scrollHeight;
   S.programmaticScroll = false;
-  updateScrollBottomBtn();
+  updateScrollBottomBtn(rounds);
+  return rounds;
 }
 
 // 「正在思考」指示器同步：运行中确保持久节点存在并置于当前活跃轮（末轮）末尾；结束则移除。
@@ -602,7 +677,8 @@ function updateMessageNode(el, msg, callResultMap) {
           }
           break;
         }
-        pe.innerHTML = renderMarkdown(d.text || "");
+        // 流式正文节流 + 纯文本快路径（见 scheduleMarkdownText）
+        scheduleMarkdownText(pe, d.text || "");
         break;
       case "reasoning":
         if (pe.lastElementChild && pe.lastElementChild.tagName !== "SUMMARY") {
@@ -732,8 +808,9 @@ function buildPartElement(part, partIdx, role, msgKey, msgEl, thinkingOpen, resu
           return textDiv;
         }
       }
-      // 使用 Markdown 渲染
+      // 使用 Markdown 渲染；记录已渲染文本，供流式更新时比对跳过（见 scheduleMarkdownText）
       textDiv.innerHTML = renderMarkdown(partData.text || "");
+      /** @type {any} */ (textDiv)._admMdText = partData.text || "";
       return textDiv;
 
     case "reasoning":

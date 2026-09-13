@@ -4,7 +4,7 @@ import { S, invoke, listen, store } from "./store.js";
 import { api } from "./api.js";
 import { getErrorMessage, classifyError, friendlyError, ERROR_STEP_CAP, ERROR_CANCEL } from "./error.js";
 import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showInfo, reportError, updateContextUsage } from "./ui.js";
-import { renderMessages, renderTodos } from "./render.js";
+import { renderMessages, renderTodos, scheduleRenderMessages } from "./render.js";
 import { loadConversations, refreshMessages, renderConversationList, selectConversation, syncWxFollowSession } from "./session.js";
 import { handlePermissionRequest, resetPermissionState } from "./permission.js";
 import { loadTools } from "./tools.js";
@@ -553,8 +553,9 @@ function handleMessageSSEEvent(action, msgData) {
   // 统计本轮工具调用（增量按消息 id + parts 数去重），供假完成检测与续跑进度判定使用
   if (action !== "deleted") collectRunStats(msgData);
   // 数据更新统一由 store.handleSSEEvent 完成（created → upsertCreatedMessage，
-  // updated → updateMessage，deleted → deleteMessage，含临时气泡清理），此处只做 UI 刷新
-  renderMessages();
+  // updated → updateMessage，deleted → deleteMessage，含临时气泡清理），此处只做 UI 刷新。
+  // 流式期间每个 delta 都会走到这里：用 rAF 合并调度，单帧最多渲染一次
+  scheduleRenderMessages();
 }
 
 // ===== 本轮运行统计（续跑进度判定） =====
