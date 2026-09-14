@@ -221,6 +221,8 @@ pub fn run() {
             agent::is_directory,
             agent::save_attachment_file,
             agent::read_clipboard_files,
+            agent::agent_lsp_fix,
+            agent::agent_lsp_fix_targets,
             agent::read_project_memory,
             agent::update_project_memory,
             // ilink.rs - 微信 Bot 桥接

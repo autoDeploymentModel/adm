@@ -78,7 +78,18 @@ export async function cancelCurrentRun() {
   renderMessages();
 }
 
+/** 发送输入框内容（发送按钮 / Enter 触发） */
 export async function sendMessage() {
+  return sendText();
+}
+
+/** 程序化发送指定文本（如「AI 安装」按钮）：不读取、不清空输入框与待发附件 */
+export async function sendMessageWithText(text) {
+  return sendText(String(text || ""));
+}
+
+/** @param {string=} overrideText 指定文本；不传则读取输入框 */
+async function sendText(overrideText) {
   log.debug("SEND", "sendMessage: isSending=" + S.isSending + " convId=" + S.currentConvId + " activeRun=" + (S.activeRun ? S.activeRun.sessionId : "null") + " queuedRun=" + (S.queuedRun ? S.queuedRun.sessionId : "null"));
   // 当前会话「排队中」（消息已入队、等待其它会话运行完）→ 点击发送 = 取消排队；
   // 若运行发生在其它会话（用户已切走），点击发送 = 给当前会话发新消息（服务端排队）
@@ -110,13 +121,13 @@ export async function sendMessage() {
   if (foldIn) log.debug("SEND", "sendMessage: 当前会话运行中 → 折叠插入（无 run_id）");
   if (!S.currentConvId) {
     var input = /** @type {HTMLTextAreaElement} */ (document.getElementById("agent-input"));
-    var text = (input.value || "").trim();
-    if (!text && S.pendingFiles.length === 0) return;
+    var newConvText = (overrideText != null ? String(overrideText) : (input.value || "")).trim();
+    if (!newConvText && S.pendingFiles.length === 0) return;
     try { await newConversation(); } catch (_) { return; }
     if (!S.currentConvId) return;
   }
   var input = /** @type {HTMLTextAreaElement} */ (document.getElementById("agent-input"));
-  var text = input.value.trim();
+  var text = (overrideText != null ? String(overrideText) : input.value).trim();
   if (!text && S.pendingFiles.length === 0) return;
 
   // 发送前模型可用性校验：本地模型必须已启动（否则服务端 local provider 指向
@@ -148,7 +159,7 @@ export async function sendMessage() {
   //   上下文守卫死循环），统一落盘传路径，由 coordinator 注入 view 读取引导。
   // 粘贴路径场景图片已持有 path，一并传上（服务端判定磁盘存在则跳过重复写盘）；
   // 浏览器选择/拖拽的 File 无路径，服务端自动落盘。
-  var filesToSend = S.pendingFiles.slice();
+  var filesToSend = overrideText != null ? [] : S.pendingFiles.slice();
   var attachments = [];
   if (filesToSend.length > 0) {
     for (var i = 0; i < filesToSend.length; i++) {
@@ -193,9 +204,11 @@ export async function sendMessage() {
   var tempId = "temp-user-" + Date.now();
   store.appendMessage(workspaceId, { id: tempId, role: "user", content: text, _temp: true, _fold: foldIn || undefined, _sessionId: sessionId, _attachments: filesToSend.length > 0 ? filesToSend.map(function(f) { return f.name; }) : null });
   renderMessages();
-  input.value = "";
-  autoResize(input);
-  clearPendingFiles();
+  if (overrideText == null) {
+    input.value = "";
+    autoResize(input);
+    clearPendingFiles();
+  }
 
   // 更新状态栏：折叠插入不改动运行态（当前轮仍在跑），其余场景切到忙碌
   if (!foldIn) updateStatusBar("busy", null, S.contextUsage.used);

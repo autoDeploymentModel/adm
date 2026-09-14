@@ -2,6 +2,9 @@
 import { t as _t } from "../../i18n.js";
 import { S, invoke } from "./store.js";
 import { api } from "./api.js";
+import { showInfo } from "./ui.js";
+import { $input } from "./utils.js";
+import { ensureFixTargets, isLspFixable, fixTarget, guideFor, runLspFix, runAiInstall, isLspAutoFixEnabled, setLspAutoFixEnabled, onLspStateEvent } from "./lsp_fix.js";
 
 // ===== 工具列表 =====
 // 分别调用 /skills、/mcp/states、/lsps 三个端点，外加工作区详情获取 skill 状态快照
@@ -9,6 +12,7 @@ import { api } from "./api.js";
 export async function loadTools() {
   if (!S.serverInfo) return;
   var wsId = S.serverInfo.workspace_id;
+  await ensureFixTargets();
 
   // MCP/LSP 共用的 state 字符串 → 中文标签 + 颜色（显示时经 _t 翻译）
   var stateMap = {
@@ -146,19 +150,40 @@ export async function loadTools() {
     });
   });
 
-  // LSP clients
+  // LSP clients（state 为整数：0=未启动 1=启动中 2=已连接 3=错误 4=已停止 5=已禁用）
+  // error_type=not_installed（服务端分类）表示二进制未安装：不作为故障展示，
+  // 直接隐藏——真正启动失败（startup_failed）才保留红点与修复入口。
+  var lspStateMap = {
+    0: { label: _t("未启动"), color: "gray" },
+    1: { label: _t("启动中"), color: "yellow" },
+    2: { label: _t("已连接"), color: "green" },
+    3: { label: _t("错误"), color: "red" },
+    4: { label: _t("已停止"), color: "gray" },
+    5: { label: _t("已禁用"), color: "gray" },
+  };
   var lspTools = [];
   if (results[2].status === "fulfilled") {
     var lspStates = results[2].value;
     if (lspStates && typeof lspStates === "object" && !Array.isArray(lspStates)) {
       Object.keys(lspStates).forEach(function(key) {
         var l = lspStates[key];
-        var st = stateMap[l.state] || { label: l.state || _t("未知"), color: "gray" };
+        var lspName = l.name || key;
+        var isErr = l.state === 3;
+        // 状态事件先派发（drive 自动安装开关），再决定是否展示：
+        // error_type=not_installed 仅表示未安装，不作为故障展示/计数。
+        if (isErr) onLspStateEvent(lspName, l.state, l.error, l.error_type);
+        if (l.error_type === "not_installed") return;
+        var st = lspStateMap[l.state] || { label: l.state || _t("未知"), color: "gray" };
+        var fixable = isErr && isLspFixable(lspName);
         lspTools.push({
-          name: l.name || key,
+          name: lspName,
           status: st.label,
           statusColor: st.color,
           title: l.error || "",
+          errorText: l.error || "",
+          fixable: fixable,
+          guide: isErr && !fixable ? guideFor(lspName) : null,
+          aiInstall: isErr,
         });
       });
     }
@@ -173,6 +198,7 @@ export function renderToolsList() {
   var container = document.getElementById("agent-tools-list");
   var countEl = document.getElementById("agent-tools-count");
   if (!container) return;
+  ensureAutoFixToggle();
 
   // 添加 MCP 按钮仅在 MCP tab 显示
   var addBtn = document.getElementById("agent-mcp-add-btn");
@@ -207,12 +233,65 @@ export function renderToolsList() {
       hint.title = _t("点击修改");
       item.appendChild(hint);
     }
+    if (tool.fixable) {
+      var fixBtn = document.createElement("button");
+      fixBtn.className = "tool-fix-btn";
+      fixBtn.textContent = _t("修复");
+      var ft = fixTarget(tool.name);
+      if (ft && ft.command) fixBtn.title = ft.command + (ft.requires ? "（需要 " + ft.requires + "）" : "");
+      fixBtn.addEventListener("click", function(e) {
+        e.stopPropagation();
+        fixBtn.disabled = true;
+        fixBtn.textContent = _t("修复中…");
+        runLspFix(tool.name).then(function() {
+          fixBtn.disabled = false;
+          fixBtn.textContent = _t("修复");
+        });
+      });
+      item.appendChild(fixBtn);
+    } else if (tool.guide) {
+      var guideBtn = document.createElement("button");
+      guideBtn.className = "tool-fix-btn";
+      guideBtn.textContent = _t("指引");
+      if (tool.guide.hint) guideBtn.title = tool.guide.hint;
+      guideBtn.addEventListener("click", function(e) {
+        e.stopPropagation();
+        if (tool.guide && tool.guide.url) window.openUrl(tool.guide.url);
+      });
+      item.appendChild(guideBtn);
+    }
+    if (tool.aiInstall) {
+      var aiBtn = document.createElement("button");
+      aiBtn.className = "tool-fix-btn";
+      aiBtn.textContent = _t("AI 安装");
+      aiBtn.title = _t("把安装任务发给当前会话的 AI 处理");
+      aiBtn.addEventListener("click", function(e) {
+        e.stopPropagation();
+        runAiInstall(tool.name, tool.errorText);
+      });
+      item.appendChild(aiBtn);
+    }
     var statusLabel = document.createElement("span");
     statusLabel.className = "tool-status " + (tool.statusColor || "gray");
     statusLabel.textContent = tool.status;
     item.appendChild(statusLabel);
     container.appendChild(item);
   });
+}
+
+// 绑定「启动失败自动修复」开关（DOM 随视图重建，用 dataset 标记避免重复绑定）
+function ensureAutoFixToggle() {
+  var row = document.getElementById("agent-lsp-autofix-row");
+  if (!row || row.dataset.bound) return;
+  var box = $input("agent-lsp-autofix");
+  if (!box) return;
+  row.dataset.bound = "1";
+  box.checked = isLspAutoFixEnabled();
+  box.addEventListener("change", function() {
+    setLspAutoFixEnabled(!!box.checked);
+    showInfo(box.checked ? _t("LSP 启动失败时将自动安装修复") : _t("LSP 启动失败时仅提示，不自动安装"));
+  });
+  row.style.display = S.toolsTab === "lsp" ? "flex" : "none";
 }
 
 // 切换工具 tab（Skill / LSP / MCP）并重绘列表；供 tab 点击与外部流程（如保存 MCP 后）调用
@@ -224,5 +303,7 @@ export function activateToolsTab(tab) {
       t.classList.toggle("active", t.getAttribute("data-tab") === tab);
     });
   }
+  var autoRow = document.getElementById("agent-lsp-autofix-row");
+  if (autoRow) autoRow.style.display = tab === "lsp" ? "flex" : "none";
   renderToolsList();
 }

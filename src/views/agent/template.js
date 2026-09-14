@@ -283,6 +283,33 @@ export const template = `
   /* 已配置 MCP 条目的「修改」提示：悬停显现 */
   .tool-edit-hint { opacity: 0; font-size: 10px; color: var(--c-text-4); flex-shrink: 0; transition: opacity 0.15s; }
   .tool-item:hover .tool-edit-hint { opacity: 1; }
+  /* LSP 启动失败时的一键修复按钮 */
+  .tool-fix-btn {
+    font-size: 10px;
+    padding: 1px 6px;
+    border: 1px solid var(--c-border);
+    border-radius: 3px;
+    background: var(--c-raise);
+    color: var(--c-text-2);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .tool-fix-btn:hover { color: var(--c-text); border-color: var(--c-text-4); }
+  .tool-fix-btn:disabled { opacity: 0.6; cursor: default; }
+  /* LSP 页底部：启动失败自动修复开关 */
+  .tools-autofix {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    font-size: 11px;
+    color: var(--c-text-3);
+    border-top: 1px solid var(--c-border);
+    cursor: pointer;
+    flex-shrink: 0;
+    user-select: none;
+  }
+  .tools-autofix input { margin: 0; accent-color: var(--c-accent); }
 
   /* ③ 底部: 设置 (不滚动) */
   .sidebar-footer {
@@ -1868,6 +1895,10 @@ export const template = `
           <div class="skeleton-tool-item"><span class="skeleton-dot"></span><div class="skeleton-line"></div></div>
           <div class="skeleton-tool-item"><span class="skeleton-dot"></span><div class="skeleton-line"></div></div>
         </div>
+        <label class="tools-autofix" id="agent-lsp-autofix-row">
+          <input type="checkbox" id="agent-lsp-autofix">
+          <span>${_t("启动失败时自动安装修复")}</span>
+        </label>
       </div>
 
       <!-- ③ 底部: 设置 (不滚动) -->

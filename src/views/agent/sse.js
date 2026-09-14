@@ -8,6 +8,7 @@ import { renderMessages, renderTodos, scheduleRenderMessages } from "./render.js
 import { loadConversations, refreshMessages, renderConversationList, selectConversation, syncWxFollowSession } from "./session.js";
 import { handlePermissionRequest, resetPermissionState } from "./permission.js";
 import { loadTools } from "./tools.js";
+import { onLspStateEvent } from "./lsp_fix.js";
 import { refreshAgentInfo, reloadAgentConfig } from "./model.js";
 import { log } from "./log.js";
 import { onSessionUpdated } from "./compact.js";
@@ -525,7 +526,11 @@ function onFileSSEEvent() {
 function onToolStatusSSEEvent(ev) {
   // 工具状态变更，节流合并刷新工具列表（1s 窗口）；
   // lsp 诊断计数变化（每次编辑/保存触发）对工具面板无意义，直接忽略
-  if (ev.eventType === "lsp_event" && ev.actualData.type === "diagnostics_changed") return;
+  if (ev.eventType === "lsp_event") {
+    var d = ev.actualData || {};
+    if (d.type === "diagnostics_changed") return;
+    if (d.type === "state_changed") onLspStateEvent(d.name, d.state, d.error, d.error_type);
+  }
   scheduleLoadTools();
 }
 

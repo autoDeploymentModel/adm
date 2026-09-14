@@ -3295,6 +3295,357 @@ pub async fn read_clipboard_files() -> Result<Vec<String>, String> {
     Ok(Vec::new())
 }
 
+// ===== LSP 启动失败修复 =====
+
+struct LspFixCmd {
+    program: &'static str,
+    args: &'static [&'static str],
+    requires: &'static str,
+}
+
+/// LSP 名称 → 安装命令候选（按顺序探测包管理器，用第一个可用的）。
+/// 包名与"命令→二进制"均已核实；前端只能传 LSP 名称，命令固定在本表内，
+/// 避免任意命令执行。
+const LSP_FIX_TABLE: &[(&str, &[LspFixCmd])] = &[
+    (
+        "rust_analyzer",
+        &[LspFixCmd { program: "rustup", args: &["component", "add", "rust-analyzer"], requires: "Rust 工具链 (rustup)" }],
+    ),
+    (
+        "gopls",
+        &[LspFixCmd { program: "go", args: &["install", "golang.org/x/tools/gopls@latest"], requires: "Go (go)" }],
+    ),
+    (
+        "vtsls",
+        &[LspFixCmd { program: "npm", args: &["install", "-g", "@vtsls/language-server", "typescript"], requires: "Node.js (npm)" }],
+    ),
+    (
+        "pyright",
+        &[
+            LspFixCmd { program: "npm", args: &["install", "-g", "pyright"], requires: "Node.js (npm)" },
+            LspFixCmd { program: "pip", args: &["install", "pyright"], requires: "Python (pip)" },
+            LspFixCmd { program: "pip3", args: &["install", "pyright"], requires: "Python (pip3)" },
+        ],
+    ),
+    (
+        "basedpyright",
+        &[
+            LspFixCmd { program: "pip", args: &["install", "basedpyright"], requires: "Python (pip)" },
+            LspFixCmd { program: "pip3", args: &["install", "basedpyright"], requires: "Python (pip3)" },
+        ],
+    ),
+    (
+        "pylsp",
+        &[
+            LspFixCmd { program: "pip", args: &["install", "python-lsp-server"], requires: "Python (pip)" },
+            LspFixCmd { program: "pip3", args: &["install", "python-lsp-server"], requires: "Python (pip3)" },
+        ],
+    ),
+    (
+        "bashls",
+        &[LspFixCmd { program: "npm", args: &["install", "-g", "bash-language-server"], requires: "Node.js (npm)" }],
+    ),
+    (
+        "svelte",
+        &[LspFixCmd { program: "npm", args: &["install", "-g", "svelte-language-server"], requires: "Node.js (npm)" }],
+    ),
+    (
+        "vue_ls",
+        &[LspFixCmd { program: "npm", args: &["install", "-g", "@vue/language-server"], requires: "Node.js (npm)" }],
+    ),
+    (
+        "intelephense",
+        &[LspFixCmd { program: "npm", args: &["install", "-g", "intelephense"], requires: "Node.js (npm)" }],
+    ),
+    (
+        "dockerls",
+        &[LspFixCmd { program: "npm", args: &["install", "-g", "dockerfile-language-server-nodejs"], requires: "Node.js (npm)" }],
+    ),
+    (
+        "sqlls",
+        &[LspFixCmd { program: "npm", args: &["install", "-g", "sql-language-server"], requires: "Node.js (npm)" }],
+    ),
+    (
+        "emmet_ls",
+        &[LspFixCmd { program: "npm", args: &["install", "-g", "emmet-ls"], requires: "Node.js (npm)" }],
+    ),
+    (
+        "taplo",
+        &[
+            LspFixCmd { program: "npm", args: &["install", "-g", "@taplo/cli"], requires: "Node.js (npm)" },
+            LspFixCmd { program: "cargo", args: &["install", "taplo-cli"], requires: "Rust (cargo)" },
+        ],
+    ),
+    (
+        "texlab",
+        &[LspFixCmd { program: "cargo", args: &["install", "texlab"], requires: "Rust (cargo)，编译需数分钟" }],
+    ),
+    (
+        "sqls",
+        &[LspFixCmd { program: "go", args: &["install", "github.com/sqls-server/sqls@latest"], requires: "Go (go)" }],
+    ),
+    (
+        "cmake",
+        &[
+            LspFixCmd { program: "pip", args: &["install", "cmake-language-server"], requires: "Python (pip)" },
+            LspFixCmd { program: "pip3", args: &["install", "cmake-language-server"], requires: "Python (pip3)" },
+        ],
+    ),
+    (
+        "solargraph",
+        &[LspFixCmd { program: "gem", args: &["install", "solargraph"], requires: "Ruby (gem)" }],
+    ),
+];
+
+fn lsp_fix_cmds(lsp_name: &str) -> Option<&'static [LspFixCmd]> {
+    LSP_FIX_TABLE
+        .iter()
+        .find(|(n, _)| *n == lsp_name)
+        .map(|(_, c)| *c)
+}
+
+/// LSP 名称 → 安装后应可解析的二进制名（与 admAgent 内置配置的 command 一致）。
+/// 装完用它复查 PATH：安装命令成功但对 admAgent 不可见（例如 pip 落到用户级
+/// Scripts、npm 全局前缀不在 PATH）时，给出可操作的错误，而不是假装成功。
+const LSP_FIX_BINS: &[(&str, &str)] = &[
+    ("rust_analyzer", "rust-analyzer"),
+    ("gopls", "gopls"),
+    ("vtsls", "vtsls"),
+    ("pyright", "pyright-langserver"),
+    ("basedpyright", "basedpyright-langserver"),
+    ("pylsp", "pylsp"),
+    ("bashls", "bash-language-server"),
+    ("svelte", "svelteserver"),
+    ("vue_ls", "vue-language-server"),
+    ("intelephense", "intelephense"),
+    ("dockerls", "docker-langserver"),
+    ("sqlls", "sql-language-server"),
+    ("emmet_ls", "emmet-ls"),
+    ("taplo", "taplo"),
+    ("texlab", "texlab"),
+    ("sqls", "sqls"),
+    ("cmake", "cmake-language-server"),
+    ("solargraph", "solargraph"),
+];
+
+fn lsp_fix_bin(lsp_name: &str) -> Option<&'static str> {
+    LSP_FIX_BINS
+        .iter()
+        .find(|(n, _)| *n == lsp_name)
+        .map(|(_, b)| *b)
+}
+
+/// 串行化 LSP 安装：自动修复可能同时触发多个（.py 对应 pyright/pylsp…），
+/// 并发跑包管理器会争用同一把全局锁与缓存（pip site-packages、npm 全局前缀），
+/// 有装一半互相破坏的风险。
+static LSP_FIX_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
+
+/// 在 PATH 中查找可执行文件：Windows 按 PATHEXT 展开（npm/gem 是 .cmd 脚本）；
+/// macOS/Linux 补充 GUI 应用常见缺失的目录（Homebrew / cargo / 用户本地 bin）。
+fn which_program(program: &str) -> Option<PathBuf> {
+    which_in_dirs(program, &search_dirs())
+}
+
+/// 只用进程 PATH 查找（不补充目录）：桌面端与 admAgent 子进程共享同一份
+/// PATH，装完用它复查结果，结论就等于 admAgent 能否看到。
+fn which_program_on_path(program: &str) -> Option<PathBuf> {
+    let dirs: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+    which_in_dirs(program, &dirs)
+}
+
+/// 供安装命令探测使用的目录列表：进程 PATH + 平台补充目录。
+fn search_dirs() -> Vec<PathBuf> {
+    #[allow(unused_mut)]
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            let home = PathBuf::from(&home);
+            dirs.push(home.join(".cargo/bin"));
+            dirs.push(home.join(".local/bin"));
+            dirs.push(home.join("go/bin"));
+            dirs.push(home.join(".volta/bin"));
+            dirs.push(home.join(".bun/bin"));
+            dirs.push(home.join(".deno/bin"));
+            dirs.push(home.join(".local/share/pnpm"));
+            dirs.push(home.join("Library/pnpm"));
+            // nvm 按 Node 版本分目录，逐个补进候选（GUI 启动时 shell 的 nvm
+            // 初始化不会执行，node/npm 及其全局包都在这下面）。
+            if let Ok(entries) = std::fs::read_dir(home.join(".nvm/versions/node")) {
+                let mut versions: Vec<PathBuf> = entries
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.path().join("bin"))
+                    .collect();
+                versions.sort();
+                dirs.extend(versions);
+            }
+        }
+        for extra in [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/opt/local/bin",
+            "/snap/bin",
+        ] {
+            dirs.push(PathBuf::from(extra));
+        }
+    }
+    dirs
+}
+
+fn which_in_dirs(program: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    let exts: Vec<String> = std::env::var("PATHEXT")
+        .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string())
+        .split(';')
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    #[cfg(not(target_os = "windows"))]
+    let exts: Vec<String> = Vec::new();
+
+    for dir in dirs {
+        if exts.is_empty() {
+            let cand = dir.join(program);
+            if cand.is_file() {
+                return Some(cand);
+            }
+        } else {
+            for ext in &exts {
+                let cand = dir.join(format!("{}{}", program, ext));
+                if cand.is_file() {
+                    return Some(cand);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 前端展示用：哪些 LSP 支持自动安装、命令与依赖说明。
+#[derive(serde::Serialize)]
+pub struct LspFixTarget {
+    pub name: String,
+    pub command: String,
+    pub requires: String,
+}
+
+#[tauri::command]
+pub fn agent_lsp_fix_targets() -> Vec<LspFixTarget> {
+    LSP_FIX_TABLE
+        .iter()
+        .map(|(name, cmds)| {
+            let first = &cmds[0];
+            LspFixTarget {
+                name: name.to_string(),
+                command: format!("{} {}", first.program, first.args.join(" ")),
+                requires: first.requires.to_string(),
+            }
+        })
+        .collect()
+}
+
+/// 执行 LSP 修复安装命令并返回输出（失败时 Err 携带输出文本）。
+/// 网络代理沿用「设置 → 网络代理」（各包管理器均遵循标准代理环境变量）。
+#[tauri::command]
+pub async fn agent_lsp_fix(app: tauri::AppHandle, lsp_name: String) -> Result<String, AppError> {
+    let cmds = lsp_fix_cmds(&lsp_name)
+        .ok_or_else(|| AppError::msg(format!("该 LSP 暂不支持自动修复: {}", lsp_name)))?;
+    let (program_path, cmd_def) = cmds
+        .iter()
+        .find_map(|c| which_program(c.program).map(|p| (p, c)))
+        .ok_or_else(|| {
+            let needs: Vec<&str> = cmds.iter().map(|c| c.requires).collect();
+            AppError::msg(format!(
+                "未检测到可用的安装方式（需要 {}），请先安装对应包管理器后重试",
+                needs.join(" 或 ")
+            ))
+        })?;
+
+    // 同一时刻只跑一个安装（自动修复可能同时命中多个 LSP）
+    let _install_guard = LSP_FIX_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
+
+    let mut cmd = tokio::process::Command::new(&program_path);
+    cmd.args(cmd_def.args);
+    if let Ok(settings) = crate::pages::settings::load_settings(app.clone()).await {
+        if settings.agent_proxy.enabled && !settings.agent_proxy.url.is_empty() {
+            let url = settings.agent_proxy.url.as_str();
+            cmd.env("HTTP_PROXY", url)
+                .env("HTTPS_PROXY", url)
+                .env("http_proxy", url)
+                .env("https_proxy", url);
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        #[allow(unused_imports)]
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    cmd.kill_on_drop(true);
+
+    api_debug_log(|| {
+        format!(
+            "LSP fix: 执行 {} {}",
+            program_path.display(),
+            cmd_def.args.join(" ")
+        )
+    });
+
+    let output = tokio::time::timeout(Duration::from_secs(600), cmd.output())
+        .await
+        .map_err(|_| AppError::msg("安装超时（10 分钟），请检查网络后重试"))?
+        .map_err(|e| AppError::msg(format!("执行安装命令失败: {}", e)))?;
+
+    let mut text = String::new();
+    text.push_str(&String::from_utf8_lossy(&output.stdout));
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    let text = text.trim().to_string();
+    let text = if text.chars().count() > 3000 {
+        let skip = text.chars().count() - 3000;
+        text.chars().skip(skip).collect::<String>()
+    } else {
+        text
+    };
+
+    if output.status.success() {
+        // 复查安装结果：命令成功但二进制对 admAgent 不可见（PATH 不含用户级
+        // npm/pip 目录等）时明确报错，避免“安装成功却始终起不来”的假成功。
+        if let Some(bin) = lsp_fix_bin(&lsp_name) {
+            if which_program_on_path(bin).is_none() {
+                api_debug_log(|| format!("LSP fix: {} 安装完成但 PATH 中找不到 {}", lsp_name, bin));
+                return Err(AppError::msg(format!(
+                    "安装命令已执行成功，但 PATH 中找不到 {}：多半装进了不在 PATH 的目录（用户级 pip 的 Scripts、npm 全局前缀等）。请把该目录加入 PATH 后重试，或在「工具 → LSP」页对该服务器用「AI 安装」让它自己处理。{}",
+                    bin,
+                    if text.is_empty() {
+                        String::new()
+                    } else {
+                        format!("安装输出：{}", text)
+                    }
+                )));
+            }
+        }
+        api_debug_log(|| format!("LSP fix: {} 安装成功", lsp_name));
+        Ok(text)
+    } else {
+        api_debug_log(|| format!("LSP fix: {} 安装失败: {}", lsp_name, text));
+        Err(AppError::msg(if text.is_empty() {
+            format!("安装命令退出码非 0: {}", output.status)
+        } else {
+            text
+        }))
+    }
+}
+
 
 // ---------------------------------------------------------------------------
 // 回归测试：admAgent.json 被并发写清空的修复
