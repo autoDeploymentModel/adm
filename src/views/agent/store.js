@@ -442,6 +442,16 @@ class Store {
 
     switch (eventType) {
     case "message":
+      // 会话隔离：message 是 workspace 级广播，同 workspace 其它会话（并发运行、后台 Bot）
+      // 的消息不得并入当前打开会话的消息池，否则任意一次渲染（发消息/切回会话/错误气泡）
+      // 都会把它们闪现进当前会话，refreshMessages 后再消失。
+      // session_id 或 currentConvId 缺失时不拦截（老事件 / 无会话场景保持原行为）
+      var msgWs = this.workspaces.get(wsId);
+      if (msgWs && actualData && actualData.session_id && msgWs.currentConvId &&
+          actualData.session_id !== msgWs.currentConvId) {
+        _log("debug", "STORE", "handleSSEEvent 跳过非当前会话消息 session=" + String(actualData.session_id).slice(0, 8) + " current=" + String(msgWs.currentConvId).slice(0, 8));
+        break;
+      }
       if (innerType === "created") this.upsertCreatedMessage(wsId, actualData);
       else if (innerType === "updated") this.updateMessage(wsId, actualData);
       else if (innerType === "deleted") this.deleteMessage(wsId, (actualData && actualData.id) || "");
