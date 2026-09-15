@@ -9,6 +9,7 @@ import { loadConversations, renderConversationList, syncWxFollowSession } from "
 import { loadTools } from "./tools.js";
 import { refreshAgentInfo, refreshServerProviders, updateModelDropdown } from "./model.js";
 import { resetPermissionState, syncModeToServer } from "./permission.js";
+import { reconcilePdfBatching } from "./pdf_batch.js";
 
 // ===== 会话上下文压缩 =====
 // 全局默认开启自动压缩（Compact 模式）：上下文接近上限时服务端自动生成摘要压缩，
@@ -86,6 +87,10 @@ export async function switchToWorkspace(wsId, wsPath) {
     updateStatusBar("ready", wsPath || null, 0);
     // 首次进入后保存到状态池（store.setActive 已注册，store 方法写入时自动快照）
   }
+
+  // 切回工作区后对账 PDF 批次：其它 tab 期间该 workspace 的 run_complete 不被处理
+  // （SSE 事件按 active workspace 过滤），有剩余计划时在此按 is_busy 恢复推进
+  reconcilePdfBatching();
 
   // 刷新云端模型列表：切换 workspace 后目标 workspace 的服务端 ConfigStore 可能过期
   // （在另一个 workspace 添加云端模型时 config/set scope:0 只触发当前 workspace 的 autoReload），

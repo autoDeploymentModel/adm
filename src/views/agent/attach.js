@@ -3,10 +3,50 @@ import { t as _t } from "../../i18n.js";
 import { S, invoke } from "./store.js";
 import { showError, showInfo } from "./ui.js";
 import { friendlyError } from "./error.js";
+import { parsePdfPageCount, loadPdfSourceBytes, base64ToBytes, friendlyPdfError } from "./pdf.js";
 
 // ===== 附件处理 =====
 var ATTACH_MAX_SIZE = 1 * 1024 * 1024;  // 超过此大小的图片进行压缩 (1MB)
 var ATTACH_MAX_DIMENSION = 2048;         // 图片最大边长
+
+// ===== PDF 附件：附加时只登记（解析页数），发送时按批转图片 =====
+// 渲染时机在发送时（见 send.js / pdf_batch.js），附加时只做页数解析 + 预览
+/**
+ * 登记待发送 PDF 附件。
+ * @param {File|null} file 浏览器 File（选择/拖拽）
+ * @param {string|null} path 磁盘路径（粘贴路径 / read_clipboard_files 场景）
+ */
+async function addPdfPending(file, path) {
+  var name = file && file.name ? file.name : (path ? path.split(/[\\/]/).pop() || path : "document.pdf");
+  var realPath = path || (file && typeof file["path"] === "string" && file["path"] ? file["path"] : null);
+  var bytes;
+  try {
+    bytes = await loadPdfSourceBytes({ file: file, path: realPath });
+  } catch (e) {
+    showError(_t("读取文件失败: ") + name + " (" + friendlyError(e, { inline: true }) + ")");
+    return;
+  }
+  var pages;
+  try {
+    pages = await parsePdfPageCount(bytes);
+  } catch (e) {
+    showError(_t("PDF 解析失败: ") + name + " (" + friendlyPdfError(e) + ")");
+    return;
+  }
+  if (!pages) {
+    showError(_t("PDF 没有可读取的页面: ") + name);
+    return;
+  }
+  S.pendingFiles.push({
+    name: name,
+    type: "application/pdf",
+    size: file && file.size ? file.size : 0,
+    pdf: true,
+    pages: pages,
+    source: { file: file || null, path: realPath },
+  });
+  renderAttachPreview();
+}
 
 // 扩展名 → MIME 推断：部分文件（如 .log/.md/.txt）浏览器可能上报空或
 // application/octet-stream，按扩展名补齐文本类型，后端才能把内容内联进 prompt
@@ -63,6 +103,11 @@ export function addPendingFiles(fileList) {
   files.forEach(function(file) {
     if (file.size > 20 * 1024 * 1024) {
       showError(_t("文件过大: ") + file.name + _t(" (最大 20MB)"));
+      return;
+    }
+    // PDF：只登记（解析页数），发送时按批转图片
+    if ((file.name || "").toLowerCase().endsWith(".pdf") || inferMime(file) === "application/pdf") {
+      addPdfPending(file, null);
       return;
     }
     if (!isSupportedFile(file)) {
@@ -157,7 +202,7 @@ function renderAttachPreview() {
     }
     var name = document.createElement("span");
     name.className = "attach-name";
-    name.textContent = f.name;
+    name.textContent = f.pdf ? (f.name + " · " + f.pages + _t(" 页")) : f.name;
     item.appendChild(name);
     var removeBtn = document.createElement("button");
     removeBtn.className = "attach-remove";
@@ -235,6 +280,11 @@ export async function addPastedPaths(paths) {
     var path = paths[i];
     var ext = (path.split(".").pop() || "").toLowerCase();
     var mime = EXT_MIME[ext];
+    // PDF：只登记（解析页数），发送时按批转图片
+    if (ext === "pdf") {
+      await addPdfPending(null, path);
+      continue;
+    }
     // 先按扩展名拦截不支持格式，避免无谓读取（与选择器白名单一致）
     if (!(mime && isSupportedMime(mime)) && !IMAGE_EXT[ext]) {
       // 目录：把路径作为文本插入输入框（复制文件夹后粘贴的常见场景），
@@ -274,12 +324,9 @@ export async function addPastedPaths(paths) {
     } else if (IMAGE_EXT[ext]) {
       // 图片：走压缩流程（与选择器一致）
       var dataUrl2 = "data:image/" + (ext === "jpg" ? "jpeg" : ext) + ";base64," + base64;
-      var blob;
+      var blob = null;
       try {
-        var bin = atob(base64);
-        var u8 = new Uint8Array(bin.length);
-        for (var b = 0; b < bin.length; b++) u8[b] = bin.charCodeAt(b);
-        blob = new Blob([u8], { type: dataUrl2.split(";")[0].slice(5) });
+        blob = new Blob([base64ToBytes(base64)], { type: dataUrl2.split(";")[0].slice(5) });
       } catch (_) {
         blob = null;
       }

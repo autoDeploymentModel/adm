@@ -10,7 +10,7 @@ import { generateUUID, isFullyAtBottom, autoResize, $input, normalizeReasoningEf
 import { updateStatusBar, updateContextUsage, updateSendButton, exitManualScrollMode, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showInfo, showConfirm, showCopyPasteMenu, updateScrollBottomBtn, reportError, showInitProgress, hideInitProgress } from "./agent/ui.js";
 import { loadConversations, renderConversationList, selectConversation, newConversation, toggleOutlinePanel, setOutlinePanelOpen } from "./agent/session.js";
 import { syncWorkingIndicator, onAreaScroll, scrollChatToBottom } from "./agent/render.js";
-import { sendMessage, cancelCurrentRun } from "./agent/send.js";
+import { sendMessage, cancelCurrentRun, sendMessageWithFiles } from "./agent/send.js";
 import { setupSSEListener, cancelScheduledLoadTools, cancelRunCompleteFallback } from "./agent/sse.js";
 import { syncModeToServer } from "./agent/permission.js";
 import { loadTools, activateToolsTab } from "./agent/tools.js";
@@ -21,6 +21,7 @@ import { addPendingFiles, parseUriListPaths, addPastedPaths, looksLikeFilePath }
 import { bindSkillSelectorEvents, initSkillSelector, clearAttachedSkillsAfterSend } from "./agent/skill_selector.js";
 import { bindCompactBtnEvents } from "./agent/compact.js";
 import { initMcpDialogUI } from "./agent/mcp_dialog.js";
+import { initPdfBatching, reconcilePdfBatching } from "./agent/pdf_batch.js";
 
 // ===== 初始化 =====
 //
@@ -215,6 +216,10 @@ async function _doInit(seq) {
   // 重新挂载后必须以服务端 is_busy 为准校准，否则「正在思考」永远卡住
   await reconcileSendingState();
 
+  // PDF 批次泵对账：页面切走期间 run_complete 会丢（见上），按服务端 is_busy
+  // 决定续跑剩余批次（已空闲 = 事件丢失）或终止（目标会话已切换）
+  await reconcilePdfBatching();
+
   // 检查项目初始化引导（fire-and-forget；内部已自带 try/catch，加 .catch 仅防
   // 意外 throw 时变成未处理 promise rejection；不影响 init 主体）
   checkProjectInit().catch(function(e) { console.warn("[agent] checkProjectInit 异常:", e); });
@@ -406,6 +411,8 @@ async function handleConfigRestored(ev) {
 
 // ===== 事件绑定 =====
 function bindEvents() {
+  // PDF 批次泵的发送函数注入（send.js 与 pdf_batch.js 互相依赖，用注入避免模块循环）
+  initPdfBatching(sendMessageWithFiles);
   // 新会话
   document.getElementById("agent-new-chat").addEventListener("click", newConversation);
 
@@ -580,8 +587,8 @@ function bindEvents() {
     var input = document.createElement("input");
     input.type = "file";
     input.multiple = true;
-    // 仅支持图片 + 文本类附件（与 attach.js 白名单一致）；其余格式由 addPendingFiles 提示"暂不支持"
-    input.accept = "image/*,.txt,.log,.md,.markdown,.json,.csv,.xml,.yaml,.yml,.ini,.conf,.env,.sql,.js,.mjs,.ts,.py,.go,.rs,.java,.c,.h,.cpp,.hpp,.cs,.php,.rb,.sh,.bat,.ps1,.html,.css,.scss";
+    // 仅支持图片 + 文本类 + PDF 附件（与 attach.js 白名单一致）；PDF 由前端转成图片后发送，其余格式提示"暂不支持"
+    input.accept = "image/*,.pdf,.txt,.log,.md,.markdown,.json,.csv,.xml,.yaml,.yml,.ini,.conf,.env,.sql,.js,.mjs,.ts,.py,.go,.rs,.java,.c,.h,.cpp,.hpp,.cs,.php,.rb,.sh,.bat,.ps1,.html,.css,.scss";
     // 必须挂到 DOM 上，否则 macOS WKWebView 可能因 GC 回收游离元素导致 onchange 不触发
     input.style.display = "none";
     document.body.appendChild(input);

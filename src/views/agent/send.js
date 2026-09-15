@@ -1,16 +1,18 @@
 // 发送消息（fire-and-forget，结果经 SSE 返回）
-import { t as _t } from "../../i18n.js";
+import { t as _t, tV } from "../../i18n.js";
 import { S, invoke, store } from "./store.js";
 import { api } from "./api.js";
 import { autoResize, generateRunId } from "./utils.js";
 import { log } from "./log.js";
 import { friendlyError } from "./error.js";
-import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, showInfo, reportError, updateContextUsage } from "./ui.js";
+import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, showInfo, showNotice, reportError, updateContextUsage } from "./ui.js";
 import { renderMessages } from "./render.js";
 import { newConversation, renderConversationList } from "./session.js";
 import { refreshAgentInfo, reloadAgentConfig } from "./model.js";
 import { clearPendingFiles } from "./attach.js";
 import { clearAttachedSkillsAfterSend } from "./skill_selector.js";
+import { splitPdfItems, buildPlans, confirmLargePlans, renderPlanBatch, registerPlans } from "./pdf_batch.js";
+import { friendlyPdfError } from "./pdf.js";
 
 // ===== 发送消息 =====
 
@@ -88,13 +90,30 @@ export async function sendMessageWithText(text) {
   return sendText(String(text || ""));
 }
 
-/** @param {string=} overrideText 指定文本；不传则读取输入框 */
-async function sendText(overrideText) {
+/** 程序化发送指定文本 + 指定附件（PDF 批次泵用）：不读取、不清空输入框与待发附件
+ *  @param {string} text
+ *  @param {any[]} files
+ *  @param {{sessionId: string, workspaceId: string}=} target 目标会话/工作区（发送前校验，变则放弃） */
+export async function sendMessageWithFiles(text, files, target) {
+  return sendText(String(text || ""), Array.isArray(files) ? files : [], target || null);
+}
+
+/** @param {string=} overrideText 指定文本；不传则读取输入框
+ *  @param {any[]=} filesOverride 指定附件列表（批次泵用）；overrideText 传参未给附件时为 []
+ *  @param {{sessionId: string, workspaceId: string}|null=} expectedTarget 程序化发送的目标会话/工作区（批次泵用） */
+async function sendText(overrideText, filesOverride, expectedTarget) {
   log.debug("SEND", "sendMessage: isSending=" + S.isSending + " convId=" + S.currentConvId + " activeRun=" + (S.activeRun ? S.activeRun.sessionId : "null") + " queuedRun=" + (S.queuedRun ? S.queuedRun.sessionId : "null"));
+  // 程序化发送（PDF 批次泵）：批次转换/等待期间用户可能切换会话或工作区，
+  // 目标变化则直接放弃（剩余批次由 pdf_batch 终止），绝不发进当前其它会话
+  if (expectedTarget && (S.currentConvId !== expectedTarget.sessionId ||
+      !!(expectedTarget.workspaceId && S.serverInfo && S.serverInfo.workspace_id && S.serverInfo.workspace_id !== expectedTarget.workspaceId))) {
+    log.debug("SEND", "sendText: 目标会话/工作区已变化，放弃程序化发送");
+    return { ok: false, reason: "target_changed" };
+  }
   // 当前会话「排队中」（消息已入队、等待其它会话运行完）→ 点击发送 = 取消排队；
   // 若运行发生在其它会话（用户已切走），点击发送 = 给当前会话发新消息（服务端排队）
   var isCurrentQueued = !!(S.queuedRun && S.queuedRun.sessionId === S.currentConvId);
-  if (isCurrentQueued) {
+  if (isCurrentQueued && filesOverride == null) {
     // 取消排队：清除当前会话已入队、尚未执行的消息；正在执行的其它会话不受影响
     try {
       await api("POST", "/v1/workspaces/" + S.queuedRun.workspaceId + "/agent/sessions/" + S.queuedRun.sessionId + "/prompts/clear");
@@ -159,11 +178,42 @@ async function sendText(overrideText) {
   //   上下文守卫死循环），统一落盘传路径，由 coordinator 注入 view 读取引导。
   // 粘贴路径场景图片已持有 path，一并传上（服务端判定磁盘存在则跳过重复写盘）；
   // 浏览器选择/拖拽的 File 无路径，服务端自动落盘。
-  var filesToSend = overrideText != null ? [] : S.pendingFiles.slice();
+  var filesToSend = filesOverride != null ? filesOverride.slice() : (overrideText != null ? [] : S.pendingFiles.slice());
+
+  // PDF 附件延迟转换 + 分批发送：附加时只登记（解析页数），这里只转换首批；
+  // 其余批次由 pdf_batch 批次泵在本轮 run_complete 后自动转换发送（服务端
+  // view 只读文本、读不了图片，模型无法自行取页，必须客户端推送）。
+  var pdfSplit = splitPdfItems(filesToSend);
+  var otherFiles = pdfSplit.others;
+  var pdfPlans = [];
+  var firstPdfBatch = null;
+  if (pdfSplit.pdfs.length > 0) {
+    var otherImages = otherFiles.filter(function(f) { return f.type && f.type.indexOf("image/") === 0; }).length;
+    pdfPlans = buildPlans(pdfSplit.pdfs, otherImages);
+    if (!(await confirmLargePlans(pdfPlans))) {
+      showInfo(_t("已取消 PDF 发送"));
+      return { ok: false };
+    }
+    // 首批转换可能耗时数秒（大页面多）：常驻提示直到转换完成
+    var convertingEl = showNotice(tV("正在转换 PDF《{name}》…", { name: pdfPlans[0].name }), "info", true);
+    try {
+      firstPdfBatch = await renderPlanBatch(pdfPlans[0]);
+    } catch (e) {
+      showError(_t("PDF 转换失败: ") + pdfPlans[0].name + " (" + friendlyPdfError(e) + ")");
+      return { ok: false };
+    } finally {
+      if (convertingEl && convertingEl.parentNode) convertingEl.remove();
+    }
+    if (firstPdfBatch.items.length === 0) {
+      showError(_t("PDF 转换失败: ") + pdfPlans[0].name);
+      return { ok: false };
+    }
+  }
+
   var attachments = [];
-  if (filesToSend.length > 0) {
-    for (var i = 0; i < filesToSend.length; i++) {
-      var f = filesToSend[i];
+  if (otherFiles.length > 0) {
+    for (var i = 0; i < otherFiles.length; i++) {
+      var f = otherFiles[i];
       var isImage = f.type && f.type.indexOf("image/") === 0;
       if (isImage) {
         attachments.push({ file_path: f.path || "", file_name: f.name, mime_type: f.type, content: f.base64 });
@@ -176,11 +226,17 @@ async function sendText(overrideText) {
         } catch (e) {
           console.warn("[agent] 附件落盘失败:", e);
           showError(_t("附件保存失败，已取消发送: ") + f.name + " (" + friendlyError(e, { inline: true }) + ")");
-          return;
+          return { ok: false };
         }
       }
       attachments.push({ file_path: realPath, file_name: f.name, mime_type: f.type || "application/octet-stream", content: "" });
     }
+  }
+  if (firstPdfBatch) {
+    // PDF 首批页图：与普通图片一致，base64 内联（服务端按主模型能力内联/识别）
+    firstPdfBatch.items.forEach(function(item) {
+      attachments.push({ file_path: "", file_name: item.name, mime_type: item.type, content: item.base64 });
+    });
   }
 
   // 在发送前固定运行身份；后续切换会话/工作区不能改变超时检查和停止目标
@@ -201,8 +257,19 @@ async function sendText(overrideText) {
   // 立即显示用户消息（使用临时 ID，以便 SSE 到来时去重替换）；
   // 折叠插入的临时气泡标记 _fold + _sessionId，渲染为「插入中」，等待服务端折叠时去重/替换；
   // _sessionId 用于刷新/切会话合并且只在同一会话内保留（防止待插入气泡串进其它会话）
+  // 分批说明随正文一起发出：模型据此知道当前只拿到部分页面，其余批次自动补发；
+  // 临时气泡用同一文本（服务端消息与临时气泡按正文匹配去重）
+  var promptText = text || _t("（用户发来附件，请查看并处理）");
+  if (firstPdfBatch) {
+    promptText += "\n\n" + tV("（本次附带 PDF《{name}》第 1-{b} 页，共 {total} 页；其余页面将自动分批发送）", {
+      name: pdfPlans[0].name, b: firstPdfBatch.lastPage, total: firstPdfBatch.totalPages,
+    });
+    if (pdfPlans.length > 1) {
+      promptText += "\n" + tV("（另有 {n} 份 PDF 将随后分批发送）", { n: pdfPlans.length - 1 });
+    }
+  }
   var tempId = "temp-user-" + Date.now();
-  store.appendMessage(workspaceId, { id: tempId, role: "user", content: text, _temp: true, _fold: foldIn || undefined, _sessionId: sessionId, _attachments: filesToSend.length > 0 ? filesToSend.map(function(f) { return f.name; }) : null });
+  store.appendMessage(workspaceId, { id: tempId, role: "user", content: promptText, _temp: true, _fold: foldIn || undefined, _sessionId: sessionId, _attachments: filesToSend.length > 0 ? filesToSend.map(function(f) { return f.name; }) : null });
   renderMessages();
   if (overrideText == null) {
     input.value = "";
@@ -220,7 +287,7 @@ async function sendText(overrideText) {
     // 只发附件不输文字时补默认提示词（能走到这里 text 为空时 filesToSend 必非空）
     var body = {
       session_id: sessionId,
-      prompt: text || _t("（用户发来附件，请查看并处理）"),
+      prompt: promptText,
     };
     // 折叠插入不带 run_id（服务端下一步边界折叠进当前轮）；独立轮次才带 run_id 关联生命周期
     if (!foldIn) body.run_id = runId;
@@ -241,7 +308,7 @@ async function sendText(overrideText) {
     if (!foldIn) {
       store.setRunStats(workspaceId, {
         sessionId: sessionId,
-        prompt: text || _t("（用户发来附件，请查看并处理）"),
+        prompt: promptText,
         toolCalls: 0,
         sideEffectCalls: 0,
         sideEffectSuccess: 0,
@@ -260,6 +327,11 @@ async function sendText(overrideText) {
     updateContextUsage();
     // 发送成功后清理已附加的技能（确保每轮仅附加一次，下次重新选择）
     clearAttachedSkillsAfterSend();
+    // 登记 PDF 批次计划：剩余页面由批次泵在本轮 run_complete 后自动发送
+    if (pdfPlans.length > 0) {
+      registerPlans(pdfPlans, sessionId, workspaceId, foldIn ? null : runId);
+    }
+    return { ok: true, runId: foldIn ? null : runId, sessionId: sessionId };
   } catch (e) {
     if (foldIn) {
       // 折叠插入失败：不中断正在运行的当前轮，仅移除待插入的临时气泡并提示
@@ -281,4 +353,5 @@ async function sendText(overrideText) {
       renderMessages();
     }
   }
+  return { ok: false };
 }

@@ -12,6 +12,7 @@ import { onLspStateEvent } from "./lsp_fix.js";
 import { refreshAgentInfo, reloadAgentConfig } from "./model.js";
 import { log } from "./log.js";
 import { onSessionUpdated } from "./compact.js";
+import { onRunComplete as onPdfBatchRunComplete, reconcilePdfBatching } from "./pdf_batch.js";
 
 // ===== SSE 事件 =====
 
@@ -79,6 +80,8 @@ function scheduleRunCompleteFallbackCheck(wsId, sessionId, runId) {
     if (!S.isSending || !S.activeRun || S.activeRun.sessionId !== sessionId) return;
     log.warn("SSE", "run_complete 未到达且服务端已空闲，兜底收尾 session=" + sessionId + " run=" + (runId || ""));
     store.completeRun(wsId);
+    // run_complete 丢失的兜底收尾同样要推进 PDF 批次泵（见 pdf_batch.js）
+    reconcilePdfBatching();
     updateSendButton();
     updateStatusBar("ready", null, S.contextUsage.used);
     loadConversations();
@@ -389,6 +392,9 @@ function onRunCompleteSSEEvent(ev, ctx) {
     console.warn("[agent] run_complete 携带错误:", JSON.stringify(actualData));
   }
   var action = classifyRunComplete(actualData, tookOverQueued);
+  // PDF 分批发送：本会话批次运行结束后自动转换并发送下一批
+  // （出错/取消/步数触顶/切会话会终止剩余批次，见 pdf_batch.js）
+  onPdfBatchRunComplete(actualData.session_id || "", action.kind, actualData.run_id || "", tookOverQueued);
   if (action.kind === "step_cap") {
     // 步数触顶：模型仍在干活但本轮 256 步预算耗尽，不是故障。弹决策卡让用户查看或手动续跑
     updateStatusBar("ready", null, S.contextUsage.used);
