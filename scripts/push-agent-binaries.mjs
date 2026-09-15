@@ -21,6 +21,14 @@ function run(args, cwd) {
   return execFileSync("git", args, { cwd, encoding: "utf8" });
 }
 
+function tryRun(args, cwd) {
+  try {
+    return execFileSync("git", args, { cwd, encoding: "utf8" }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 function main() {
   const archives = fs.existsSync(BUILD_AGENT_DIR)
     ? fs.readdirSync(BUILD_AGENT_DIR).filter((name) => ARCHIVE_RE.test(name))
@@ -30,13 +38,19 @@ function main() {
     process.exit(1);
   }
 
-  const userName = run(["config", "user.name"], ROOT).trim();
-  const userEmail = run(["config", "user.email"], ROOT).trim();
+  const userName = tryRun(["config", "user.name"], ROOT);
+  const userEmail = tryRun(["config", "user.email"], ROOT);
+  if (!userName || !userEmail) {
+    console.error("[agent-push] 本机未配置 git 提交身份，请先执行：");
+    console.error('  git config --global user.name "你的名字" && git config --global user.email "你的邮箱"');
+    process.exit(1);
+  }
   const versions = [...new Set(archives.map((name) => name.match(ARCHIVE_RE)[1]))].sort();
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "adm-binaries-"));
   try {
     run(["init", "-q", "-b", "main"], tmpDir);
+    run(["config", "core.autocrlf", "false"], tmpDir);
     for (const name of archives) {
       fs.copyFileSync(path.join(BUILD_AGENT_DIR, name), path.join(tmpDir, name));
       console.log(`[agent-push] 同步 ${name}`);
