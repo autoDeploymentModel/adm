@@ -173,6 +173,11 @@ var FRIENDLY_EN = {
 // 保证中文界面不出现英文报错。
 /** @type {Array<[RegExp, string]>} */
 var EN2ZH = [
+  // 断流重试耗尽后的包装形态（"llm: stream interrupted: stream ended prematurely..."，
+  // 见 admAgent internal/llm/client.go）：整体命中并整段替换，避免"stream interrupted"
+  // 与后半段原因各翻译一次，拼出"模型输出流被中断：输出流提前中断：..."的重复文案
+  [/^stream interrupted: stream ended prematurely with incomplete tool calls/i,
+    "输出流提前中断：工具调用数据不完整"],
   [/^stream interrupted: stream ended without \[DONE\] or finish_reason/i,
     "模型输出流被中断：连接在生成完成前被关闭（网络波动、代理或防火墙超时、服务端断开）"],
   [/stream idle timeout exceeded after ([^)]*)/i,
