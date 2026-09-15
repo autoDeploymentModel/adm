@@ -39,3 +39,6 @@ _admagent*.json
 tmp
 .vscode
 codely*
+
+# 内置 admAgent 二进制：不入库；用 pnpm agent:push 同步到 adm-binaries 仓库（CI 构建时自动 checkout）
+buildAgent/
