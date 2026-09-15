@@ -160,7 +160,13 @@ function onSSEEventReceived(event) {
   store.handleSSEEvent(eventWsId, payload);
 
   // 后台 workspace 运行出错时通知用户（active workspace 的错误由下方 handleSSEEvent 处理）
-  if (eventWsId !== S.activeWsId) notifyBackgroundRunError(payload, eventWsId);
+  if (eventWsId !== S.activeWsId) {
+    notifyBackgroundRunError(payload, eventWsId);
+    // 压缩完成信号不依赖当前 tab：用户在压缩中切走工作区时，非当前 tab 的会话
+    // 更新不会进入 handleSSEEvent，但 summary_message_id 的落库事件仍需送达
+    // compact.js 收尾（否则压缩态一直挂到 HTTP 返回或兜底超时）
+    notifyBackgroundCompactFinished(payload);
+  }
 
   // 当前 tab 的事件继续走原有 UI 处理逻辑
   if (eventWsId === S.activeWsId) {
@@ -184,6 +190,14 @@ function notifyBackgroundRunError(payload, eventWsId) {
   } else {
     appendErrorBubble(bgInner.error, { prefix: _t("后台工作区运行出错: "), wsId: eventWsId, sessionId: bgInner.session_id });
   }
+}
+
+// 非当前 tab 的 session updated：转交压缩完成信号（onSessionUpdated 内部按会话
+// id 匹配进行中的压缩，跨工作区安全；其它会话的更新会被它直接忽略）。
+function notifyBackgroundCompactFinished(payload) {
+  var ev = normalizeSSEPayload(payload);
+  if (ev.eventType !== "session" || ev.innerType !== "updated") return;
+  onSessionUpdated(ev.actualData);
 }
 
 export async function setupSSEListener() {

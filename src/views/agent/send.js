@@ -5,7 +5,7 @@ import { api } from "./api.js";
 import { autoResize, generateRunId } from "./utils.js";
 import { log } from "./log.js";
 import { friendlyError } from "./error.js";
-import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, showInfo, showNotice, reportError, updateContextUsage } from "./ui.js";
+import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showInfo, showNotice, reportError, updateContextUsage } from "./ui.js";
 import { renderMessages } from "./render.js";
 import { newConversation, renderConversationList } from "./session.js";
 import { refreshAgentInfo, reloadAgentConfig } from "./model.js";
@@ -13,6 +13,7 @@ import { clearPendingFiles } from "./attach.js";
 import { clearAttachedSkillsAfterSend } from "./skill_selector.js";
 import { splitPdfItems, buildPlans, confirmLargePlans, renderPlanBatch, registerPlans } from "./pdf_batch.js";
 import { friendlyPdfError } from "./pdf.js";
+import { isCompacting } from "./compact.js";
 
 // ===== 发送消息 =====
 
@@ -132,6 +133,15 @@ async function sendText(overrideText, filesOverride, expectedTarget) {
     updateSendButton();
     renderConversationList();
     return;
+  }
+  // 当前会话正在手动压缩：压缩会改写会话历史，期间发送会被服务端排队到压缩
+  // 结束之后（消息迟迟不出现），且该轮会被挂在压缩请求上互相连带取消。压缩
+  // 期间禁止发送：发送按钮已由 compact.js 禁用，这里兜住 Enter / 程序化发送
+  // 等入口（上方排队取消分支不受影响）
+  var sendTargetSessionId = expectedTarget ? expectedTarget.sessionId : S.currentConvId;
+  if (isCompacting(sendTargetSessionId)) {
+    showWarning(_t("正在压缩上下文，请稍候再发送"));
+    return { ok: false, reason: "compacting" };
   }
   // 折叠插入（中途插入）：当前会话正在运行，再发送 = 不带 run_id 发给服务端，
   // 服务端在下一步边界把它折叠进当前轮（不是排队等本轮结束、也不取消本轮）；

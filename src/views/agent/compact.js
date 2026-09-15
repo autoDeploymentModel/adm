@@ -3,15 +3,18 @@
 // 派发的 CustomEvent 解耦，避免反向依赖本模块。
 //
 // 完成信号（重要，勿依赖 SSE type=summarize —— 服务端从不发出该事件，见下）：
-// 1. HTTP 200：/summarize 是同步阻塞 API，返回时压缩已完成（或空转无历史可压缩）。
-// 2. SSE session updated：压缩成功后服务端写回 summary_message_id（session.Save →
-//    Publish UpdatedEvent），由 sse.js handleSessionSSEEvent updated 分支回调 onSessionUpdated。
+// 1. SSE session updated（主信号）：压缩成功后服务端写回 summary_message_id
+//    （session.Save → Publish UpdatedEvent），由 sse.js 回调 onSessionUpdated 收尾；
+//    用户在压缩中切走工作区时由 notifyBackgroundCompactFinished 转交，不依赖当前 tab。
+//    服务端已不再把排队消息挂在 /summarize 请求上，故 HTTP 响应只作迟到兜底：
+//    该请求返回即压缩本体已完成（空转也一样）。
+// 2. HTTP 200（兜底）：拉取会话核对 summary_message_id 是否变化，确认「已压缩/空转」。
 // 3. 5 分钟兜底定时器：上述信号全部丢失时强制恢复按钮，避免永久卡死。
 import { t as _t } from "../../i18n.js";
 import { S } from "./store.js";
 import { api } from "./api.js";
-import { showInfo, showWarning, reportError, showConfirm, showNotice } from "./ui.js";
-import { getErrorMessage } from "./error.js";
+import { showInfo, showWarning, reportError, showConfirm, showNotice, updateSendButton } from "./ui.js";
+import { getErrorMessage, classifyError, ERROR_CANCEL } from "./error.js";
 import { loadConversations, refreshMessages } from "./session.js";
 import { refreshAgentInfo } from "./model.js";
 
@@ -87,6 +90,9 @@ export function bindCompactBtnEvents() {
 }
 
 export function updateCompactBtn() {
+  // 发送按钮的压缩态同步与压缩按钮共用同一状态和全部触发时机（运行态变化 /
+  // 会话切换 / 消息变化 / 压缩起止），统一从这里收口，避免两处状态漂移
+  syncCompactingSendAffordance();
   var btn = /** @type {HTMLButtonElement | null} */ (document.getElementById("agent-compact-btn"));
   if (!btn) return;
   if (compactingSessionId) {
@@ -117,6 +123,32 @@ export function updateCompactBtn() {
             : (hasConv ? _t("当前会话为空，无需压缩") : _t("请先选择会话"))));
 }
 
+// 查询指定会话是否正在手动压缩（不传参按当前会话）。
+// send.js 用它拒绝压缩期间的发送（Enter 等绕过禁用按钮的入口兜底）。
+export function isCompacting(sessionId) {
+  var sid = sessionId === undefined ? S.currentConvId : sessionId;
+  return !!(compactingSessionId && sid && compactingSessionId === sid);
+}
+
+// 压缩期间发送按钮的可用性叠加：当前会话压缩中 → 禁用发送并挂工具提示。
+// 按钮的常规文案/提示由 ui.js updateSendButton 维护，这里只叠加与撤销压缩态；
+// 撤销时回交 updateSendButton 恢复常规提示，避免遗留「正在压缩」文案。
+function syncCompactingSendAffordance() {
+  var btn = /** @type {HTMLButtonElement | null} */ (document.getElementById("agent-send-btn"));
+  if (!btn) return;
+  if (isCompacting()) {
+    btn.disabled = true;
+    btn.classList.add("compacting");
+    btn.title = _t("正在压缩上下文，请稍候…");
+    return;
+  }
+  if (btn.classList.contains("compacting")) {
+    btn.disabled = false;
+    btn.classList.remove("compacting");
+    updateSendButton();
+  }
+}
+
 // 触发手动压缩：调 /summarize 端点。完成信号见文件头注释。
 function triggerManualCompact() {
   if (!S.serverInfo || !S.serverInfo.workspace_id || !S.currentConvId) return;
@@ -135,6 +167,10 @@ function triggerManualCompact() {
   }
   compactingSessionId = S.currentConvId;
   compactingPrevSummaryId = (S.currentConv && S.currentConv.summary_message_id) || "";
+  // 本次请求的目标身份：HTTP 回调必须核对，防止切换会话/工作区或已开启新压缩时
+  // 迟到的响应改动别的压缩态（同一 requestSessionId 才允许收尾）
+  var requestSessionId = compactingSessionId;
+  var requestWsId = S.serverInfo.workspace_id;
   clearCompactTimer();
   compactTimer = setTimeout(function() {
     // 所有完成信号均丢失（罕见）时的最后防线：强制恢复按钮态
@@ -149,25 +185,28 @@ function triggerManualCompact() {
   updateCompactBtn();
   // 持久提示：压缩结束前保持显示（不随 3s 自动消失），完成/失败时由收尾路径移除
   showCompactNotice(_t("正在压缩上下文…"), "info");
-  api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent/sessions/" + S.currentConvId + "/summarize")
+  api("POST", "/v1/workspaces/" + requestWsId + "/agent/sessions/" + requestSessionId + "/summarize")
     .then(function() {
       // 同步 API：200 返回时压缩已完成（或空转）。拉取会话确认 summary_message_id 是否变化：
       // 有变化 → 已压缩；无变化 → 服务端没有旧历史可压缩（空转），提示「无需压缩」。
-      var sid = compactingSessionId;
-      if (!sid) return; // 期间已被 onSessionUpdated 收尾（SSE 先到），无需重复处理
-      api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions/" + sid)
+      // 期间已被 onSessionUpdated 收尾（SSE 先到）或已开启新压缩：本条响应过期，忽略。
+      if (compactingSessionId !== requestSessionId) return;
+      api("GET", "/v1/workspaces/" + requestWsId + "/sessions/" + requestSessionId)
         .then(function(conv) {
           var changed = compactingPrevSummaryId
             ? (!!conv && conv.summary_message_id !== compactingPrevSummaryId)
             : (!!conv && !!conv.summary_message_id);
-          finishCompacting(sid, changed);
+          finishCompacting(requestSessionId, changed);
         })
         .catch(function() {
-          finishCompacting(sid, true); // 查询失败保守视为已压缩
+          finishCompacting(requestSessionId, true); // 查询失败保守视为已压缩
         });
     })
     .catch(function(e) {
-      // Rust 代理 120s 超时（agent.rs agent_http_request）：服务端压缩可能仍在进行，
+      // 已收尾（SSE 完成信号先到 / 已开始新压缩）后的迟到失败：不得再改动压缩态，
+      // 更不能把「停止运行导致请求被连带取消」的迟到错误报成压缩失败。
+      if (compactingSessionId !== requestSessionId) return;
+      // Rust 代理 180s 超时（agent.rs agent_http_request）：服务端压缩可能仍在进行，
       // 保留压缩态等待 session updated / 兜底定时器；明确失败（ErrSessionBusy 等）才立即恢复。
       if (/超时|timed\s*out|timeout/i.test(getErrorMessage(e))) {
         // 服务端可能仍在压缩：保留压缩态，持久提示改为「仍在进行」，等 session updated 收尾
@@ -179,13 +218,18 @@ function triggerManualCompact() {
       compactingPrevSummaryId = null;
       clearCompactNotice();
       updateCompactBtn();
+      // 取消类错误（用户停止运行 / 请求被取消）：不是压缩失败，按「已取消」轻提示
+      if (classifyError(e) === ERROR_CANCEL) {
+        showInfo(_t("压缩已取消"));
+        return;
+      }
       reportError(e, { prefix: _t("触发压缩失败: ") });
     });
 }
 
 // 统一收尾：清态 + 刷新 + 提示。
 function finishCompacting(sid, changed) {
-  if (!compactingSessionId) return;
+  if (!compactingSessionId || (sid && sid !== compactingSessionId)) return;
   clearCompactTimer();
   compactingSessionId = null;
   compactingPrevSummaryId = null;
