@@ -94,6 +94,7 @@ function main() {
   const archive = findArchive(spec);
   if (!archive) {
     console.error(`[prepare-agent] buildAgent/ 下未找到匹配 ${spec.pattern} 的压缩包，无法打包 admAgent`);
+    console.error("[prepare-agent] 可从 https://github.com/autoDeploymentModel/adm-binaries 克隆或下载压缩包到 buildAgent/");
     process.exit(1);
   }
   const archivePath = path.join(BUILD_AGENT_DIR, archive.name);

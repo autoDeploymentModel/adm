@@ -6,6 +6,7 @@
   "scripts": {
     "tauri": "tauri",
     "typecheck": "tsc -p jsconfig.json",
+    "agent:push": "node scripts/push-agent-binaries.mjs",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "tauri:build:windows": "tauri build --target x86_64-pc-windows-msvc --bundles nsis",
