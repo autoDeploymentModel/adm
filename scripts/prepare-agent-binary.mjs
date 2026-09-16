@@ -1,7 +1,9 @@
-// 构建/开发前置钩子：把 buildAgent/ 下的 admAgent 压缩包解压到临时目录，
+// 构建/开发前置钩子：把 admAgent 压缩包解压到临时目录，
 // 取出二进制放到 src-tauri/binaries/admAgent-<target-triple>[.exe]，
 // 供 tauri.conf.json 的 bundle.externalBin（sidecar）机制按平台自动打包进安装包。
 //
+// 压缩包目录：adm-binaries/（本地由 admAgent 编译脚本直写，CI 由工作流
+// 从 adm-binaries 仓库检出到同名目录）。
 // 平台选择：优先读 Tauri 2 传入的 TAURI_ENV_TARGET_TRIPLE（--target 交叉构建也正确），
 // 否则按宿主平台推断。压缩包按 admAgent_*_<平台>.{zip|tar.gz} glob，不硬编码版本号。
 
@@ -12,7 +14,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const BUILD_AGENT_DIR = path.join(ROOT, "buildAgent");
+const ADM_BINARIES_DIR = path.join(ROOT, "adm-binaries");
 const BINARIES_DIR = path.join(ROOT, "src-tauri", "binaries");
 
 /** 确定目标 triple：优先 Tauri 注入的环境变量，回退宿主平台推断 */
@@ -55,11 +57,11 @@ function compareVersion(a, b) {
   return 0;
 }
 
-/** 在 buildAgent/ 下找当前平台的压缩包，多个时取版本号最大的 */
+/** 在 adm-binaries/ 里找当前平台的压缩包，多个时取版本号最大的 */
 function findArchive(spec) {
-  if (!fs.existsSync(BUILD_AGENT_DIR)) return null;
+  if (!fs.existsSync(ADM_BINARIES_DIR)) return null;
   const candidates = fs
-    .readdirSync(BUILD_AGENT_DIR)
+    .readdirSync(ADM_BINARIES_DIR)
     .map((name) => {
       const m = name.match(spec.pattern);
       return m ? { name, version: m[1] } : null;
@@ -87,17 +89,19 @@ function main() {
   const triple = resolveTargetTriple();
   const spec = platformSpec(triple);
   if (!spec) {
-    console.error(`[prepare-agent] 不支持的构建目标: ${triple}（buildAgent/ 下无对应 admAgent 压缩包）`);
+    console.error(`[prepare-agent] 不支持的构建目标: ${triple}（adm-binaries/ 下无对应 admAgent 压缩包）`);
     process.exit(1);
   }
 
   const archive = findArchive(spec);
   if (!archive) {
-    console.error(`[prepare-agent] buildAgent/ 下未找到匹配 ${spec.pattern} 的压缩包，无法打包 admAgent`);
-    console.error("[prepare-agent] 可从 https://github.com/autoDeploymentModel/adm-binaries 克隆或下载压缩包到 buildAgent/");
+    console.error(`[prepare-agent] adm-binaries/ 下未找到匹配 ${spec.pattern} 的压缩包，无法打包 admAgent`);
+    console.error("[prepare-agent] 本地编译 admAgent（build.ps1 / build.sh）会自动写入 adm-binaries/；");
+    console.error("[prepare-agent] 也可从 https://github.com/autoDeploymentModel/adm-binaries 克隆到 adm-binaries/");
     process.exit(1);
   }
-  const archivePath = path.join(BUILD_AGENT_DIR, archive.name);
+  const archivePath = path.join(ADM_BINARIES_DIR, archive.name);
+  const archiveLabel = path.relative(ROOT, archivePath);
   const destPath = path.join(BINARIES_DIR, `admAgent-${triple}${spec.ext}`);
 
   // 增量跳过：目标文件已存在且比压缩包新则不再解压（tauri dev 每次启动都会跑本脚本）
@@ -105,7 +109,7 @@ function main() {
     const destStat = fs.statSync(destPath);
     const archiveStat = fs.statSync(archivePath);
     if (destStat.mtimeMs >= archiveStat.mtimeMs) {
-      console.log(`[prepare-agent] ${path.relative(ROOT, destPath)} 已是最新（${archive.name}），跳过`);
+      console.log(`[prepare-agent] ${path.relative(ROOT, destPath)} 已是最新（${archiveLabel}），跳过`);
       return;
     }
   }
@@ -117,7 +121,7 @@ function main() {
 
     const binPath = findBinary(tmpDir, spec.binName);
     if (!binPath) {
-      console.error(`[prepare-agent] 压缩包 ${archive.name} 中未找到 ${spec.binName}`);
+      console.error(`[prepare-agent] 压缩包 ${archiveLabel} 中未找到 ${spec.binName}`);
       process.exit(1);
     }
 
@@ -130,7 +134,7 @@ function main() {
     if (process.platform !== "win32") {
       fs.chmodSync(destPath, 0o755); // 执行位兜底（tar 已保留，双保险）
     }
-    console.log(`[prepare-agent] ${archive.name} -> ${path.relative(ROOT, destPath)}`);
+    console.log(`[prepare-agent] ${archiveLabel} -> ${path.relative(ROOT, destPath)}`);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
