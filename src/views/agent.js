@@ -840,6 +840,11 @@ function updateRoundMaxHeight() {
   if (h > 0) document.documentElement.style.setProperty("--round-max-h", h + "px");
 }
 var roundMaxHeightRafId = 0;
+// 聊天区可视高度还会因非 window resize 的原因变化（输入框自动增高/回落、todos 面板
+// 与权限提示出现或收起等）。只靠 window resize 会让 --round-max-h 过期：偏小时轮容器
+// 被截得比聊天区还矮，内容只在轮内滚动、area 失去溢出，连带「回到底部」判定失效。
+// 用 ResizeObserver 跟随 .msg-area-wrap 的真实高度（rAF 节流避免连续写入）。
+var roundMaxHeightObserver = null;
 function onResizeUpdateRoundMaxHeight() {
   // requestAnimationFrame 节流，避免连续 resize 事件频繁写 CSS 变量
   if (roundMaxHeightRafId) return;
@@ -857,6 +862,15 @@ export default {
     bindEvents();
     updateRoundMaxHeight();
     window.addEventListener("resize", onResizeUpdateRoundMaxHeight);
+    // 聊天区高度变化（输入框增高/回落、todos 面板与权限提示出现或收起）也刷新 --round-max-h，
+    // 否则轮容器高度上限过期，滚动与「回到底部」圆球判定都会失真
+    if (typeof ResizeObserver === "function") {
+      var wrapEl = document.querySelector(".msg-area-wrap");
+      if (wrapEl) {
+        roundMaxHeightObserver = new ResizeObserver(function() { onResizeUpdateRoundMaxHeight(); });
+        roundMaxHeightObserver.observe(wrapEl);
+      }
+    }
     // 监听 admAgent server 意外退出（unmount 时经 S.unlisteners 统一解绑）
     if (typeof listen === "function") {
       listen("agent-server-died", handleServerDied)
@@ -879,6 +893,10 @@ export default {
   unmount() {
     // 解除窗口 resize 监听（聊天区尺寸变化时刷新轮容器 max-height）
     window.removeEventListener("resize", onResizeUpdateRoundMaxHeight);
+    if (roundMaxHeightObserver) {
+      roundMaxHeightObserver.disconnect();
+      roundMaxHeightObserver = null;
+    }
     if (roundMaxHeightRafId) {
       cancelAnimationFrame(roundMaxHeightRafId);
       roundMaxHeightRafId = 0;

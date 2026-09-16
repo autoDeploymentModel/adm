@@ -13,12 +13,17 @@ export function exitManualScrollMode() {
 
 // 更新「回到底部」悬浮圆球的显隐：未滚到底部时显示，到底/无滚动条时隐藏。
 // 轮内独立滚动也算“未到底”——只看 area 不够（isMsgAreaAtBottom）。
+// 注意：不能再用 area.scrollHeight <= area.clientHeight 短路——area 自身无溢出
+// 不代表没有内容在滚：轮容器 .msg-round 是独立滚动容器，单轮会话里 --round-max-h
+// 偏小时内容只在轮内滚动、area 恰好没有溢出，短路会让圆球永不显示。
+// isFullyAtBottom 已把“不可滚动”视为到底（scrollHeight-clientHeight<=4），
+// 因此无滚动条时仍然隐藏，只是不再跳过轮内滚动的判定。
 // rounds 可选：调用方（scrollChatToBottom）刚扫描过展开轮列表时透传，避免重复全量 query。
 export function updateScrollBottomBtn(rounds) {
   var btn = document.getElementById("agent-scroll-bottom-btn");
   var area = document.getElementById("agent-msg-area");
   if (!btn || !area) return;
-  if (area.scrollHeight <= area.clientHeight || isFullyAtBottom(area, rounds)) {
+  if (isFullyAtBottom(area, rounds)) {
     btn.classList.remove("show");
   } else {
     btn.classList.add("show");

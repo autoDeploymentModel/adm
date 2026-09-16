@@ -468,15 +468,23 @@ function scrollToMessage(msgKey, sourceItem) {
     round.classList.remove("msg-round-collapsed");
     /** @type {any} */ (round)._admRoundOpen = true;
   }
-  // 退出手动滚动模式 + 跳到底部命令互斥状态，确保后续 scroll 事件判定为程序触发
+  // 退出手动滚动模式 + 跳到底部命令互斥状态，确保后续 scroll 事件判定为程序触发。
+  // 注意：programmaticScroll 必须有界——早先在此置 true 后不复位，onAreaScroll 见到该标志
+  // 会直接 return，导致跳转后用户的所有滚动都不再更新手动/自动模式（滚回底部也无法恢复
+  // 自动跟随）。平滑滚动约 0.3~0.5s，动画结束后复位；若期间已有更新的程序滚动重设过
+  // 时间窗（渲染钉底/提示插入等），说明标志已由它们接管，此处不再干预。
+  var jumpTs = Date.now();
   S.programmaticScroll = true;
-  S.lastProgrammaticScroll = Date.now();
+  S.lastProgrammaticScroll = jumpTs;
   S.manualScrollMode = false;
   try {
     target.scrollIntoView({ behavior: "smooth", block: "center" });
   } catch (_) {
     target.scrollIntoView();
   }
+  setTimeout(function() {
+    if (S.lastProgrammaticScroll === jumpTs) S.programmaticScroll = false;
+  }, 500);
   if (round) {
     var roundBody = round.querySelector(":scope > .msg-round-body");
     if (roundBody) {
