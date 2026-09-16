@@ -501,7 +501,6 @@ export const S = {
   serverProvidersLoaded: false,
   pendingProviderKeys: {},
   localModels: [],
-  sessionViewMode: "current",
   workspaceInfo: null,
   pendingFiles: [],
   sendSafetyTimer: null,

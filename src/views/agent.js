@@ -8,7 +8,7 @@ import { setLogEnabled } from "./agent/log.js";
 import { api } from "./agent/api.js";
 import { generateUUID, isFullyAtBottom, autoResize, $input, normalizeReasoningEffort } from "./agent/utils.js";
 import { updateStatusBar, updateContextUsage, updateSendButton, exitManualScrollMode, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showInfo, showConfirm, showCopyPasteMenu, updateScrollBottomBtn, reportError, showInitProgress, hideInitProgress } from "./agent/ui.js";
-import { loadConversations, renderConversationList, selectConversation, newConversation, toggleOutlinePanel, setOutlinePanelOpen } from "./agent/session.js";
+import { loadConversations, selectConversation, newConversation, clearAllConversations, toggleOutlinePanel, setOutlinePanelOpen } from "./agent/session.js";
 import { syncWorkingIndicator, onAreaScroll, scrollChatToBottom } from "./agent/render.js";
 import { sendMessage, cancelCurrentRun, sendMessageWithFiles } from "./agent/send.js";
 import { setupSSEListener, cancelScheduledLoadTools, cancelRunCompleteFallback } from "./agent/sse.js";
@@ -415,6 +415,8 @@ function bindEvents() {
   initPdfBatching(sendMessageWithFiles);
   // 新会话
   document.getElementById("agent-new-chat").addEventListener("click", newConversation);
+  // 一键清除所有对话（当前工作区）
+  document.getElementById("agent-conv-clear-all").addEventListener("click", clearAllConversations);
 
   // 微信消息开关（模型选择旁）：开 = 微信 Bot 消息注入当前打开的会话
   // 只有微信 Bot 服务已启动（state===running）才允许开启；未启动弹提示引导去设置页。
@@ -445,16 +447,6 @@ function bindEvents() {
       }
     });
   })();
-
-  // 会话视图切换
-  document.querySelectorAll(".toggle-item").forEach(function(item) {
-    item.addEventListener("click", function() {
-      document.querySelectorAll(".toggle-item").forEach(function(i) { i.classList.remove("active"); });
-      item.classList.add("active");
-      S.sessionViewMode = item.getAttribute("data-mode") === "all" ? "all" : "current";
-      renderConversationList();
-    });
-  });
 
   // 悬浮「对话记录导航」按钮：点击展开/收起右侧消息大纲面板
   var outlineFab = document.getElementById("agent-outline-fab");

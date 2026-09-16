@@ -64,27 +64,36 @@ export const template = `
   }
   .new-chat-btn:hover { background: var(--c-accent-2); }
 
-  /* 会话视图切换 */
-  .session-toggle {
+  /* 对话记录列表头部：标题 + 一键清除全部 */
+  .conv-list-header {
     display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 5px 12px;
     border-bottom: 1px solid var(--c-raise-2);
     flex-shrink: 0;
   }
-  .toggle-item {
-    flex: 1;
-    text-align: center;
-    padding: 6px 0;
+  .conv-list-title {
     font-size: 11px;
-    color: var(--c-text-4);
+    font-weight: 600;
+    color: var(--c-text-3);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .conv-clear-btn {
+    background: var(--c-overlay);
+    border: none;
+    border-radius: 4px;
+    color: var(--c-text-3);
+    font-size: 11px;
+    line-height: 1;
+    padding: 3px 6px;
     cursor: pointer;
-    transition: all 0.15s;
-    border-bottom: 2px solid transparent;
+    transition: background 0.15s, color 0.15s;
   }
-  .toggle-item:hover { color: var(--c-text-2); }
-  .toggle-item.active {
-    color: var(--c-text);
-    border-bottom-color: var(--c-accent);
-  }
+  .conv-clear-btn:hover:not(:disabled) { background: #3d1a1a; color: #ff6b6b; }
+  .conv-clear-btn:disabled { opacity: 0.45; cursor: default; }
 
   /* 会话列表 — 内部滚动 */
   .conv-list-section {
@@ -1860,10 +1869,10 @@ export const template = `
           </div>
           <button class="new-chat-btn" id="agent-new-chat">＋ ${_t("新建会话")}</button>
         </div>
-        <!-- 会话视图切换: ★当前对话 / ●全部对话 -->
-        <div class="session-toggle" id="agent-session-toggle">
-          <span class="toggle-item active" data-mode="current">★ ${_t("当前对话")}</span>
-          <span class="toggle-item" data-mode="all">● ${_t("全部对话")}</span>
+        <!-- 对话记录：单一列表头部（标题 + 一键清除所有对话） -->
+        <div class="conv-list-header">
+          <span class="conv-list-title">${_t("对话记录")}</span>
+          <button class="conv-clear-btn" id="agent-conv-clear-all" title="${_t("清除所有对话")}" disabled>🗑 ${_t("清除全部")}</button>
         </div>
         <!-- 会话列表 (内部滚动) -->
         <div class="conv-list-section" id="agent-conv-list">

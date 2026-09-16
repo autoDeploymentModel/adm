@@ -3,7 +3,7 @@ import { t as _t } from "../../i18n.js";
 import { S, invoke, store } from "./store.js";
 import { api } from "./api.js";
 import { escapeHtml, formatTime } from "./utils.js";
-import { showError, showConfirm, showInfo, reportError, exitManualScrollMode, clearErrorNotices, updateContextUsage, updateStatusBar, updateSendButton } from "./ui.js";
+import { showError, showConfirm, showInfo, reportError, exitManualScrollMode, clearErrorNotices, updateContextUsage, updateStatusBar, updateSendButton, clearSendSafetyTimer } from "./ui.js";
 import { getErrorMessage } from "./error.js";
 import { renderMessages, renderTodos } from "./render.js";
 import { resetPermissionState } from "./permission.js";
@@ -13,6 +13,9 @@ import { log } from "./log.js";
 // store 各 setter 静默失败、currentConvId 恒为 null，loadConversations ↔ newConversation
 // 会递归无限创建会话；连续失败超过上限即熔断报错，避免刷爆服务端会话表
 var autoCreateStrikes = 0;
+
+// 一键清除是否进行中：期间禁用「清除全部」按钮，防重复点击后对已删会话再次 DELETE
+var clearAllInFlight = false;
 
 // 同步当前会话 ID 给微信 Bridge（跟随模式下微信消息以此为目标会话）；fire-and-forget
 export function syncWxFollowSession() {
@@ -97,15 +100,15 @@ export function renderConversationList() {
   if (!container) return;
   ensureConvListDelegation(container);
 
-  // 根据视图模式过滤
+  // 单一「对话记录」列表：始终展示全部会话（当前会话以 ★ + 高亮标识）
   var list = S.conversations;
-  if (S.sessionViewMode === "current" && S.currentConvId) {
-    list = S.conversations.filter(function(c) { return c.id === S.currentConvId; });
-  }
+
+  // 无会话 / 正在清除时禁用「清除全部」，避免空点与重复点击
+  var clearBtn = /** @type {HTMLButtonElement} */ (document.getElementById("agent-conv-clear-all"));
+  if (clearBtn) clearBtn.disabled = clearAllInFlight || list.length === 0;
 
   if (list.length === 0) {
-    var emptyText = S.sessionViewMode === "current" ? _t("当前无选中会话") : _t("暂无会话");
-    container.innerHTML = '<div style="padding:12px 14px;color:var(--c-text-4);font-size:12px;">' + emptyText + '</div>';
+    container.innerHTML = '<div style="padding:12px 14px;color:var(--c-text-4);font-size:12px;">' + _t("暂无会话") + '</div>';
     return;
   }
 
@@ -175,6 +178,88 @@ function ensureConvListDelegation(container) {
       if (convId) selectConversation(convId);
     }
   });
+}
+
+// ===== 一键清除所有对话（当前工作区） =====
+// 服务端无批量删除接口，逐个 DELETE（服务端会先取消该会话内正在运行的 run）；
+// 删除期间用户可能切换工作区/会话，因此状态池按启动时的 wsId 更新，DOM 仅在
+// 仍处于该工作区时更新，避免误清新工作区的界面。
+export function clearAllConversations() {
+  if (clearAllInFlight || !S.serverInfo || !S.serverInfo.workspace_id) return;
+  var wsId = S.serverInfo.workspace_id;
+  var ids = (S.conversations || [])
+    .map(function(c) { return c.id; })
+    .filter(function(id) { return id !== undefined && id !== null && id !== ""; });
+  if (ids.length === 0) {
+    showInfo(_t("当前没有可清除的对话"));
+    return;
+  }
+  showConfirm(_t("确定清除全部对话？共 ") + ids.length + _t(" 个会话，删除后不可恢复"), function() {
+    doClearAllConversations(wsId, ids);
+  });
+}
+
+async function doClearAllConversations(wsId, ids) {
+  log.debug("SESSION", "clearAllConversations ws=" + wsId.slice(0, 8) + " count=" + ids.length);
+  clearAllInFlight = true;
+  renderConversationList();
+  var deleted = {};
+  var failed = 0;
+  for (var i = 0; i < ids.length; i++) {
+    try {
+      await api("DELETE", "/v1/workspaces/" + wsId + "/sessions/" + ids[i]);
+      deleted[ids[i]] = true;
+    } catch (e) {
+      failed++;
+      console.error("[agent] 清除会话失败:", ids[i], e);
+    }
+  }
+  clearAllInFlight = false;
+
+  // 本地状态收尾：列表按实际删除结果过滤；被删的当前会话清空消息；被删会话内
+  // 的 run 服务端已取消，本地同步解除发送态（否则界面一直显示运行中）
+  var wsState = store.workspaces.get(wsId);
+  var runCleared = false;
+  if (wsState) {
+    store.setConversations(wsId, wsState.conversations.filter(function(c) { return !deleted[c.id]; }));
+    if (wsState.currentConvId && deleted[wsState.currentConvId]) {
+      store.setCurrentConvId(wsId, null);
+      store.setCurrentConv(wsId, null);
+      store.setMessages(wsId, []);
+    }
+    runCleared = !!((wsState.activeRun && deleted[wsState.activeRun.sessionId]) ||
+      (wsState.queuedRun && deleted[wsState.queuedRun.sessionId]));
+    if (runCleared) {
+      store.cancelRun(wsId);
+      // 安全计时器只服务当前激活工作区的运行，清空其它工作区时不得误清
+      if (wsId === S.activeWsId) clearSendSafetyTimer();
+    }
+  }
+
+  // 仅当仍停留在该工作区时更新界面
+  if (S.serverInfo && S.serverInfo.workspace_id === wsId) {
+    renderConversationList();
+    if (runCleared) updateStatusBar("ready", null, S.contextUsage.used);
+    if (!S.currentConvId) {
+      resetPermissionState();
+      syncWxFollowSession();
+      clearErrorNotices();
+      store.setContextUsage(wsId, 0, S.contextUsage.max, false);
+      document.getElementById("agent-conv-title").textContent = _t("选择或创建一个会话");
+      renderMessages();
+      renderTodos([]);
+      updateContextUsage();
+      updateSendButton();
+      /** @type {HTMLButtonElement} */ (document.getElementById("agent-undo-btn")).disabled = true;
+    }
+  }
+
+  if (failed > 0) {
+    showError(_t("部分对话清除失败（") + failed + _t(" 个），请重试"));
+    loadConversations();
+    return;
+  }
+  showInfo(_t("已清除全部对话"));
 }
 
 // ===== 右侧「对话记录」大纲面板（增量渲染） =====

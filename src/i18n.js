@@ -708,6 +708,15 @@ const EN = {
   "读取技能内容失败: ": "Failed to read skill content: ",
   "全部卸载": "Uninstall All",
   "此技能安装在多个位置，选择要卸载的位置": "This skill is installed in multiple locations. Choose which to uninstall",
+  "对话记录": "Sessions",
+  "清除所有对话": "Clear all sessions",
+  "清除全部": "Clear all",
+  "当前没有可清除的对话": "No sessions to clear",
+  "确定清除全部对话？共 ": "Clear all sessions? ",
+  " 个会话，删除后不可恢复": " session(s) will be permanently deleted",
+  "部分对话清除失败（": "Some sessions could not be cleared (",
+  " 个），请重试": "), please retry",
+  "已清除全部对话": "All sessions cleared",
 };
 
 let lang = "zh";
