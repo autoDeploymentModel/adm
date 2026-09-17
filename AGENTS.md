@@ -73,6 +73,7 @@
 
 ## 关键注意事项
 - **MTP 自动检测**：如果模型文件名包含 "mtp"（不区分大小写），`start_model` 会自动追加 `--spec-draft-n-max 2 --spec-type draft-mtp`。设置 `params.spec_type = "none"` 可禁用。
+- **VC++ 运行库检测（Windows）**：`check_vc_redist_installed`（`index.rs`）以 DLL 实检为准——`C:\Windows\System32` 或可执行文件同目录下必须同时存在 `vcruntime140.dll` / `vcruntime140_1.dll` / `msvcp140.dll`。**不要改回注册表判断或只查 `vcruntime140.dll`**：旧版 2015/2017 运行库同样写 `Installed=0x1`，会把缺 `vcruntime140_1.dll` 的机器误判为已安装。调用点：启动检测（`check_update`；网络失败时前端改走独立命令 `check_vc_redist`）、点「安装完成」后的复验，以及 `start_model` / `start_sd_generation` / `get_llamacpp_version` 拉起进程前的预检——缺失时直接返回错误、**不 spawn**（否则 Windows 加载器会弹「找不到 VCRUNTIME140_1.dll」系统错误框并把进程卡住，`spawn()` 本身不报错）。
 - **HuggingFace 镜像**：`download_model` 会自动将所有 `huggingface.co` 链接替换为 `hf-mirror.com`。
 - **断点续传**：使用 `.part` 后缀 + HTTP `Range` 头；`scan_part_files` 列出未完成的下载。
 - **硬件优先级**：`hwinfo` 插件数据覆盖 `sysinfo`。

@@ -785,7 +785,15 @@ async function handleStart(btn) {
     console.log("[model_list] 启动模型 invoke 完成:", modelId);
   } catch (e) {
     console.error("[model_list] 启动失败:", e);
-    showToast(friendlyError(e, { prefix: "启动失败: " }));
+    // VC++ 运行库缺失时后端会直接拒绝启动（避免弹「找不到 VCRUNTIME140_1.dll」系统错误框），
+    // 这里接着引导去安装，而不是只给一条错误提示
+    let vcMissing = false;
+    try { vcMissing = (await invoke()("check_vc_redist")) === false; } catch (vcErr) { console.warn("[model_list] VC++ 运行库检测失败:", vcErr); }
+    if (vcMissing && window.ADM && window.ADM.showVcRedistInstallDialog) {
+      window.ADM.showVcRedistInstallDialog();
+    } else {
+      showToast(friendlyError(e, { prefix: "启动失败: " }));
+    }
     renderModelTable();
   }
 }

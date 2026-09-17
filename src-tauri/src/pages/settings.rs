@@ -73,6 +73,16 @@ pub async fn get_tauri_version() -> Result<String, AppError> {
 #[tauri::command]
 pub async fn get_llamacpp_version(app: tauri::AppHandle) -> Result<String, AppError> {
     let server_path = config::get_llama_server_path(Some(&app))?;
+
+    // Windows：VC++ 运行库缺失时系统加载器会弹「找不到 VCRUNTIME140_1.dll」系统错误框
+    // （即便这里只是想读版本号），先拦截，避免用户看到误导性的系统弹窗
+    #[cfg(target_os = "windows")]
+    if !crate::pages::index::check_vc_redist_installed(server_path.parent()) {
+        return Err(AppError::msg(
+            "系统缺少 Visual C++ 运行库（VCRUNTIME140_1.dll），无法读取 llama-server 版本。请先安装 VC++ 2015-2022 运行库后重试。",
+        ));
+    }
+
     let server_path_str = server_path.to_string_lossy().to_string();
 
     // 用 CREATE_NO_WINDOW 避免 console 窗口闪烁：

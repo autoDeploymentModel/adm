@@ -44,6 +44,7 @@ declare global {
       showUpdateDialog: (html: string) => void;
       hideUpdateDialog: () => void;
       checkForUpdate: (silent?: boolean) => Promise<void>;
+      showVcRedistInstallDialog: () => void;
       i18n?: {
         t: (str: string) => string;
         tV: (str: string, vars?: Record<string, string | number>) => string;

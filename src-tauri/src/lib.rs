@@ -160,6 +160,7 @@ pub fn run() {
             // index.rs
             index::get_system_info,
             index::check_update,
+            index::check_vc_redist,
             index::download_and_extract_llamacpp,
             // model_list.rs
             model_list::scan_local_models,

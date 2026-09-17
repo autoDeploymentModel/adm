@@ -339,6 +339,25 @@ pub async fn start_model(
     }
 
     let server_path = config::get_llama_server_path(Some(&app))?;
+
+    // Windows 前置校验：VC++ 运行库缺失时系统加载器会弹「找不到 VCRUNTIME140_1.dll」
+    // 错误框并把进程卡住（spawn 不会报错），所以必须在拉起进程前拦截并给出可操作提示。
+    // 检查目录用 llama-server.exe 所在目录，与加载器的 DLL 搜索顺序一致
+    #[cfg(target_os = "windows")]
+    if !crate::pages::index::check_vc_redist_installed(server_path.parent()) {
+        let msg = "系统缺少 Visual C++ 运行库（VCRUNTIME140_1.dll），llama-server 无法启动。请先安装 VC++ 2015-2022 运行库（https://aka.ms/vs/17/release/vc_redist.x64.exe）后重试。";
+        app.emit(
+            "model-log",
+            serde_json::json!({
+                "model_id": &model_id,
+                "line": format!("[ERROR] {}", msg),
+                "source": "stderr",
+            }),
+        )
+        .ok();
+        return Err(AppError::msg(msg));
+    }
+
     let data_dir = config::get_data_dir(Some(&app))?;
     let models_dir = data_dir.join("models");
     let model_path = if let Some(fname) = &model_filename {

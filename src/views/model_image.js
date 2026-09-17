@@ -506,7 +506,15 @@ async function handleGenerate() {
       modelVae: modelVae
     });
   } catch (e) {
-    showToast(friendlyError(e, { prefix: "生成失败: " }));
+    // VC++ 运行库缺失时后端会直接拒绝启动 sd-cli（避免弹「找不到 VCRUNTIME140_1.dll」系统错误框），
+    // 这里接着引导去安装，而不是只给一条错误提示
+    let vcMissing = false;
+    try { vcMissing = (await invoke()("check_vc_redist")) === false; } catch (vcErr) { console.warn("[model_image] VC++ 运行库检测失败:", vcErr); }
+    if (vcMissing && window.ADM && window.ADM.showVcRedistInstallDialog) {
+      window.ADM.showVcRedistInstallDialog();
+    } else {
+      showToast(friendlyError(e, { prefix: "生成失败: " }));
+    }
     btn.textContent = _t("生成图片");
     btn.disabled = false;
     isGenerating = false;

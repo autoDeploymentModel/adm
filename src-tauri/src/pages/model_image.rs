@@ -369,6 +369,14 @@ pub async fn start_sd_generation(
     let sd_cli_path = get_sd_cli_path(&base_dir)
         .ok_or("未找到 sd-cli 执行文件，请先下载".to_string())?;
 
+    // Windows 前置校验：缺少 VC++ 运行库时 sd-cli 会被系统加载器拦下
+    // （弹「找不到 VCRUNTIME140_1.dll」错误框且进程卡住），提前拦截避免误导。
+    // 检查目录用 sd-cli.exe 所在目录，与加载器的 DLL 搜索顺序一致
+    #[cfg(target_os = "windows")]
+    if !crate::pages::index::check_vc_redist_installed(sd_cli_path.parent()) {
+        bail!("系统缺少 Visual C++ 运行库（VCRUNTIME140_1.dll），sd-cli 无法启动。请先安装 VC++ 2015-2022 运行库（https://aka.ms/vs/17/release/vc_redist.x64.exe）后重试。");
+    }
+
     let models_dir = base_dir.join("models");
     let model_dir = models_dir.join(&model_id);
 

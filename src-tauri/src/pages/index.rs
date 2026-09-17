@@ -40,32 +40,35 @@ fn extract_nvidia_series(gpu_name: &str) -> Option<u32> {
     }
 }
 
+/// llama-server（x64）启动时必须能加载的 VC++ 2015-2022 运行库核心 DLL。
+/// vcruntime140_1.dll 是 VS2019(14.20) 才引入的，只用注册表或只查 vcruntime140.dll
+/// 会把仅装过 2015/2017 旧版运行库的机器误判为“已安装”，随后拉起 llama-server 时
+/// 依然弹出系统错误框（找不到 VCRUNTIME140_1.dll）。
 #[cfg(target_os = "windows")]
-fn check_vc_redist_installed() -> bool {
-    use std::path::Path;
+const VC_RUNTIME_DLLS: [&str; 3] = ["vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll"];
 
-    // 方法一：DLL 文件检测
-    let dll_path = r"C:\Windows\System32\vcruntime140_1.dll";
-    let dll_exists = Path::new(dll_path).exists();
+/// 判定 VC++ 运行库是否可满足 llama-server / sd-cli 启动。
+/// 按 Windows 加载器顺序检查：先找可执行文件同目录（应用级部署的 DLLs），
+/// 再找 System32（官方安装包的落点）；三个 DLL 全部命中才算安装完整。
+#[cfg(target_os = "windows")]
+pub fn check_vc_redist_installed(app_local_dir: Option<&std::path::Path>) -> bool {
+    let dirs: Vec<std::path::PathBuf> = std::iter::once(std::path::PathBuf::from(r"C:\Windows\System32"))
+        .chain(app_local_dir.map(|dir| dir.to_path_buf()))
+        .collect();
 
-    // 方法二：注册表检测（辅助验证，使用隐藏窗口避免控制台闪烁）
-    let reg_installed = platform::create_hidden_command("reg")
-        .args(["query", "HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64", "/v", "Installed"])
-        .output()
-        .map(|o| {
-            if !o.status.success() {
-                return false;
-            }
-            let stdout = String::from_utf8_lossy(&o.stdout);
-            // 验证 Installed 的值为 0x1（已安装），而非仅检查键是否存在
-            stdout.lines().any(|line| {
-                let line = line.trim();
-                line.starts_with("Installed") && line.contains("0x1")
-            })
-        })
-        .unwrap_or(false);
+    VC_RUNTIME_DLLS
+        .iter()
+        .all(|dll| dirs.iter().any(|dir| dir.join(dll).is_file()))
+}
 
-    dll_exists || reg_installed
+/// llama-server.exe 实际所在目录（应用级 DLL 的搜索位置）；未安装时退回 llamacpp 根目录。
+/// 压缩包可能把二进制解压进子目录，只有取到 exe 所在目录才能与加载器搜索位置对齐。
+#[cfg(target_os = "windows")]
+fn llama_server_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    let dir = config::get_llamacpp_dir(Some(app)).ok()?;
+    config::find_llama_server_in_dir(&dir)
+        .and_then(|exe| exe.parent().map(|p| p.to_path_buf()))
+        .or(Some(dir))
 }
 
 fn detect_hardware_for_llamacpp() -> HardwareDetectResult {
@@ -369,7 +372,7 @@ pub async fn check_update(app: tauri::AppHandle) -> Result<UpdateCheckResult, Ap
     }
 
     #[cfg(target_os = "windows")]
-    let vc_redist_installed = check_vc_redist_installed();
+    let vc_redist_installed = check_vc_redist_installed(llama_server_dir(&app).as_deref());
     #[cfg(not(target_os = "windows"))]
     let vc_redist_installed = true;
 
@@ -385,6 +388,21 @@ pub async fn check_update(app: tauri::AppHandle) -> Result<UpdateCheckResult, Ap
         llamacpp_download_url,
         vc_redist_installed,
     })
+}
+
+/// 独立的 VC++ 运行库检测：不走网络，启动检测、安装后复验、启动模型前预检都走这里。
+/// 与 check_update 分开，避免网络不可用时检测结果一并丢失（用户仍会被弹系统错误框）。
+#[tauri::command]
+pub fn check_vc_redist(app: tauri::AppHandle) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        check_vc_redist_installed(llama_server_dir(&app).as_deref())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+        true
+    }
 }
 
 #[tauri::command]
