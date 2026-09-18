@@ -399,6 +399,15 @@ class Store {
   handleSessionEvent(wsId, action, sessData) {
     var ws = this.workspaces.get(wsId);
     if (!ws) return;
+    // 子 Agent（agent 工具 / agentic_fetch）的内部子会话带 parent_session_id，不属于
+    // 「对话记录」列表：REST 列表接口按 `parent_session_id IS NULL` 过滤（服务端
+    // sessions.sql.go），若在此按 SSE 事件插入，本轮 run_complete 重新拉取列表时又会被
+    // 移掉——表现为列表里临时闪现一条对话记录。三种动作统一在此拦截。
+    var parentId = sessData.parent_session_id;
+    if (parentId !== undefined && parentId !== null && parentId !== "") {
+      _log("debug", "STORE", "handleSessionEvent 跳过子 Agent 子会话 " + action + " session=" + String(sessData.id).slice(0, 24));
+      return;
+    }
     if (action === "created") {
       if (!ws.conversations.some(function(c) { return c.id === sessData.id; })) {
         var newList = ws.conversations.slice();
