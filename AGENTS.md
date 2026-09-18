@@ -86,6 +86,7 @@
 - **空正文看门狗 + empty_output**：step 流式输出只有 reasoning、无正文/工具调用时——每 60s 推一次 `agent_event type=thinking`（progress 带已思考秒数，前端 `showInfo` 提示"模型仍在思考…"）；持续满 120s 触发 `errOutputDegraded`（nudge 重试 1 次，再满 120s 结束本轮）。本轮正常结束但无任何输出（正文与工具调用皆无，或 assistant 消息被丢弃）时 `run_complete` 携带 `empty_output: true`，前端提示"模型未产生有效输出"且不自动续跑。
 - **Plan 模式 = 纯规划**：工具白名单（`config.ResolvePlanModeTools`）只含只读工具，**不含 edit/write/download/todos/MCP**；bash 在工具内部按只读命令白名单校验；计划以正文文本输出，todo 追踪只属于执行模式；todo-nudge 在 todos 工具不在目录时自动跳过。
 - **前端自动续跑**（`src/views/agent/autocontinue.js`）：本轮正常结束但 todos 未完成时自动发“继续”开新轮（每轮重置服务端 nudge 预算）；上限 10 轮、连续 2 轮无进展自动停；仅续跑本客户端发起的任务；Plan 模式、出错、取消、切走会话均不触发；开关存 localStorage（`agent_auto_continue`，默认开）。
+- **拖拽选择保护 / 主线程停顿看门狗**（桌面端）：在消息区按住左键拖拽选择文字期间，`render.js` 的 `beginSelectGuard` 暂停流式 DOM 写入与自动滚底（`renderMessages` 只置待渲染标记、`scrollChatToBottom` 直接返回），抬键（window 捕获 mouseup）/失焦/10s 超时后补渲染一次；消息区 `dragstart` 拦截“从已有文字选区发起的原生拖拽”（图片除外）。原因：WebView2/Chromium 在拖拽选择期间变更 DOM + 程序化 scrollTop 有触发输入卡死的已知回归（crbug 559347435 / 559795247 / 41327805）。`agent.js` 的看门狗每秒采样定时器漂移，>2s 记 `PERF` 调试日志：界面无响应但无停顿记录 = WebView2 输入卡死（上游问题，需更新运行时），有记录 = 前端长任务阻塞。
 - **Agent 设置**：`agent_default_provider` / `agent_reasoning_effort` / `agent_temperature` / `debug_logging` 存储在 `config.json`（Settings 结构体），前端通过 `load_settings` / `save_settings` 读写。桌面端固定 yolo（执行）模式，不再提供 Plan 模式开关。
 - **网络代理链路**（设置→网络代理，仅影响 admAgent，桌面端下载不走代理）：
   1. 前端 `settings.js` `saveProxy()` 校验（启用时 url 必填、须以 `http(s)://` 或 `socks5://` 开头）→ `save_settings` 写入 config.json 的 `agent_proxy`。

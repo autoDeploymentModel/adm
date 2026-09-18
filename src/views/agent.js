@@ -4,12 +4,12 @@
 import { t as _t } from "../i18n.js";
 import { template } from "./agent/template.js";
 import { S, invoke, listen, store } from "./agent/store.js";
-import { setLogEnabled } from "./agent/log.js";
+import { log, setLogEnabled } from "./agent/log.js";
 import { api } from "./agent/api.js";
 import { generateUUID, isFullyAtBottom, autoResize, $input, normalizeReasoningEffort } from "./agent/utils.js";
 import { updateStatusBar, updateContextUsage, updateSendButton, exitManualScrollMode, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showInfo, showConfirm, showCopyPasteMenu, updateScrollBottomBtn, reportError, showInitProgress, hideInitProgress } from "./agent/ui.js";
 import { loadConversations, selectConversation, newConversation, clearAllConversations, toggleOutlinePanel, setOutlinePanelOpen } from "./agent/session.js";
-import { syncWorkingIndicator, onAreaScroll, scrollChatToBottom } from "./agent/render.js";
+import { syncWorkingIndicator, onAreaScroll, scrollChatToBottom, beginSelectGuard, endSelectGuard, resetSelectGuard } from "./agent/render.js";
 import { sendMessage, cancelCurrentRun, sendMessageWithFiles } from "./agent/send.js";
 import { setupSSEListener, cancelScheduledLoadTools, cancelRunCompleteFallback } from "./agent/sse.js";
 import { syncModeToServer } from "./agent/permission.js";
@@ -748,6 +748,22 @@ function bindEvents() {
       showCopyPasteMenu(e, null);
     });
 
+    // 拖拽选择保护：按住左键期间暂停流式 DOM 更新与自动滚底（见 render.js beginSelectGuard）。
+    // 抬键由 window 捕获阶段统一收尾（可能落在窗口外），另有 blur / 安全超时兜底。
+    msgArea.addEventListener("mousedown", function(e) {
+      if (e.button === 0) beginSelectGuard();
+    });
+    // 阻止从“已选中的文字”发起原生拖拽：Chromium/WebView2 在拖拽选区时有输入卡死的
+    // 已知问题（crbug 40371213 / 559347435），聊天记录也无需把文字拖出窗口；
+    // 图片附件（target 为 img）仍允许拖出
+    msgArea.addEventListener("dragstart", function(e) {
+      var t = /** @type {HTMLElement | null} */ (e.target);
+      if (t && t.tagName === "IMG") return;
+      var sel = null;
+      try { sel = window.getSelection(); } catch (_) {}
+      if (sel && !sel.isCollapsed) e.preventDefault();
+    });
+
     // 手动/自动滚动模式：鼠标进入消息区且不在底部 → 手动模式（暂停自动滚底，可上滑、可点开/合上推理过程）；
     // 移开鼠标不自动恢复——处于手动模式时停留在当前浏览位置，恢复跟随只能
     // 靠滚回底部或点击「回到底部」悬浮圆球
@@ -785,6 +801,15 @@ function bindEvents() {
       });
     }
   }
+
+  // 拖拽选择保护收尾：抬键/窗口失焦时结束保护并补一次渲染（mouseup 可能落在窗口外，用捕获阶段）
+  var endSelGuard = function() { endSelectGuard(); };
+  window.addEventListener("mouseup", endSelGuard, true);
+  window.addEventListener("blur", endSelGuard);
+  S.unlisteners.push(function() {
+    window.removeEventListener("mouseup", endSelGuard, true);
+    window.removeEventListener("blur", endSelGuard);
+  });
 
   // 右键菜单：输入框 → 复制/粘贴
   var inputForCtx = document.getElementById("agent-input");
@@ -854,6 +879,30 @@ function onResizeUpdateRoundMaxHeight() {
   });
 }
 
+// ===== 主线程停顿看门狗 =====
+// 用于区分偶发“卡死”的两类原因：① 前端主线程被长任务阻塞（此处会记录停顿毫秒数）；
+// ② WebView2 输入处理挂起（上游回归，见 crbug 559347435）——此时定时器照常运行、
+// 不会产生停顿记录。每秒采样一次时间漂移，>2s 写入调试日志（仅调试模式可见）。
+var stallWatchdogTimer = 0;
+function startStallWatchdog() {
+  stopStallWatchdog();
+  // 记录 WebView 内核版本（UA 内含 Edg/<ver>）：偶发输入卡死若确认为上游回归，
+  // 便于按运行时版本判断是否已修复
+  try { log.info("PERF", "WebView UA: " + navigator.userAgent); } catch (_) {}
+  var last = Date.now();
+  stallWatchdogTimer = setInterval(function() {
+    var now = Date.now();
+    var drift = now - last - 1000;
+    last = now;
+    if (drift > 2000) {
+      log.warn("PERF", "主线程停顿 " + Math.round(drift) + "ms（无此记录但界面无响应 = WebView2 输入卡死）");
+    }
+  }, 1000);
+}
+function stopStallWatchdog() {
+  if (stallWatchdogTimer) { clearInterval(stallWatchdogTimer); stallWatchdogTimer = 0; }
+}
+
 export default {
   template,
   mount(root, params) {
@@ -861,6 +910,7 @@ export default {
     root.innerHTML = template;
     bindEvents();
     updateRoundMaxHeight();
+    startStallWatchdog();
     window.addEventListener("resize", onResizeUpdateRoundMaxHeight);
     // 聊天区高度变化（输入框增高/回落、todos 面板与权限提示出现或收起）也刷新 --round-max-h，
     // 否则轮容器高度上限过期，滚动与「回到底部」圆球判定都会失真
@@ -901,6 +951,8 @@ export default {
       cancelAnimationFrame(roundMaxHeightRafId);
       roundMaxHeightRafId = 0;
     }
+    stopStallWatchdog();
+    resetSelectGuard();
     document.documentElement.style.removeProperty("--round-max-h");
     console.log("[agent] unmount() isSending=" + S.isSending + " activeRun=" + JSON.stringify(S.activeRun));
     // 使在途 init() 失效，防止切走后旧 init 继续执行、或与下次 mount 的新 init 并发互踩

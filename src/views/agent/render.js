@@ -25,6 +25,48 @@ export function scheduleRenderMessages() {
   });
 }
 
+// ===== 拖拽选择保护 =====
+// 鼠标左键按住（拖拽选择文字）期间暂停流式渲染的 DOM 写入与自动滚底，原因有二：
+//   1) 拖拽过程中替换/移除选区内的节点会破坏选区，且在 WebView2/Chromium 上有触发
+//      输入卡死的已知问题（Chromium 2026-09 回归“拖拽选择后输入无响应”
+//      crbug 559347435 / 559795247；节点在拖拽中被移除导致卡死的旧例 crbug 41327805）；
+//   2) 自动滚底每帧程序化写 scrollTop，会与浏览器原生的“选择自动滚动”互抢，
+//      表现为选区被拽回底部、选不中目标文字。
+// 保护期间只置待渲染标记；抬键/失焦/安全超时（mouseup 丢失兜底）后补渲染一次，终态不丢。
+var selectGuardActive = false;
+var selectGuardPending = false;
+var selectGuardTimer = 0;
+var SELECT_GUARD_MAX_MS = 10000;
+export function beginSelectGuard() {
+  if (selectGuardActive) return;
+  selectGuardActive = true;
+  if (selectGuardTimer) clearTimeout(selectGuardTimer);
+  selectGuardTimer = setTimeout(endSelectGuard, SELECT_GUARD_MAX_MS);
+}
+export function endSelectGuard() {
+  if (!selectGuardActive) return;
+  selectGuardActive = false;
+  if (selectGuardTimer) { clearTimeout(selectGuardTimer); selectGuardTimer = 0; }
+  if (selectGuardPending) {
+    selectGuardPending = false;
+    // 延后到下一宏任务补渲染：mouseup 之后浏览器紧接着派发 click，
+    // 立即渲染若重建了节点会让 <summary>/轮标题的点击落空（点击目标已被替换）
+    setTimeout(function() {
+      try {
+        renderMessages();
+      } catch (e) {
+        reportError(e, { prefix: _t("消息渲染失败: ") });
+      }
+    }, 0);
+  }
+}
+// 视图卸载时复位（不补渲染：目标 DOM 即将销毁；同时避免守卫状态残留到下次挂载）
+export function resetSelectGuard() {
+  selectGuardActive = false;
+  selectGuardPending = false;
+  if (selectGuardTimer) { clearTimeout(selectGuardTimer); selectGuardTimer = 0; }
+}
+
 // ===== 流式文本 Markdown 更新节流 =====
 // 流式正文每个 delta 都在增长，全文重跑 markdown 正则（utils.renderMarkdown 约 10 轮
 // 正则）是单条消息的主要 CPU 开销，长文本下整体呈 O(n²)。策略：
@@ -149,6 +191,8 @@ function msgStructSig(msg, role, callResultMap) {
 export function renderMessages() {
   const area = document.getElementById("agent-msg-area");
   if (!area) return;
+  // 拖拽选择期间不写 DOM（见 beginSelectGuard）；抬键后统一补渲染
+  if (selectGuardActive) { selectGuardPending = true; return; }
   var perfT0 = performance.now();
   var prevScrollTop = area.scrollTop;
 
@@ -281,6 +325,8 @@ export function onAreaScroll(scroller) {
 // 供调用方（如 renderMessages）复用，避免同一流程内重复全量 query。
 export function scrollChatToBottom(area) {
   if (!area) return null;
+  // 拖拽选择期间不程序化滚动：避免与浏览器原生选择自动滚动互抢（见 beginSelectGuard）
+  if (selectGuardActive) return null;
   S.programmaticScroll = true;
   S.lastProgrammaticScroll = Date.now();
   area.scrollTop = area.scrollHeight;
