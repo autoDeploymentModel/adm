@@ -759,6 +759,10 @@ function bindEvents() {
     msgArea.addEventListener("dragstart", function(e) {
       var t = /** @type {HTMLElement | null} */ (e.target);
       if (t && t.tagName === "IMG") return;
+      // 链接（Markdown 里非 http(s) 的会渲染成 href="#"）被拖起后，落到页面任意处会按
+      // 浏览器默认行为把当前页导航到该 href —— href="#" 即清空 hash，路由器回退到首页
+      // （routes["/list"]），表现为界面偶发跳回首页；聊天区没有拖拽链接的用途，直接拦截
+      if (t && t.closest && t.closest("a")) { e.preventDefault(); return; }
       var sel = null;
       try { sel = window.getSelection(); } catch (_) {}
       if (sel && !sel.isCollapsed) e.preventDefault();

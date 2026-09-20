@@ -890,6 +890,11 @@
 
     let currentView = null;
     let renderSeq = 0;
+    // 当前已渲染路由的 path 与 path+query：用于识别「同一路由的重复渲染请求」——
+    // Agent 运行中被浏览器级导航带离页面时，会把 hash 纠正回 #/agent 并再次触发
+    // hashchange，此时视图仍在位，直接跳过可避免无谓的卸载重挂（重拉会话/消息）。
+    let currentRoutePath = null;
+    let currentRouteKey = null;
     const TRANSITION_FADE_OUT_MS = 160;
     const TRANSITION_FADE_IN_MS = 200;
     const TRANSITION_LOADING_THRESHOLD_MS = 180;
@@ -921,6 +926,16 @@
       return new Promise(function (resolve) { setTimeout(resolve, ms); });
     }
 
+    // 路由诊断日志：把 hash 变化与拦截情况写进 adm_api_debug.log（调试模式关闭时
+    // 服务端直接丢弃，无文件开销）。用于复盘「运行中偶发跳回首页」这类浏览器级
+    // 导航问题：对比相邻两行的 href 与 history.length 可判断是历史前进/后退
+    // （href 无 #、len 不增）还是落到空 fragment（href 以 # 结尾）。
+    function logRouteDebug(msg) {
+      try {
+        if (window.__adm_invoke) window.__adm_invoke("agent_debug_log", { line: "[ROUTE] " + msg });
+      } catch (_) {}
+    }
+
     async function renderRoute() {
       const seq = ++renderSeq;
       const hash = location.hash || "#/list";
@@ -940,6 +955,30 @@
       }
 
       const route = routes[path] || routes["/list"];
+      logRouteDebug("hashchange href=" + location.href + " len=" + history.length +
+        " busy=" + !!(window.__adm_state && window.__adm_state.agentBusy) +
+        " cur=" + (currentRoutePath || "-"));
+
+      // Agent 运行中禁止离开 Agent 页面：底部导航点击由 navigateTo 拦截，但浏览器级
+      // 历史导航（鼠标侧键 / Alt+← / 触控板横向滑动）与「链接拖放到页面」不经过
+      // navigateTo —— 它们会把 hash 清空或改成未知路由，路由器随后回退到首页
+      // （routes["/list"]），表现为运行中界面偶发跳回首页、Agent 视图被卸载重挂。
+      // 这里在卸载旧视图之前拦下：用 replace 纠正 hash（不新增历史记录），视图保持挂载。
+      // 仅在 Agent 视图确实挂载时生效：视图已卸载/渲染失败时不该把用户困在拦截里。
+      if (window.__adm_state && window.__adm_state.agentBusy && currentView &&
+          currentRoutePath === "/agent" && route.nav !== "agent-btn") {
+        logRouteDebug("busy 拦截离开 Agent 页面（hash=" + (location.hash || "空") + "），已回退 #/agent");
+        showAgentBusyTip();
+        if (location.hash !== "#/agent") {
+          try { location.replace("#/agent"); } catch (_) {}
+        }
+        return;
+      }
+
+      // 同一路由（含查询参数）重复请求：视图已在位，跳过渲染（避免卸载重挂与重初始化）
+      const routeKey = path + "?" + queryStr;
+      if (routeKey === currentRouteKey && currentView) return;
+
       setActiveNav(route.nav);
 
       const root = document.getElementById("view-root");
@@ -1000,6 +1039,8 @@
         // mount 成功后才记账 currentView：mount 抛错时不把坏视图暴露给后续导航
         view.mount(root, params);
         currentView = view;
+        currentRoutePath = path;
+        currentRouteKey = routeKey;
         // 给视图一个标记，便于下次识别 isFirstRender
         const first = root.firstElementChild;
         if (first) first.setAttribute("data-view-mounted", "1");
