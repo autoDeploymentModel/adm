@@ -32,8 +32,6 @@ declare global {
       partFiles: Record<string, any>;
       downloadingModels: Record<string, any>;
       downloadingMmproj: Record<string, any>;
-      downloadingDiffusion: Record<string, any>;
-      downloadingVae: Record<string, any>;
       modelList: any[];
       modelTypes: any[];
       currentTypeFilter: string;

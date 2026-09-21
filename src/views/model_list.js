@@ -532,19 +532,6 @@ function isModelDownloaded(modelId) {
   const local = S().localModels.find(m => m.model_id === modelId);
   if (!local) return false;
   const model = S().modelList.find(m => m.model_id === modelId);
-  if (model && model.model_type === "文本生成图片") {
-    const mainFile = getUrlFilename(model.model_url);
-    if (mainFile && !local.files.includes(mainFile)) return false;
-    if (model.model_diffusion) {
-      const diffusionFile = getUrlFilename(model.model_diffusion);
-      if (diffusionFile && !local.files.includes(diffusionFile)) return false;
-    }
-    if (model.model_vae) {
-      const vaeFile = getUrlFilename(model.model_vae);
-      if (vaeFile && !local.files.includes(vaeFile)) return false;
-    }
-    return true;
-  }
   if (model && model.model_type === "视觉多模态理解") {
     // 与 Rust start_model 一致：mmproj 文件名两种风格均生效（mmproj-*.gguf / <模型名>.mmproj-*.gguf），大小写不敏感
     return local.files.some(f => f.toLowerCase().includes("mmproj"));
@@ -634,24 +621,18 @@ function renderModelTable() {
     const partSize = st.partFiles[model.model_id];
     const downloadingProgress = st.downloadingModels[model.model_id];
     const isDownloadingMmproj = st.downloadingMmproj[model.model_id];
-    const isDownloadingDiffusion = st.downloadingDiffusion[model.model_id];
-    const isDownloadingVae = st.downloadingVae[model.model_id];
     const safeModelId = escapeHtml(model.model_id);
     let downloadBtnHtml = "";
     if (downloaded) {
       downloadBtnHtml = '';
     } else if (isDownloadingMmproj) {
       downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" disabled>' + _t("下载 mmproj...") + '</button>';
-    } else if (isDownloadingDiffusion) {
-      downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" disabled>' + _t("下载 diffusion...") + '</button>';
-    } else if (isDownloadingVae) {
-      downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" disabled>' + _t("下载 vae...") + '</button>';
     } else if (downloadingProgress !== undefined) {
       downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" disabled>' + downloadingProgress + '%</button>';
     } else if (partSize && partSize > 0) {
-      downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-url="' + escapeHtml(model.model_url) + '" data-model-mmproj="' + escapeHtml(model.model_mmproj || '') + '" data-model-diffusion="' + escapeHtml(model.model_diffusion || '') + '" data-model-vae="' + escapeHtml(model.model_vae || '') + '" data-model-type="' + escapeHtml(model.model_type || '') + '" id="dl-' + safeModelId + '">' + _t("继续下载") + '</button>';
+      downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-url="' + escapeHtml(model.model_url) + '" data-model-mmproj="' + escapeHtml(model.model_mmproj || '') + '" data-model-type="' + escapeHtml(model.model_type || '') + '" id="dl-' + safeModelId + '">' + _t("继续下载") + '</button>';
     } else if (available) {
-      downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-url="' + escapeHtml(model.model_url) + '" data-model-mmproj="' + escapeHtml(model.model_mmproj || '') + '" data-model-diffusion="' + escapeHtml(model.model_diffusion || '') + '" data-model-vae="' + escapeHtml(model.model_vae || '') + '" data-model-type="' + escapeHtml(model.model_type || '') + '" id="dl-' + safeModelId + '">' + _t("下载") + '</button>';
+      downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-url="' + escapeHtml(model.model_url) + '" data-model-mmproj="' + escapeHtml(model.model_mmproj || '') + '" data-model-type="' + escapeHtml(model.model_type || '') + '" id="dl-' + safeModelId + '">' + _t("下载") + '</button>';
     } else {
       downloadBtnHtml = '<button class="btn btn-download" disabled>' + _t("下载") + '</button>';
     }
@@ -660,8 +641,6 @@ function renderModelTable() {
     if (isRunning) {
 actionsHtml = '<button class="btn btn-view" id="view-' + safeModelId + '">' + _t("查看模型") + '</button>';
       actionsHtml += '<button class="btn btn-stop" data-stop-btn="' + safeModelId + '" id="stop-' + safeModelId + '">' + _t("关闭模型") + '</button>';
-    } else if (model.model_type === "文本生成图片" && downloaded) {
-      actionsHtml = '<button class="btn btn-start" id="img-' + safeModelId + '">' + _t("生成图片") + '</button>';
     } else if (downloaded && available) {
       actionsHtml = '<button class="btn btn-start" data-start-btn="' + safeModelId + '" id="start-' + safeModelId + '">' + _t("启动") + '</button>';
     } else if (downloaded) {
@@ -679,7 +658,7 @@ actionsHtml = '<button class="btn btn-view" id="view-' + safeModelId + '">' + _t
     if (model.support_images) features.push('<span class="feature-badge feature-supported">' + _t("图片识别") + '</span>');
     const featuresHtml = features.length > 0 ? '<div class="card-features">' + features.join('') + '</div>' : '';
 
-    const isDownloadingPhase = isDownloadingMmproj || isDownloadingDiffusion || isDownloadingVae;
+    const isDownloadingPhase = isDownloadingMmproj;
     const progressVisible = downloadingProgress !== undefined || isDownloadingPhase;
     const progressValue = downloadingProgress !== undefined ? downloadingProgress : 0;
 
@@ -719,13 +698,6 @@ function bindRowEvents() {
       goModel(modelId);
     });
   });
-  const imgBtns = document.querySelectorAll('#model-grid .btn-start[id^="img-"]');
-  imgBtns.forEach(function(btn) {
-    btn.addEventListener('click', function() {
-      const modelId = btn.id.replace('img-', '');
-      openImageGen(modelId);
-    });
-  });
   const deleteBtns = document.querySelectorAll('#model-grid .btn-delete[data-delete-btn]');
   deleteBtns.forEach(function(btn) {
     btn.addEventListener('click', function() {
@@ -740,8 +712,6 @@ async function handleDownload(btn) {
   const modelUrl = btn.dataset.modelUrl;
   console.log("[model_list] 开始下载模型:", modelId, "URL:", modelUrl);
   const modelMmproj = btn.dataset.modelMmproj || null;
-  const modelDiffusion = btn.dataset.modelDiffusion || null;
-  const modelVae = btn.dataset.modelVae || null;
   const modelType = btn.dataset.modelType || '';
   if (btn) {
     const hasPart = S().partFiles[modelId] && S().partFiles[modelId] > 0;
@@ -750,7 +720,7 @@ async function handleDownload(btn) {
   }
 
   try {
-    await invoke()("download_model", { modelId: modelId, modelUrl: modelUrl, modelMmproj: modelMmproj, modelDiffusion: modelDiffusion, modelVae: modelVae, modelType: modelType });
+    await invoke()("download_model", { modelId: modelId, modelUrl: modelUrl, modelMmproj: modelMmproj, modelType: modelType });
     console.log("[model_list] 下载模型 invoke 完成:", modelId);
   } catch (e) {
     console.error("[model_list] 下载失败:", e);
@@ -810,10 +780,6 @@ async function handleStop(btn) {
   }
 }
 
-function openImageGen(modelId) {
-  location.hash = "#/image?model_id=" + encodeURIComponent(modelId);
-}
-
 function goModel(modelId) {
   const port = S().runningModelPort || 5678;
   // 直接用系统浏览器打开模型 WebUI（壳层 openUrl 走 opener 插件）
@@ -866,14 +832,6 @@ function handleTauriEvent(type, payload) {
         st.downloadingMmproj[model_id] = true;
         const btn = document.querySelector('[data-model-id="' + model_id + '"]');
         if (btn) btn.textContent = "mmproj " + progress + "%" + speedText;
-      } else if (t === "diffusion") {
-        st.downloadingDiffusion[model_id] = progress;
-        const btn = document.querySelector('[data-model-id="' + model_id + '"]');
-        if (btn) btn.textContent = "diffusion " + progress + "%" + speedText;
-      } else if (t === "vae") {
-        st.downloadingVae[model_id] = progress;
-        const btn = document.querySelector('[data-model-id="' + model_id + '"]');
-        if (btn) btn.textContent = "vae " + progress + "%" + speedText;
       } else {
         st.downloadingModels[model_id] = progress;
         const btn = document.querySelector('[data-model-id="' + model_id + '"]');
@@ -899,30 +857,6 @@ function handleTauriEvent(type, payload) {
         }
         delete st.partFiles[model_id];
         renderModelTable();
-      } else if (t === "diffusion") {
-        delete st.downloadingDiffusion[model_id];
-        const model = st.modelList.find(m => m.model_id === model_id);
-        const local = st.localModels.find(m => m.model_id === model_id);
-        const filename = model ? getUrlFilename(model.model_diffusion) : null;
-        if (local && filename) {
-          if (!local.files.includes(filename)) local.files.push(filename);
-        } else if (filename) {
-          st.localModels.push({ model_id: model_id, files: [filename] });
-        }
-        delete st.partFiles[model_id];
-        renderModelTable();
-      } else if (t === "vae") {
-        delete st.downloadingVae[model_id];
-        const model = st.modelList.find(m => m.model_id === model_id);
-        const local = st.localModels.find(m => m.model_id === model_id);
-        const filename = model ? getUrlFilename(model.model_vae) : null;
-        if (local && filename) {
-          if (!local.files.includes(filename)) local.files.push(filename);
-        } else if (filename) {
-          st.localModels.push({ model_id: model_id, files: [filename] });
-        }
-        delete st.partFiles[model_id];
-        renderModelTable();
       } else {
         delete st.downloadingModels[model_id];
         const model = st.modelList.find(m => m.model_id === model_id);
@@ -937,16 +871,6 @@ function handleTauriEvent(type, payload) {
           st.downloadingMmproj[model_id] = true;
           const btn = document.querySelector('[data-model-id="' + model_id + '"]');
           if (btn) { btn.textContent = _t("下载 mmproj..."); btn.disabled = true; }
-          updateProgressBar(model_id, 0);
-        } else if (model && model.model_type === "文本生成图片") {
-          if (local && mainFile) {
-            if (!local.files.includes(mainFile)) local.files.push(mainFile);
-          } else if (mainFile) {
-            st.localModels.push({ model_id: model_id, files: [mainFile] });
-          }
-          delete st.partFiles[model_id];
-          const btn = document.querySelector('[data-model-id="' + model_id + '"]');
-          if (btn) { btn.textContent = _t("下载 diffusion..."); btn.disabled = true; }
           updateProgressBar(model_id, 0);
         } else {
           if (local && mainFile) {
@@ -1028,8 +952,6 @@ async function init() {
     const phases = await invoke()("get_downloading_phases");
     for (const [modelId, phase] of Object.entries(phases)) {
       if (phase === "mmproj") st.downloadingMmproj[modelId] = true;
-      else if (phase === "diffusion") st.downloadingDiffusion[modelId] = true;
-      else if (phase === "vae") st.downloadingVae[modelId] = true;
     }
   } catch (e) { console.error("获取下载阶段信息失败:", e); }
 

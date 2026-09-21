@@ -3,7 +3,7 @@ mod common;
 mod pages;
 
 use app_state::AppState;
-use pages::{agent, index, model_list, model_image, settings, ilink, skills};
+use pages::{agent, index, model_list, settings, ilink, skills};
 
 use tauri::Manager;
 use tauri::menu::{Menu, MenuItem};
@@ -33,26 +33,24 @@ fn show_main_window(app: &tauri::AppHandle) {
     }
 }
 
-/// 清理所有子进程（模型 / SD / Agent / admAgent）。
+/// 清理所有子进程（模型 / Agent / admAgent）。
 /// 从原 `on_window_event(CloseRequested)` 提取，供托盘"退出"和正常关闭复用。
 fn cleanup_processes(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
 
-    // 强杀记录中的模型/SD 进程（整棵进程树）
+    // 强杀记录中的模型进程（整棵进程树）
     let pid_opt = state.running_process.lock().ok().and_then(|l| *l);
     if let Some(pid) = pid_opt {
         crate::common::utils::platform::kill_process_tree(pid);
     }
-    // 兜底：按进程名清理任何残留的 llama-server / SD 子进程
+    // 兜底：按进程名清理任何残留的 llama-server 子进程
     #[cfg(target_os = "windows")]
     {
         crate::common::utils::platform::kill_process_by_name("llama-server.exe");
-        crate::common::utils::platform::kill_process_by_name("sd-cli.exe");
     }
     #[cfg(not(target_os = "windows"))]
     {
         crate::common::utils::platform::kill_process_by_name("llama-server");
-        crate::common::utils::platform::kill_process_by_name("sd-cli");
     }
 
     // 关闭 Agent 会话（只杀本进程拉起的 admAgent server 子进程；复用的共享
@@ -174,12 +172,6 @@ pub fn run() {
             model_list::delete_local_model,
             model_list::get_downloading_models,
             model_list::get_downloading_phases,
-            // model_image.rs
-            model_image::get_sd_status,
-            model_image::download_and_extract_sd,
-            model_image::start_sd_generation,
-            model_image::stop_sd,
-            model_image::save_sd_image_as,
             // settings.rs
             settings::save_settings,
             settings::load_settings,

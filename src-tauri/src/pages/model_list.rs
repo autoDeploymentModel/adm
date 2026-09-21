@@ -151,8 +151,6 @@ pub async fn download_model(
     model_id: String,
     model_url: String,
     model_mmproj: Option<String>,
-    model_diffusion: Option<String>,
-    model_vae: Option<String>,
     model_type: String,
 ) -> Result<(), AppError> {
     {
@@ -235,24 +233,6 @@ pub async fn download_model(
             download_extra_file(
                 &app, &model_id, &model_dir, &mmproj_url,
                 &download_client, "mmproj"
-            ).await?;
-        }
-    }
-
-    // ===== 文生图：diffusion + vae 文件下载 =====
-    if model_type == "文本生成图片" {
-        if let Some(diffusion_url) = model_diffusion {
-            app.state::<AppState>().downloading_phase.lock().unwrap_or_else(|e| e.into_inner()).insert(model_id.clone(), "diffusion".to_string());
-            download_extra_file(
-                &app, &model_id, &model_dir, &diffusion_url,
-                &download_client, "diffusion"
-            ).await?;
-        }
-        if let Some(vae_url) = model_vae {
-            app.state::<AppState>().downloading_phase.lock().unwrap_or_else(|e| e.into_inner()).insert(model_id.clone(), "vae".to_string());
-            download_extra_file(
-                &app, &model_id, &model_dir, &vae_url,
-                &download_client, "vae"
             ).await?;
         }
     }

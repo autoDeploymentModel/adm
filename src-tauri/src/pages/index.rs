@@ -47,7 +47,7 @@ fn extract_nvidia_series(gpu_name: &str) -> Option<u32> {
 #[cfg(target_os = "windows")]
 const VC_RUNTIME_DLLS: [&str; 3] = ["vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll"];
 
-/// 判定 VC++ 运行库是否可满足 llama-server / sd-cli 启动。
+/// 判定 VC++ 运行库是否可满足 llama-server 启动。
 /// 按 Windows 加载器顺序检查：先找可执行文件同目录（应用级部署的 DLLs），
 /// 再找 System32（官方安装包的落点）；三个 DLL 全部命中才算安装完整。
 #[cfg(target_os = "windows")]

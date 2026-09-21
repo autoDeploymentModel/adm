@@ -28,7 +28,7 @@ pub fn spawn_detached(cmd: &mut std::process::Command) -> std::io::Result<std::p
     cmd.spawn()
 }
 
-/// 强杀整个进程树（含子进程），避免 llama-server / SD 派生的子进程残留为孤儿。
+/// 强杀整个进程树（含子进程），避免 llama-server 派生的子进程残留为孤儿。
 ///
 /// - Windows: `taskkill /PID <pid> /T /F`
 /// - Unix: 先尝试按进程组（kill -9 -<pgid>），失败再直接 kill PID
@@ -419,73 +419,6 @@ fn parse_mac_vram(s: &str) -> Option<u64> {
     let v: f64 = num.parse().ok()?;
     Some((v * mult as f64) as u64)
 }
-
-pub fn detect_gpu_vendor() -> Option<String> {
-    #[cfg(target_os = "windows")]
-    {
-        // 使用 PowerShell Get-CimInstance 替代已弃用的 wmic
-        if let Ok(output) = create_hidden_command("powershell")
-            .args([
-                "-NoProfile", "-NonInteractive", "-Command",
-                "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name",
-            ])
-            .output()
-        {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let mut nvidia_found = None;
-            let mut amd_found = None;
-            let mut intel_found = None;
-
-            for line in stdout.lines() {
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                let lower = trimmed.to_lowercase();
-                if lower.contains("nvidia")
-                    || lower.contains("geforce")
-                    || lower.contains("rtx")
-                    || lower.contains("gtx")
-                {
-                    nvidia_found = Some(());
-                } else if lower.contains("amd") || lower.contains("radeon") {
-                    amd_found = Some(());
-                } else if lower.contains("intel") {
-                    intel_found = Some(());
-                }
-            }
-
-            if nvidia_found.is_some() {
-                return Some("nvidia".to_string());
-            } else if amd_found.is_some() {
-                return Some("amd".to_string());
-            } else if intel_found.is_some() {
-                return Some("intel".to_string());
-            }
-        }
-        return None;
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        if let Ok(output) = std::process::Command::new("system_profiler")
-            .args(["SPDisplaysDataType"])
-            .output()
-        {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if stdout.contains("Chipset Model") || stdout.contains("Metal") {
-                return Some("apple".to_string());
-            }
-        }
-        None
-    }
-
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        None
-    }
-}
-
 
 /// 虚拟/远程显示设备识别（向日葵 OrayIdDDriver、微软基础适配器、Hyper-V、VMware、VBox、
 /// 间接显示驱动等）：这些设备没有真实显存，混入下拉列表/自动选卡会造成误导。
