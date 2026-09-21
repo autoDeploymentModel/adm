@@ -38,6 +38,46 @@ else
 fi
 
 HERE=$(cd "$(dirname "$0")" && pwd)
+
+# ---- 运行环境预检 ----
+# Windows 上请在 Git Bash 里执行：WSL 发行版里的 docker CLI 有两个坑
+#   1) Docker Desktop 注入的凭证助手是 Windows 可执行文件，发行版没开 interop 时会报
+#      error getting credentials - err: fork/exec /usr/bin/docker-credential-desktop.exe: exec format error
+#   2) WSL 内的 docker CLI 直连 Docker Hub 常不通（需单独给 docker CLI 配代理），
+#      会在 load metadata for docker.io/pytorch/... 处 i/o timeout
+# 第 1 条这里自动绕过（改用去掉 credsStore 的临时配置，保留 auths；KEEP_DOCKER_CREDS=1 可跳过），
+# 第 2 条只提示 —— 最省事的做法是在 Windows 的 Git Bash 里跑本脚本。
+if [ -e /proc/version ] && grep -qi microsoft /proc/version 2>/dev/null; then
+    echo "[build] 提示: 当前在 WSL 里执行。若卡在 docker.io 元数据解析（i/o timeout），" >&2
+    echo "[build]       请改用 Windows 的 Git Bash 执行本脚本（Docker Desktop 的网络/代理设置才生效）" >&2
+fi
+
+if [ "${KEEP_DOCKER_CREDS:-0}" != "1" ]; then
+    _cfg="${DOCKER_CONFIG:-$HOME/.docker}/config.json"
+    if [ -f "$_cfg" ]; then
+        _helper=$(sed -n 's/.*"credsStore"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$_cfg" | head -n 1)
+        if [ -n "$_helper" ] && ! "docker-credential-$_helper" version >/dev/null 2>&1; then
+            echo "[build] 凭证助手 docker-credential-$_helper 无法执行 → 本次构建改用去掉 credsStore 的临时配置"
+            _tmpcfg=$(mktemp -d)
+            if command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1; then
+                _py=$(command -v python3 || command -v python)
+                "$_py" - "$_cfg" "$_tmpcfg/config.json" <<'PY'
+import json, sys
+src, dst = sys.argv[1], sys.argv[2]
+cfg = json.load(open(src))
+cfg.pop("credsStore", None)
+cfg.pop("credHelpers", None)
+json.dump(cfg, open(dst, "w"), indent=2)
+PY
+            else
+                printf '{}\n' > "$_tmpcfg/config.json"
+            fi
+            DOCKER_CONFIG="$_tmpcfg"
+            export DOCKER_CONFIG
+        fi
+    fi
+fi
+
 TAG="${1:-comfyui-qwen-image-2.1:latest}"
 if [ $# -gt 0 ]; then
     shift

@@ -39,7 +39,34 @@ if [ ! -e "$SETTINGS_FILE" ]; then
     echo "[comfyui] 已写入默认界面设置（跳过新手引导）"
 fi
 
-echo "[comfyui] 提示：左侧「工作流」里有内置的 adm-qwen-image-2.1-t2i（文生图）与 adm-qwen-image-2.1-image-edit（图生图/改图）"
-echo "[comfyui] ${PY} main.py --listen ${LISTEN} --port ${PORT} $*"
+# 锁页内存（pinned memory）在 WSL2 的 CUDA 直通下会卡死：第二次生成时文本编码器重新 staged，
+# 取权重时线程会永久阻塞在 cudaHostRegister（comfy/pinned_memory.py 的 get_pin）里 —— 表现为
+# CPU/GPU 都空闲、无任何报错、队列一直停在 running。所以在 WSL 里默认关掉它（速度无影响，
+# 本机实测 18s/张；动态显存 DynamicVRAM 仍然保留）。
+# COMFYUI_PINNED_MEMORY：auto（默认，仅 WSL 关）/ 0（所有平台都关）/ 1（强制保留）
+PINNED_MEMORY="${COMFYUI_PINNED_MEMORY:-auto}"
+EXTRA_ARGS=""
+WSL_DETECTED=0
+if [ -e /usr/lib/wsl/lib/libcuda.so ] || grep -qi microsoft /proc/version 2>/dev/null; then
+    WSL_DETECTED=1
+fi
+case "$PINNED_MEMORY" in
+    1|true|yes|on)
+        ;;
+    *)
+        if [ "$WSL_DETECTED" = "1" ] || [ "$PINNED_MEMORY" = "0" ] || [ "$PINNED_MEMORY" = "false" ]; then
+            case " $* " in
+                *" --disable-pinned-memory "*) ;;
+                *)
+                    EXTRA_ARGS="--disable-pinned-memory"
+                    echo "[comfyui] 已追加 --disable-pinned-memory（WSL2 下 cudaHostRegister 会导致第二次生成卡死；COMFYUI_PINNED_MEMORY=1 可强制保留）"
+                    ;;
+            esac
+        fi
+        ;;
+esac
 
-exec "$PY" main.py --listen "$LISTEN" --port "$PORT" "$@"
+echo "[comfyui] 提示：左侧「工作流」里有内置的 adm-qwen-image-2.1-t2i（文生图）与 adm-qwen-image-2.1-image-edit（图生图/改图）"
+echo "[comfyui] ${PY} main.py --listen ${LISTEN} --port ${PORT} ${EXTRA_ARGS} $*"
+
+exec "$PY" main.py --listen "$LISTEN" --port "$PORT" $EXTRA_ARGS "$@"

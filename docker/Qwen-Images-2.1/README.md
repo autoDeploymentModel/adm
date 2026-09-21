@@ -187,6 +187,13 @@ docker run -d --name comfyui --gpus all -p 8188:8188 --shm-size 8g \
 
 容器启动时（entrypoint）会自动：把两份内置工作流装到 `user/default/workflows/`（同名已存在则不覆盖你的修改）、写入默认界面设置跳过新手引导、按环境变量固定监听地址与端口。
 
+> **WSL2（Windows + Docker Desktop）会自动追加 `--disable-pinned-memory`**：该环境下 CUDA 的
+> `cudaHostRegister`（锁页内存）会卡死 —— 表现为**第一次生成正常、第二次生成卡住不动**（CPU/GPU
+> 都空闲、无报错、队列停在 running），卡点在文本编码器重新 staged 时取权重的驱动调用里。
+> 关掉锁页内存后速度无影响（实测 18s/张），动态显存 DynamicVRAM 仍然保留。
+> 需要保留锁页内存时用 `-e COMFYUI_PINNED_MEMORY=1`；想在其它平台也关掉用 `=0`。
+> 若只想换一种规避方式，也可以启动时加 `--disable-dynamic-vram`（退回传统显存管理，略慢）。
+
 ## 在 ComfyUI 里使用
 
 镜像内置两份可直接运行的工作流（容器启动时自动装载到 `user/default/workflows/`，已存在则不覆盖你的修改）：
