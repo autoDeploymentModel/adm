@@ -235,8 +235,8 @@ const EN = {
   // ===== model_list.js =====
   "模型列表": "Model List",
   "类型": "Type",
-  "模型类型": "Model Type",
-  "全部模型": "All Models",
+  "纯文本模型": "Text Model",
+  "图片生成模型": "Image Model",
   "正在加载模型列表...": "Loading model list...",
   "确认删除": "Confirm Delete",
   "确定要删除此模型吗？删除后无法恢复。": "Delete this model? This cannot be undone.",

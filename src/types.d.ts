@@ -33,7 +33,6 @@ declare global {
       downloadingModels: Record<string, any>;
       downloadingMmproj: Record<string, any>;
       modelList: any[];
-      modelTypes: any[];
       currentTypeFilter: string;
       [key: string]: any;
     };

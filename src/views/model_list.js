@@ -108,6 +108,12 @@ const template = `
     color: var(--c-text-2);
   }
 
+  .card-desc {
+    font-size: 12px;
+    color: var(--c-text-3);
+    line-height: 1.5;
+  }
+
   .card-features {
     display: flex;
     flex-wrap: wrap;
@@ -394,44 +400,44 @@ const template = `
     flex-shrink: 0;
   }
 
-  .filter-bar label {
+  .model-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 3px;
+    background: var(--c-panel);
+    border: 1px solid var(--c-border);
+    border-radius: 8px;
+    flex-shrink: 0;
+  }
+
+  .model-tab {
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 14px;
     font-size: 13px;
     color: var(--c-text-2);
-    white-space: nowrap;
-  }
-
-  .filter-bar select {
-    background: var(--c-panel);
-    color: var(--c-text);
-    border: 1px solid var(--c-border);
-    border-radius: 6px;
-    padding: 6px 12px;
-    font-size: 13px;
-    outline: none;
     cursor: pointer;
-    min-width: 160px;
+    transition: background 0.2s, color 0.2s;
   }
 
-  .filter-bar select:focus {
-    border-color: var(--c-accent);
+  .model-tab:hover {
+    color: var(--c-text-hi);
   }
 
-  .filter-bar .model-desc-text {
-    font-size: 13px;
-    color: var(--c-text-3);
-    padding: 6px 0;
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .model-tab.active {
+    background: var(--c-accent);
+    color: #fff;
   }
 </style>
 <div id="model-list-root">
 <div class="page-title">${_t("模型列表")}</div>
 <div class="filter-bar">
-  <label for="model-type-select">${_t("模型类型")}</label>
-  <select id="model-type-select"></select>
-  <span class="model-desc-text" id="model-desc-text"></span>
+  <div class="model-tabs" id="model-tabs">
+    <button type="button" class="model-tab" data-tab="text">${_t("纯文本模型")}</button>
+    <button type="button" class="model-tab" data-tab="vision">${_t("多模态模型")}</button>
+    <button type="button" class="model-tab" data-tab="image">${_t("图片生成模型")}</button>
+  </div>
 </div>
 <main>
   <div class="card-grid" id="model-grid">
@@ -549,44 +555,42 @@ function showToast(message) {
   setTimeout(() => toast.remove(), 3000);
 }
 
-function updateModelDesc() {
-  const descSpan = document.getElementById("model-desc-text");
-  if (S().currentTypeFilter === "all") {
-    descSpan.textContent = "";
-    return;
-  }
-  const match = S().modelList.find(function(m) { return m.model_type === S().currentTypeFilter; });
-  descSpan.textContent = match && match.model_description ? match.model_description : "";
+// 首页模型类型 TAB：按远端 model_list.json 的 model_type 归类；types 内含新旧名称，
+// 兼容历史数据（如「文本生成」与「纯文本模型」视为同一类）。未匹配到的类型归入
+// 第一个 TAB，避免将来新增类型时模型在首页凭空消失。
+const MODEL_TABS = [
+  { key: "text",   types: ["文本生成", "纯文本模型", "纯文本"] },
+  { key: "vision", types: ["视觉多模态理解", "多模态模型", "多模态"] },
+  { key: "image",  types: ["文本生成图片", "图片生成模型", "文生图"] },
+];
+
+function getModelTab(modelType) {
+  const type = (modelType || "").trim();
+  const tab = MODEL_TABS.find(function(item) { return item.types.includes(type); });
+  return (tab || MODEL_TABS[0]).key;
 }
 
 function getFilteredModelList() {
-  if (S().currentTypeFilter === "all") return S().modelList;
-  return S().modelList.filter(function(m) { return m.model_type === S().currentTypeFilter; });
+  return S().modelList.filter(function(m) { return getModelTab(m.model_type) === S().currentTypeFilter; });
 }
 
-async function populateTypeFilter() {
-  try {
-    const resp = await fetch("model_types.json");
-    S().modelTypes = await resp.json();
-  } catch (e) {
-    console.error("加载模型类型列表失败:", e);
-    S().modelTypes = [];
-  }
+function syncModelTabUI() {
+  document.querySelectorAll("#model-tabs .model-tab").forEach(function(btn) {
+    btn.classList.toggle("active", btn.dataset.tab === S().currentTypeFilter);
+  });
+}
 
-  var select = document.getElementById("model-type-select");
-  select.innerHTML = "";
-  S().modelTypes.forEach(function(item) {
-    var opt = document.createElement("option");
-    opt.value = item.type === "全部模型" ? "all" : item.type;
-    opt.textContent = item.type === "全部模型" ? _t("全部模型") : item.type;
-    select.appendChild(opt);
+function initModelTabs() {
+  const tabs = document.querySelectorAll("#model-tabs .model-tab");
+  syncModelTabUI();
+  tabs.forEach(function(btn) {
+    btn.addEventListener("click", function() {
+      if (S().currentTypeFilter === btn.dataset.tab) return;
+      S().currentTypeFilter = btn.dataset.tab;
+      syncModelTabUI();
+      renderModelTable();
+    });
   });
-  select.addEventListener("change", function() {
-    S().currentTypeFilter = this.value;
-    updateModelDesc();
-    renderModelTable();
-  });
-  updateModelDesc();
 }
 
 function renderModelTable() {
@@ -657,6 +661,7 @@ actionsHtml = '<button class="btn btn-view" id="view-' + safeModelId + '">' + _t
     if (model.support_reasoning) features.push('<span class="feature-badge feature-supported">' + _t("推理") + '</span>');
     if (model.support_images) features.push('<span class="feature-badge feature-supported">' + _t("图片识别") + '</span>');
     const featuresHtml = features.length > 0 ? '<div class="card-features">' + features.join('') + '</div>' : '';
+    const descHtml = model.model_description ? '<div class="card-desc">' + escapeHtml(model.model_description) + '</div>' : '';
 
     const isDownloadingPhase = isDownloadingMmproj;
     const progressVisible = downloadingProgress !== undefined || isDownloadingPhase;
@@ -665,6 +670,7 @@ actionsHtml = '<button class="btn btn-view" id="view-' + safeModelId + '">' + _t
     card.innerHTML =
       '<div class="card-header"><span class="model-name" title="' + safeModelId + '">' + escapeHtml(model.model_id) + '</span>' + statusHtml + '</div>' +
       '<div class="card-meta">' + escapeHtml(model.model_type || '-') + ' · ' + escapeHtml(model.model_size) + ' · ' + _t("需内存 ") + escapeHtml(model.need_ram) + _t(" GB") + '</div>' +
+      descHtml +
       featuresHtml +
       '<div class="card-actions">' + downloadBtnHtml + actionsHtml + '</div>' +
       '<div class="card-progress" data-progress-wrap="' + safeModelId + '" style="display:' + (progressVisible ? 'block' : 'none') + ';">' +
@@ -969,7 +975,7 @@ if (status.running) {
     showToast(friendlyError(e, { prefix: "获取模型列表失败: " }));
   }
 
-  await populateTypeFilter();
+  initModelTabs();
   renderModelTable();
   console.log("[model_list] init() 完成, 模型数量:", st.modelList.length);
 }
@@ -991,7 +997,12 @@ export default {
   mount(root) {
     console.log("[model_list] mount()");
     root.innerHTML = template;
-S().currentTypeFilter = "all";
+    // TAB 选择跨视图保留；兼容旧值/非法值时回退到第一个 TAB
+    if (!MODEL_TABS.some(function(tab) { return tab.key === S().currentTypeFilter; })) {
+      S().currentTypeFilter = MODEL_TABS[0].key;
+    }
+    // 列表数据异步加载，先同步 TAB 高亮，避免加载期间三个 TAB 均无选中态
+    syncModelTabUI();
 
     // 禁用页面右键（屏蔽浏览器默认菜单，删除弹窗在根容器内一并覆盖）
     var listRoot = document.getElementById("model-list-root");
