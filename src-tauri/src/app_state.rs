@@ -1,3 +1,4 @@
+use crate::common::types::DockerTask;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
@@ -22,6 +23,12 @@ pub struct AppState {
     pub running_process: Mutex<Option<u32>>,
     pub running_model_id: Mutex<Option<String>>,
     pub running_port: Mutex<Option<u16>>,
+    /// 当前运行模型的类型：None=无 / Some("process")=llama-server / Some("docker")=图片生成容器
+    pub running_kind: Mutex<Option<String>>,
+    /// docker 部署时记录的容器名（
+    pub running_container: Mutex<Option<String>>,
+    /// docker 长任务进度（model_id -> 任务），供 UI 重载后恢复
+    pub docker_tasks: Mutex<HashMap<String, DockerTask>>,
     pub downloading_progress: Mutex<HashMap<String, u8>>,
     pub downloading_phase: Mutex<HashMap<String, String>>,
     pub sys: Mutex<System>,
@@ -48,6 +55,9 @@ impl AppState {
             running_process: Mutex::new(None),
             running_model_id: Mutex::new(None),
             running_port: Mutex::new(None),
+            running_kind: Mutex::new(None),
+            running_container: Mutex::new(None),
+            docker_tasks: Mutex::new(HashMap::new()),
             downloading_progress: Mutex::new(HashMap::new()),
             downloading_phase: Mutex::new(HashMap::new()),
             sys: Mutex::new(System::new_all()),
@@ -78,6 +88,8 @@ impl AppState {
         *self.running_process.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.running_model_id.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.running_port.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *self.running_kind.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *self.running_container.lock().unwrap_or_else(|e| e.into_inner()) = None;
         *self.model_running.lock().unwrap_or_else(|e| e.into_inner()) = false;
         *self.model_supports_images.lock().unwrap_or_else(|e| e.into_inner()) = false;
         *self.model_supports_reasoning.lock().unwrap_or_else(|e| e.into_inner()) = false;

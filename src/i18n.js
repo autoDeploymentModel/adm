@@ -265,6 +265,20 @@ const EN = {
   "模型错误 [": "Model error [",
   "获取模型列表失败: ": "Failed to fetch model list: ",
   "完成": "Done",
+  // ----- 图片生成模型：docker 部署 -----
+  "检查环境中...": "Checking environment...",
+  "准备安装 Docker...": "Preparing Docker install...",
+  "安装 Docker 运行环境": "Install Docker runtime",
+  "未检测到 Docker。是否自动下载并安装 Docker Desktop？（安装包约 600MB~1GB，安装时可能弹出系统授权窗口）": "Docker was not detected. Download and install Docker Desktop automatically? (installer is ~600MB-1GB; a system authorization dialog may appear)",
+  "下载并安装": "Download and install",
+  "处理中...": "Working...",
+  "正在检查 Docker 环境…": "Checking Docker environment...",
+  "镜像下载完成": "Image downloaded",
+  "镜像已就绪": "Image is ready",
+  "已启动：请在 ComfyUI 左侧「工作流」中选择 adm-qwen-image-2.1-t2i（文生图）或 adm-qwen-image-2.1-image-edit（图生图）": "Started. Pick \"adm-qwen-image-2.1-t2i\" (text to image) or \"adm-qwen-image-2.1-image-edit\" (image editing) from the ComfyUI workflow list.",
+  "关闭中...": "Stopping...",
+  "检测到图片生成模型仍在运行（上次未正常退出）": "An image generation model is still running (the app did not exit cleanly last time)",
+  "\" 的本地镜像吗？删除后再次使用需重新下载。": "\"? You will need to download it again to use it.",
 
   // ===== agent 视图（agent.js / template.js / ui.js / sse.js 等）=====
   "Agent": "Agent",

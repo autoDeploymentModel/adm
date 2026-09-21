@@ -1,10 +1,13 @@
 #!/bin/sh
 # 克隆 GitHub 仓库，直连失败时自动回退国内镜像（镜像构建阶段使用）
 #
-# 用法： clone-repo.sh <git-ref> <目标目录> <主 URL>
+# 用法： clone-repo.sh <git-ref> <目标目录> <主 URL> [预置源码目录]
 # 环境变量：
 #   GIT_MIRROR_PREFIXES  镜像前缀列表（空白分隔，形如 https://ghfast.top/），
 #                        最终地址为 <前缀><主 URL>；设置后替换内置列表
+#
+# 预置源码目录（第 4 个参数，可选）：由 export-cache.sh 从已有镜像导出的 sources/ 目录，
+# 存在时直接拷贝、完全不联网（目标目录已有内容则跳过）；为空时才是普通的 git clone。
 #
 # 内置镜像实测可用（git smart HTTP 可协商成功）：ghfast.top / ghproxy.net / gh-proxy.com；
 # 实测不可用未收录：gitclone.com（空响应）、kkgithub.com（证书不匹配）。
@@ -13,7 +16,20 @@ set -eu
 REF="$1"
 DEST="$2"
 PRIMARY_URL="$3"
+SEED_DIR="${4:-}"
 MIRROR_PREFIXES="${GIT_MIRROR_PREFIXES:-https://ghfast.top/ https://ghproxy.net/ https://gh-proxy.com/}"
+
+# 预置源码优先：本地缓存里已有这份代码时直接拷，既快又不依赖网络
+if [ -n "$SEED_DIR" ] && [ -d "$SEED_DIR" ] && [ -n "$(ls -A "$SEED_DIR" 2>/dev/null)" ]; then
+    if [ -n "$(ls -A "$DEST" 2>/dev/null)" ]; then
+        echo "[git-clone] 目标目录已由预置源码填充，跳过: $DEST"
+    else
+        echo "[git-clone] 使用预置源码（不联网）: $SEED_DIR → $DEST"
+        mkdir -p "$DEST"
+        cp -a "$SEED_DIR/." "$DEST/"
+    fi
+    exit 0
+fi
 
 try_clone() {
     url="$1"

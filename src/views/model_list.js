@@ -456,6 +456,16 @@ const template = `
     </div>
   </div>
 </div>
+<div id="docker-modal" class="modal-overlay" style="display:none;">
+  <div class="modal-box">
+    <h3 id="docker-modal-title">${_t("安装 Docker 运行环境")}</h3>
+    <p id="docker-modal-msg"></p>
+    <div class="modal-actions">
+      <button class="btn btn-cancel" id="docker-modal-cancel">${_t("取消")}</button>
+      <button class="btn btn-start" id="docker-modal-confirm">${_t("继续")}</button>
+    </div>
+  </div>
+</div>
 </div>
 `;
 
@@ -519,6 +529,79 @@ function escapeHtml(s) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+// ===== 图片生成模型（docker 部署）=====
+// model_list.json 里 model_images 有值的模型走 docker 流程：
+// 检查 Docker →（未安装）下载/安装 Docker Desktop → 拉镜像 → 启动容器（64646 → 8188）
+
+function isDockerModel(model) {
+  return !!(model && model.model_images);
+}
+
+function getDockerState() {
+  const st = S();
+  if (!st.dockerImages) st.dockerImages = {};
+  if (!st.dockerTasks) st.dockerTasks = {};
+  return st;
+}
+
+async function refreshDockerImages() {
+  const st = getDockerState();
+  const list = (st.modelList || []).filter(isDockerModel);
+  for (const m of list) {
+    try {
+      st.dockerImages[m.model_id] = await invoke()("check_docker_image", { image: m.model_images });
+    } catch (e) {
+      console.warn("[model_list] 查询本地镜像失败:", e);
+      st.dockerImages[m.model_id] = false;
+    }
+  }
+}
+
+// 启动时对账：上次被强杀/崩溃时容器会残留（--restart unless-stopped），
+// 逐个查询容器状态，仍在运行则恢复「已启动」显示
+async function refreshDockerRunning() {
+  const st = getDockerState();
+  const list = (st.modelList || []).filter(isDockerModel);
+  for (const m of list) {
+    try {
+      const running = await invoke()("sync_docker_container", { modelId: m.model_id });
+      if (running) {
+        if (st.runningModelId !== m.model_id) {
+          st.runningModelId = m.model_id;
+          // 端口以后端为准（sync 已写入 running_port），取不到再回退默认值
+          try {
+            const status = await invoke()("get_model_status");
+            st.runningModelPort = (status && status.port) || 64646;
+          } catch (_) {
+            st.runningModelPort = 64646;
+          }
+          showToast(_t("检测到图片生成模型仍在运行（上次未正常退出）"));
+        }
+        return;
+      }
+    } catch (e) {
+      console.warn("[model_list] 同步容器状态失败:", e);
+    }
+  }
+}
+
+let dockerConfirmResolve = null;
+function showDockerConfirm(title, msg, confirmText) {
+  return new Promise(function(resolve) {
+    dockerConfirmResolve = resolve;
+    document.getElementById("docker-modal-title").textContent = title;
+    document.getElementById("docker-modal-msg").textContent = msg;
+    document.getElementById("docker-modal-confirm").textContent = confirmText || _t("继续");
+    document.getElementById("docker-modal").style.display = "flex";
+  });
+}
+function hideDockerConfirm(ok) {
+  document.getElementById("docker-modal").style.display = "none";
+  const r = dockerConfirmResolve;
+  dockerConfirmResolve = null;
+  if (r) r(!!ok);
 }
 
 function isModelAvailable(needRam) {
@@ -607,7 +690,10 @@ function renderModelTable() {
 
   filteredList.forEach((model) => {
     const available = isModelAvailable(model.need_ram);
-    const downloaded = isModelDownloaded(model.model_id);
+    const isDocker = isDockerModel(model);
+    const dockerImages = st.dockerImages || {};
+    const downloaded = isDocker ? !!dockerImages[model.model_id] : isModelDownloaded(model.model_id);
+    const dockerTask = isDocker ? (st.dockerTasks || {})[model.model_id] : null;
     const isRunning = st.runningModelId === model.model_id;
 
     const card = document.createElement("div");
@@ -627,7 +713,19 @@ function renderModelTable() {
     const isDownloadingMmproj = st.downloadingMmproj[model.model_id];
     const safeModelId = escapeHtml(model.model_id);
     let downloadBtnHtml = "";
-    if (downloaded) {
+    if (isDocker) {
+      // 图片生成模型：downloaded = 本地已有镜像；dockerTask 存在 = 正在安装/下载
+      if (dockerTask) {
+        downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" disabled>' +
+          escapeHtml(dockerTask.message || _t("处理中...")) + ' ' + (dockerTask.progress || 0) + '%</button>';
+      } else if (downloaded) {
+        downloadBtnHtml = '';
+      } else if (available) {
+        downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-image="' + escapeHtml(model.model_images || '') + '" data-docker="1" id="dl-' + safeModelId + '">' + _t("下载") + '</button>';
+      } else {
+        downloadBtnHtml = '<button class="btn btn-download" disabled>' + _t("下载") + '</button>';
+      }
+    } else if (downloaded) {
       downloadBtnHtml = '';
     } else if (isDownloadingMmproj) {
       downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" disabled>' + _t("下载 mmproj...") + '</button>';
@@ -641,19 +739,20 @@ function renderModelTable() {
       downloadBtnHtml = '<button class="btn btn-download" disabled>' + _t("下载") + '</button>';
     }
 
+    const dockerAttr = isDocker ? ' data-model-image="' + escapeHtml(model.model_images || '') + '" data-docker="1"' : '';
     let actionsHtml = "";
     if (isRunning) {
-actionsHtml = '<button class="btn btn-view" id="view-' + safeModelId + '">' + _t("查看模型") + '</button>';
-      actionsHtml += '<button class="btn btn-stop" data-stop-btn="' + safeModelId + '" id="stop-' + safeModelId + '">' + _t("关闭模型") + '</button>';
+      actionsHtml = '<button class="btn btn-view" id="view-' + safeModelId + '">' + _t("查看模型") + '</button>';
+      actionsHtml += '<button class="btn btn-stop" data-stop-btn="' + safeModelId + '"' + dockerAttr + ' id="stop-' + safeModelId + '">' + _t("关闭模型") + '</button>';
     } else if (downloaded && available) {
-      actionsHtml = '<button class="btn btn-start" data-start-btn="' + safeModelId + '" id="start-' + safeModelId + '">' + _t("启动") + '</button>';
+      actionsHtml = '<button class="btn btn-start" data-start-btn="' + safeModelId + '"' + dockerAttr + ' id="start-' + safeModelId + '">' + _t("启动") + '</button>';
     } else if (downloaded) {
       actionsHtml = '<button class="btn btn-start" disabled>' + _t("启动") + '</button>';
     } else {
       actionsHtml = '';
     }
     if (downloaded && !isRunning) {
-      actionsHtml += '<button class="btn btn-delete" data-delete-btn="' + safeModelId + '">' + _t("删除") + '</button>';
+      actionsHtml += '<button class="btn btn-delete" data-delete-btn="' + safeModelId + '"' + dockerAttr + '>' + _t("删除") + '</button>';
     }
 
     const features = [];
@@ -664,8 +763,8 @@ actionsHtml = '<button class="btn btn-view" id="view-' + safeModelId + '">' + _t
     const descHtml = model.model_description ? '<div class="card-desc">' + escapeHtml(model.model_description) + '</div>' : '';
 
     const isDownloadingPhase = isDownloadingMmproj;
-    const progressVisible = downloadingProgress !== undefined || isDownloadingPhase;
-    const progressValue = downloadingProgress !== undefined ? downloadingProgress : 0;
+    const progressVisible = downloadingProgress !== undefined || isDownloadingPhase || !!dockerTask;
+    const progressValue = dockerTask ? (dockerTask.progress || 0) : (downloadingProgress !== undefined ? downloadingProgress : 0);
 
     card.innerHTML =
       '<div class="card-header"><span class="model-name" title="' + safeModelId + '">' + escapeHtml(model.model_id) + '</span>' + statusHtml + '</div>' +
@@ -687,15 +786,24 @@ function bindRowEvents() {
   const st = S();
   const dlBtns = document.querySelectorAll('#model-grid .btn-download:not(.downloaded):not([disabled])');
   dlBtns.forEach(function(btn) {
-    btn.addEventListener('click', function() { handleDownload(btn); });
+    btn.addEventListener('click', function() {
+      if (btn.dataset.docker === '1') handleDockerDownload(btn);
+      else handleDownload(btn);
+    });
   });
   const startBtns = document.querySelectorAll('#model-grid .btn-start[data-start-btn]');
   startBtns.forEach(function(btn) {
-    btn.addEventListener('click', function() { handleStart(btn); });
+    btn.addEventListener('click', function() {
+      if (btn.dataset.docker === '1') handleDockerStart(btn);
+      else handleStart(btn);
+    });
   });
   const stopBtns = document.querySelectorAll('#model-grid .btn-stop[data-stop-btn]');
   stopBtns.forEach(function(btn) {
-    btn.addEventListener('click', function() { handleStop(btn); });
+    btn.addEventListener('click', function() {
+      if (btn.dataset.docker === '1') handleDockerStop(btn);
+      else handleStop(btn);
+    });
   });
   const viewBtns = document.querySelectorAll('#model-grid .btn-view');
   viewBtns.forEach(function(btn) {
@@ -708,7 +816,8 @@ function bindRowEvents() {
   deleteBtns.forEach(function(btn) {
     btn.addEventListener('click', function() {
       const modelId = btn.dataset.deleteBtn;
-      showDeleteConfirm(modelId);
+      if (btn.dataset.docker === '1') showDeleteConfirm(modelId, { docker: true, image: btn.dataset.modelImage });
+      else showDeleteConfirm(modelId);
     });
   });
 }
@@ -792,11 +901,106 @@ function goModel(modelId) {
   window.openUrl("http://127.0.0.1:" + port);
 }
 
-function showDeleteConfirm(modelId) {
+// ===== 图片生成模型（docker 部署）操作 =====
+
+async function handleDockerDownload(btn) {
+  const modelId = btn.dataset.modelId;
+  const image = btn.dataset.modelImage;
+  const st = getDockerState();
+  console.log("[model_list] docker 下载模型:", modelId, "image:", image);
+  btn.disabled = true;
+  btn.textContent = _t("检查环境中...");
+  try {
+    const env = await invoke()("check_docker_env");
+    if (!env.installed) {
+      const ok = await showDockerConfirm(
+        _t("安装 Docker 运行环境"),
+        _t("未检测到 Docker。是否自动下载并安装 Docker Desktop？（安装包约 600MB~1GB，安装时可能弹出系统授权窗口）"),
+        _t("下载并安装")
+      );
+      if (!ok) {
+        btn.disabled = false;
+        btn.textContent = _t("下载");
+        return;
+      }
+      btn.textContent = _t("准备安装 Docker...");
+    }
+    st.dockerTasks[modelId] = { stage: "check", progress: 0, message: _t("正在检查 Docker 环境…") };
+    updateProgressBar(modelId, 0);
+    await invoke()("setup_docker_model", { modelId: modelId, image: image });
+    delete st.dockerTasks[modelId];
+    st.dockerImages[modelId] = true;
+    showToast(_t("镜像下载完成"));
+    renderModelTable();
+  } catch (e) {
+    console.error("[model_list] docker 准备失败:", e);
+    delete st.dockerTasks[modelId];
+    showToast(friendlyError(e, { prefix: _t("下载失败: ") }));
+    renderModelTable();
+  }
+}
+
+async function handleDockerStart(btn) {
+  const modelId = btn.dataset.startBtn;
+  const image = btn.dataset.modelImage;
+  console.log("[model_list] 启动图片生成模型:", modelId);
+  btn.textContent = _t("启动中...");
+  btn.disabled = true;
+  try {
+    await invoke()("start_docker_model", { modelId: modelId, image: image });
+    try {
+      const status = await invoke()("get_model_status");
+      if (status && status.running) {
+        S().runningModelId = status.model_id;
+        S().runningModelPort = status.port;
+      }
+    } catch (_) {}
+    showToast(_t("已启动：请在 ComfyUI 左侧「工作流」中选择 adm-qwen-image-2.1-t2i（文生图）或 adm-qwen-image-2.1-image-edit（图生图）"));
+    renderModelTable();
+  } catch (e) {
+    console.error("[model_list] 启动图片生成模型失败:", e);
+    showToast(friendlyError(e, { prefix: _t("启动失败: ") }));
+    renderModelTable();
+  }
+}
+
+async function handleDockerStop(btn) {
+  const modelId = btn.dataset.stopBtn;
+  btn.textContent = _t("关闭中...");
+  btn.disabled = true;
+  try {
+    await invoke()("stop_docker_model", { modelId: modelId });
+    S().runningModelId = null;
+    S().runningModelPort = null;
+    renderModelTable();
+  } catch (e) {
+    showToast(friendlyError(e, { prefix: _t("停止失败: ") }));
+    renderModelTable();
+  }
+}
+
+async function handleDockerDelete(modelId, image) {
+  const st = getDockerState();
+  try {
+    await invoke()("delete_docker_image", { modelId: modelId, image: image });
+    st.dockerImages[modelId] = false;
+    renderModelTable();
+  } catch (e) {
+    showToast(friendlyError(e, { prefix: _t("删除失败: ") }));
+  }
+}
+
+function showDeleteConfirm(modelId, opts) {
   const modal = document.getElementById("delete-modal");
-  document.getElementById("delete-modal-msg").textContent = _t("确定要删除模型 \"") + modelId + _t("\" 吗？删除后无法恢复。");
+  const docker = !!(opts && opts.docker);
+  const msg = docker
+    ? _t("确定要删除模型 \"") + modelId + _t("\" 的本地镜像吗？删除后再次使用需重新下载。")
+    : _t("确定要删除模型 \"") + modelId + _t("\" 吗？删除后无法恢复。");
+  document.getElementById("delete-modal-msg").textContent = msg;
   modal.style.display = "flex";
   modal.dataset.modelId = modelId;
+  modal.dataset.docker = docker ? "1" : "";
+  modal.dataset.image = (opts && opts.image) || "";
 }
 
 function hideDeleteConfirm() {
@@ -828,6 +1032,21 @@ function handleTauriEvent(type, payload) {
   const { model_id, progress, error, port } = payload || {};
 
   switch (type) {
+    case "docker-progress": {
+      const dst = getDockerState();
+      if (payload.stage === "done") {
+        delete dst.dockerTasks[model_id];
+        dst.dockerImages[model_id] = true;
+        updateProgressBar(model_id, 100);
+        renderModelTable();
+      } else {
+        dst.dockerTasks[model_id] = { stage: payload.stage, progress: payload.progress || 0, message: payload.message || "" };
+        updateProgressBar(model_id, payload.progress || 0);
+        const btn = document.querySelector('[data-model-id="' + model_id + '"]');
+        if (btn) btn.textContent = (payload.message || _t("处理中...")) + " " + (payload.progress || 0) + "%";
+      }
+      break;
+    }
     case "download-progress": {
       const t = payload.type || "model";
       const key = model_id + ":" + t;
@@ -966,6 +1185,10 @@ async function init() {
 if (status.running) {
   st.runningModelId = status.model_id;
   st.runningModelPort = status.port;
+} else if (st.runningModelId) {
+  // 后端已无运行中的模型（如图片生成容器被外部停止）：清掉前端残留状态
+  st.runningModelId = null;
+  st.runningModelPort = null;
 }
   } catch (e) { console.error("获取模型状态失败:", e); }
 
@@ -975,6 +1198,14 @@ if (status.running) {
     showToast(friendlyError(e, { prefix: "获取模型列表失败: " }));
   }
 
+  // 图片生成模型（docker）：进行中的任务 + 本地是否已有镜像
+  try {
+    const tasks = await invoke()("get_docker_tasks");
+    getDockerState().dockerTasks = tasks || {};
+  } catch (e) { console.warn("[model_list] 获取 docker 任务失败:", e); }
+  try { await refreshDockerImages(); } catch (e) { console.warn("[model_list] 查询本地镜像失败:", e); }
+  try { await refreshDockerRunning(); } catch (e) { console.warn("[model_list] 同步容器状态失败:", e); }
+
   initModelTabs();
   renderModelTable();
   console.log("[model_list] init() 完成, 模型数量:", st.modelList.length);
@@ -982,7 +1213,7 @@ if (status.running) {
 
 function setupListeners() {
   const L = listen();
-  const events = ["download-progress", "download-complete", "download-error", "model-started", "model-stopped", "model-error"];
+  const events = ["docker-progress", "download-progress", "download-complete", "download-error", "model-started", "model-stopped", "model-error"];
   events.forEach(function(ev) {
     try {
       L(ev, function(event) { handleTauriEvent(ev, event.payload); })
@@ -1015,11 +1246,20 @@ export default {
     document.getElementById("delete-modal-confirm").addEventListener("click", async function() {
       const modal = document.getElementById("delete-modal");
       const modelId = modal.dataset.modelId;
+      const isDockerDelete = modal.dataset.docker === "1";
+      const image = modal.dataset.image || "";
       hideDeleteConfirm();
-      if (modelId) await handleDelete(modelId);
+      if (!modelId) return;
+      if (isDockerDelete) await handleDockerDelete(modelId, image);
+      else await handleDelete(modelId);
     });
     document.getElementById("delete-modal").addEventListener("click", function(e) {
       if (e.target === this) hideDeleteConfirm();
+    });
+    document.getElementById("docker-modal-cancel").addEventListener("click", function() { hideDockerConfirm(false); });
+    document.getElementById("docker-modal-confirm").addEventListener("click", function() { hideDockerConfirm(true); });
+    document.getElementById("docker-modal").addEventListener("click", function(e) {
+      if (e.target === this) hideDockerConfirm(false);
     });
   },
   unmount() {

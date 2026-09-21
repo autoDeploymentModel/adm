@@ -3,7 +3,7 @@ mod common;
 mod pages;
 
 use app_state::AppState;
-use pages::{agent, index, model_list, settings, ilink, skills};
+use pages::{agent, index, model_list, docker_model, settings, ilink, skills};
 
 use tauri::Manager;
 use tauri::menu::{Menu, MenuItem};
@@ -56,6 +56,9 @@ fn cleanup_processes(app: &tauri::AppHandle) {
     // 关闭 Agent 会话（只杀本进程拉起的 admAgent server 子进程；复用的共享
     // server 不杀，由服务端在最后一个工作区被 teardown 时自行退出）
     agent::kill_agent_session(&state);
+
+    // 停止图片生成容器（docker 部署的模型；强杀进程时不会执行，改由启动时对账恢复）
+    crate::pages::docker_model::cleanup_on_exit(&state);
 }
 
 
@@ -172,6 +175,15 @@ pub fn run() {
             model_list::delete_local_model,
             model_list::get_downloading_models,
             model_list::get_downloading_phases,
+            // docker_model.rs（图片生成模型，docker 部署）
+            docker_model::check_docker_env,
+            docker_model::check_docker_image,
+            docker_model::get_docker_tasks,
+            docker_model::sync_docker_container,
+            docker_model::setup_docker_model,
+            docker_model::start_docker_model,
+            docker_model::stop_docker_model,
+            docker_model::delete_docker_image,
             // settings.rs
             settings::save_settings,
             settings::load_settings,

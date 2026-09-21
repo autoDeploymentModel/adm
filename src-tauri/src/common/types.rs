@@ -85,6 +85,9 @@ pub struct RemoteModel {
     pub support_images: bool,
     #[serde(default)]
     pub model_mmproj: Option<String>,
+    /// 图片生成模型：docker 镜像地址（有值则走 docker 部署流程，不再下载 gguf 文件）
+    #[serde(default)]
+    pub model_images: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -192,4 +195,30 @@ pub struct HardwareDetectResult {
     pub gpu_vendor: Option<String>,
     pub gpu_name: Option<String>,
     pub nvidia_series: Option<u32>,
+}
+
+/// Docker 环境状态（图片生成模型走 docker 部署时使用）
+#[derive(Serialize, Clone, Default)]
+pub struct DockerEnvStatus {
+    /// docker CLI 是否可用
+    pub installed: bool,
+    /// docker 引擎是否已就绪（docker info 可用）
+    pub daemon_running: bool,
+    /// docker 客户端版本号
+    pub version: Option<String>,
+    /// windows / macos / linux
+    pub platform: String,
+    /// 当前平台 Docker Desktop 安装包下载地址（linux 为空，需手动安装）
+    pub download_url: Option<String>,
+}
+
+/// Docker 长任务进度（下载/安装 Docker Desktop、拉取镜像），供 UI 显示与重载后恢复
+#[derive(Serialize, Clone, Default)]
+pub struct DockerTask {
+    /// check / download-desktop / install-desktop / start-daemon / pull / start
+    pub stage: String,
+    /// 0-100
+    pub progress: u8,
+    /// 展示给用户的文本
+    pub message: String,
 }

@@ -317,6 +317,13 @@ pub async fn start_model(
             bail!("已有模型在运行中，请先停止当前模型");
         }
     }
+    {
+        // 图片生成模型（docker）运行中时不允许启动对话模型
+        let kind = state.running_kind.lock().map_err(|e| e.to_string())?.clone();
+        if kind.as_deref() == Some("docker") {
+            bail!("图片生成模型正在运行中，请先关闭后再启动对话模型");
+        }
+    }
 
     let server_path = config::get_llama_server_path(Some(&app))?;
 
@@ -851,6 +858,26 @@ pub async fn is_model_running(state: tauri::State<'_, AppState>) -> Result<bool,
 
 #[tauri::command]
 pub async fn get_model_status(state: tauri::State<'_, AppState>) -> Result<ModelStatus, AppError> {
+    // docker 部署的图片生成模型：状态来自容器
+    let kind = state.running_kind.lock().map_err(|e| e.to_string())?.clone();
+    if kind.as_deref() == Some("docker") {
+        let container = state.running_container.lock().map_err(|e| e.to_string())?.clone();
+        let running = match &container {
+            Some(c) => crate::pages::docker_model::container_running(c),
+            None => false,
+        };
+        let model_id = state.running_model_id.lock().map_err(|e| e.to_string())?.clone();
+        if !running {
+            crate::pages::docker_model::clear_running_docker(&state);
+        }
+        return Ok(ModelStatus {
+            running,
+            model_id,
+            pid: None,
+            port: if running { Some(crate::pages::docker_model::DOCKER_MODEL_PORT) } else { None },
+        });
+    }
+
     let pid = *state
         .running_process
         .lock()

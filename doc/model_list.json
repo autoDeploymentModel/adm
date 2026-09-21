@@ -1,5 +1,18 @@
 [
     {
+        "model_id":"Qwen-Image-2.1",
+        "model_url":"",
+        "model_mmproj":"",
+        "model_images":"crpi-2210nfcb9oezh8zh.cn-shenzhen.personal.cr.aliyuncs.com/adm1/comfyui-qwen-image-2.1:20260921",
+        "model_size":"5.6GB",
+        "model_type": "图片生成模型",
+        "model_description": "支持文生图，图生图",
+        "need_ram":"30",
+        "support_tools":false,
+        "support_reasoning":false,
+        "support_images":true
+    },
+    {
         "model_id":"Qwen3.5-9B-Q4_K_M",
         "model_url":"https://hf-mirror.com/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf",
         "model_mmproj":"https://hf-mirror.com/unsloth/Qwen3.5-9B-GGUF/resolve/main/mmproj-BF16.gguf",

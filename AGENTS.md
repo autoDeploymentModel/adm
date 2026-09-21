@@ -67,6 +67,7 @@
 |--------|-------------|
 | `index.rs` | `get_system_info`, `check_update`, `download_and_extract_llamacpp` |
 | `model_list.rs` | `fetch_model_list`, `scan_local_models`, `download_model`, `start_model`, `stop_model`, `get_model_status` |
+| `docker_model.rs` | `check_docker_env`, `check_docker_image`, `get_docker_tasks`, `setup_docker_model`, `start_docker_model`, `stop_docker_model`, `delete_docker_image` |
 | `settings.rs` | `save_settings`（原子写入：`.tmp` + `rename`）, `load_settings`, `get_app_version`, `get_llamacpp_version` |
 | `agent.rs` | `start_agent_server`, `stop_agent_server`, `get_agent_server_status`, `agent_http_request`, `agent_subscribe_events`, `agent_unsubscribe_events`, `check_adm_agent`, `get_adm_agent_version`, `add/list/update/delete_cloud_provider` |
 
@@ -92,6 +93,14 @@
   2. Rust `settings.rs:37` 调用 `agent.rs` `sync_agent_proxy`：`write_agent_proxy`（`agent.rs:640`）把 `{enabled,url}` 写入 admAgent.json 顶层 `agent_proxy`（原子写，值未变返回 false 跳过）→ 有变更时对当前 active workspace `POST /v1/workspaces/{ws}/config/set` 触发服务端**磁盘全量重载**（10s 超时，失败仅记日志退回直连）。
   3. admAgent `ConfigStore.setConfig` 把代理同步到进程级 `httpproxy`（`internal/config/store.go:100-105`）；`httpproxy.ProxyFunc()` 作为 `Transport.Proxy` 回调**每次请求实时读取**状态，热重载即刻生效、无需重建 client/重启 server；本地/私网地址（127.0.0.1、LAN GPU 盒）自动绕过（`internal/httpproxy/proxy.go:50-81`）。
   4. **生效范围**：LLM 客户端（`llm/client.go:107`）+ Agent 网络工具 fetch/web_fetch/download/web_search/sourcegraph/agentic_fetch（全部经 `SharedHTTPTransport`，`tools/fetch_helpers.go:38-48`）；**MCP HTTP/SSE 传输不走**（`mcp/init.go:538-581` 用 `http.DefaultTransport`，只认 `HTTP_PROXY` 环境变量）。注意：面板文案"仅影响 LLM 请求"比实际范围窄，工具类请求同样走代理。
+- **图片生成模型（docker 部署）**：`model_list.json` 的 `model_images` 有值时走 docker 流程（无值则保持原有 gguf 下载/llama-server 启动流程）：
+  1. `check_docker_env` 探测 docker CLI（PATH → `%ProgramFiles%\Docker\Docker\resources\bin\docker.exe` / `%LOCALAPPDATA%\Programs\DockerDesktop\resources\bin\docker.exe`，macOS 为 `/usr/local/bin`、`/Applications/Docker.app/...`；装完 Desktop 后当前进程 PATH 不会自动刷新，必须探测路径）→ 未安装则按平台下载官方稳定版安装包（win：`desktop.docker.com/win/main/{amd64,arm64}/Docker Desktop Installer.exe`，mac：`desktop.docker.com/mac/main/{arm64,amd64}/Docker.dmg`）→ Windows 先试 `install --quiet --accept-license --user`（免 UAC），失败再退回全局安装；macOS 走 `hdiutil attach` + `cp -R` 到 `/Applications`。
+  2. 启动容器前自动拉起引擎：`docker info` 探测 → 不通则启动 Docker Desktop（`Docker Desktop.exe` / `open -a Docker`）并轮询等待（180s）。
+  3. 拉镜像进度：`docker manifest inspect --verbose <image>` 取各层压缩大小（层短 digest 前 12 位匹配），叠加 `docker pull` 的 "Download complete/Pull complete/Already exists" 状态行算百分比（**非 TTY 下 docker pull 不输出字节进度**，只能按层完成度估算）；镜像仓库需登录时（ACR 私有库）报错文案里给出 `docker login <registry>` 指引。
+  4. 容器固定名 `adm-<model_id>`，端口 `64646:8188`（宿主 0.0.0.0:64646 → ComfyUI 8188），输出/输入/用户目录挂到 `data_dir/comfyui/{output,input,user}`；有 `nvidia` runtime 时自动加 `--gpus all`。
+  5. **不置位 `model_running`**（那是「LLM 已就绪」的全局标志，图片模型置位会让 Agent 页误判）；运行状态记在 `running_kind=Some("docker")` + `running_container`，`get_model_status` 对 docker 类型改用 `docker inspect -f {{.State.Running}}`；「查看模型」按 `running_port=64646` 用系统浏览器打开。
+  6. 进度事件 `docker-progress {model_id, stage, progress, message}`（stage: check/download-desktop/install-desktop/start-daemon/pull/start/done），`get_docker_tasks` 供视图重载后恢复按钮进度；启动/停止复用 `model-started`/`model-stopped` 事件（`model-started` 带 `port`）。
+  7. **退出 / 强杀对账**：真正退出时 `lib.rs` 的 `cleanup_processes` 调 `docker_model::cleanup_on_exit` 停止容器（`docker stop -t 2`，与 llama-server 一致，释放内存/显存与 64646 端口；Windows 点窗口关闭只是隐藏到托盘，容器继续跑，符合预期）。若进程被强杀 / 崩溃，容器会因 `--restart unless-stopped` 残留 —— 视图 `init()` 的 `refreshDockerRunning()` 会对每个 docker 模型调 `sync_docker_container`，把运行中的容器状态写回 `AppState` 并提示"上次未正常退出"。
 - **Windows**：`main.rs` 中的 `#![windows_subsystem = "windows"]` + `build.rs` 中的 `/SUBSYSTEM:WINDOWS` 隐藏控制台。
 
 ## 构建与发布

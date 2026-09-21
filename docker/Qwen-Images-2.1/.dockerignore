@@ -1,0 +1,5 @@
+# 模型目录排在构建上下文之外：
+# 上下文会在每次构建前整体传给 builder，实测 14.6GB 要 ~16 分钟（比重新下载还慢）。
+# 模型改由「种子镜像」挂载注入（Dockerfile 步骤 3 的 MODELS_SEED_IMAGE，build.sh 会自动挑）。
+# 本地 models/ 目录仍然有用：没有可用镜像时，build.sh 会用它生成一个只含模型的种子镜像。
+models/

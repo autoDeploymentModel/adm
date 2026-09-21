@@ -64,11 +64,17 @@ fetch() {
         ok=0
         for attempt in 1 2 3; do
             echo "[fetch-models] 开始下载（第 $attempt 次）: $rel"
-            aria2c -c -x 8 -s 8 -k 4M --file-allocation=none \
-                --auto-file-renaming=false --allow-overwrite=true \
-                --max-tries=10 --retry-wait=5 \
-                --console-log-level=warn --summary-interval=30 \
-                --dir="$CACHE_DIR" --out="$rel" "$url" || true
+            if command -v aria2c >/dev/null 2>&1; then
+                aria2c -c -x 8 -s 8 -k 4M --file-allocation=none \
+                    --auto-file-renaming=false --allow-overwrite=true \
+                    --max-tries=10 --retry-wait=5 \
+                    --console-log-level=warn --summary-interval=30 \
+                    --dir="$CACHE_DIR" --out="$rel" "$url" || true
+            else
+                echo "[fetch-models] 未找到 aria2c，改用 curl 下载（单线程、可续传）"
+                curl -fL -C - --connect-timeout 15 --retry 5 --retry-delay 3 \
+                    --output "$CACHE_DIR/$rel" "$url" || true
+            fi
             if verify "$rel"; then
                 ok=1
                 break
@@ -86,16 +92,27 @@ fetch() {
         fi
     fi
 
-    mkdir -p "$MODELS_DIR/$dest"
-    cp "$CACHE_DIR/$rel" "$MODELS_DIR/$dest/"
-    echo "[fetch-models] 已安装: models/$dest/$(basename "$rel")"
+    if [ "${SKIP_INSTALL:-}" = "1" ]; then
+        # 只把文件准备/校验在 CACHE_DIR 里，不往 MODELS_DIR 拷（准备本地缓存时用，省一次十几 GB 的白拷）
+        echo "[fetch-models] SKIP_INSTALL=1：已就绪，跳过安装到 $MODELS_DIR"
+    else
+        mkdir -p "$MODELS_DIR/$dest"
+        cp "$CACHE_DIR/$rel" "$MODELS_DIR/$dest/"
+        echo "[fetch-models] 已安装: models/$dest/$(basename "$rel")"
+    fi
 }
 
 mkdir -p "$CACHE_DIR"
 echo "[fetch-models] 获取校验清单: $(url_of "$SUMS_FILE")"
-curl -fsSL --connect-timeout 15 --retry 5 --retry-delay 3 --retry-all-errors \
-    -o "$CACHE_DIR/$SUMS_FILE.tmp" "$(url_of "$SUMS_FILE")"
-mv "$CACHE_DIR/$SUMS_FILE.tmp" "$CACHE_DIR/$SUMS_FILE"
+if curl -fsSL --connect-timeout 15 --retry 5 --retry-delay 3 --retry-all-errors \
+    -o "$CACHE_DIR/$SUMS_FILE.tmp" "$(url_of "$SUMS_FILE")"; then
+    mv "$CACHE_DIR/$SUMS_FILE.tmp" "$CACHE_DIR/$SUMS_FILE"
+elif [ -s "$CACHE_DIR/$SUMS_FILE" ]; then
+    echo "[fetch-models] 校验清单下载失败，沿用已有的 $SUMS_FILE（离线构建）" >&2
+else
+    echo "[fetch-models] 错误：无法获取校验清单 $SUMS_FILE" >&2
+    exit 1
+fi
 
 fetch diffusion_models "$GGUF_FILE"
 fetch text_encoders "$TE_FILE"
