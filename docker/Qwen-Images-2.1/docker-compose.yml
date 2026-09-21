@@ -1,0 +1,36 @@
+services:
+  comfyui:
+    build:
+      context: .
+      args:
+        HF_ENDPOINT: https://hf-mirror.com
+        # Docker Hub 不可达（拉不动 pytorch/pytorch）时给基础镜像加镜像站前缀，见 README：
+        # PYTORCH_IMAGE: docker.m.daocloud.io/pytorch/pytorch:2.11.0-cuda12.8-cudnn9-runtime
+        # 换其它量化（改完需要重新 build，镜像体积按量化大小变化）：
+        # GGUF_FILE: qwen-image-2.1-Q8_0.gguf
+        # 只装 ComfyUI、不含模型（模型走下方 models 卷挂载）：
+        # INSTALL_MODELS: "0"
+    image: comfyui-qwen-image-2.1:latest
+    container_name: comfyui-qwen-image-2.1
+    ports:
+      - "8188:8188"
+    environment:
+      COMFYUI_LISTEN: 0.0.0.0
+      COMFYUI_PORT: "8188"
+    volumes:
+      - ./data/output:/opt/ComfyUI/output
+      - ./data/input:/opt/ComfyUI/input
+      - ./data/user:/opt/ComfyUI/user
+      # 用宿主机模型目录覆盖镜像内置模型时取消注释：
+      # - ./models:/opt/ComfyUI/models
+    # 低显存可加：["--lowvram"]（文本编码器走 CPU，官方推荐配置）
+    command: []
+    shm_size: "8gb"
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
