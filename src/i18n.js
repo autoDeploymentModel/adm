@@ -278,6 +278,7 @@ const EN = {
   "已启动：请在 ComfyUI 左侧「工作流」中选择 adm-qwen-image-2.1-t2i（文生图）或 adm-qwen-image-2.1-image-edit（图生图）": "Started. Pick \"adm-qwen-image-2.1-t2i\" (text to image) or \"adm-qwen-image-2.1-image-edit\" (image editing) from the ComfyUI workflow list.",
   "关闭中...": "Stopping...",
   "检测到图片生成模型仍在运行（上次未正常退出）": "An image generation model is still running (the app did not exit cleanly last time)",
+  "当前设备不支持图片生成模型": "This device does not support image generation models",
   "\" 的本地镜像吗？删除后再次使用需重新下载。": "\"? You will need to download it again to use it.",
 
   // ===== agent 视图（agent.js / template.js / ui.js / sse.js 等）=====

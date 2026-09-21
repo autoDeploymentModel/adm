@@ -120,6 +120,21 @@ const template = `
     gap: 6px;
   }
 
+  /* 平台/显卡不满足要求时的说明（图片生成模型仅 Windows + NVIDIA） */
+  .model-card.card-unsupported {
+    border-color: rgba(244, 67, 54, 0.35);
+  }
+
+  .card-hint {
+    font-size: 12px;
+    line-height: 1.5;
+    color: #f44336;
+    background: rgba(244, 67, 54, 0.08);
+    border: 1px solid rgba(244, 67, 54, 0.25);
+    border-radius: 6px;
+    padding: 6px 10px;
+  }
+
   .card-actions {
     display: flex;
     justify-content: flex-end;
@@ -543,7 +558,35 @@ function getDockerState() {
   const st = S();
   if (!st.dockerImages) st.dockerImages = {};
   if (!st.dockerTasks) st.dockerTasks = {};
+  if (st.dockerEnv === undefined) st.dockerEnv = null;
   return st;
+}
+
+// 平台 / 显卡要求：图片生成模型目前仅 Windows + NVIDIA 可用（后端 requirement_reason 判定）。
+// 结果用于卡片置灰与点击提示；探测失败按"未知"处理（不置灰），真正的拦截在后端命令里。
+async function refreshDockerEnv() {
+  const st = getDockerState();
+  // 没有图片生成模型时不必探测（探测要跑 docker info + nvidia-smi，1~2 秒子进程开销）
+  if (!(st.modelList || []).some(isDockerModel)) {
+    st.dockerEnv = null;
+    return null;
+  }
+  try {
+    st.dockerEnv = await invoke()("check_docker_env");
+  } catch (e) {
+    console.warn("[model_list] 检查 Docker 环境失败:", e);
+    st.dockerEnv = null;
+  }
+  return st.dockerEnv;
+}
+
+// 不支持时返回原因文本，支持/未知返回空串
+function dockerBlockReason() {
+  const env = S().dockerEnv;
+  if (env && env.supported === false) {
+    return env.unsupported_reason || _t("当前设备不支持图片生成模型");
+  }
+  return "";
 }
 
 async function refreshDockerImages() {
@@ -689,15 +732,18 @@ function renderModelTable() {
   grid.innerHTML = "";
 
   filteredList.forEach((model) => {
-    const available = isModelAvailable(model.need_ram);
     const isDocker = isDockerModel(model);
+    // 图片生成模型仅 Windows + NVIDIA 可用：不支持时置灰（后端命令里还会再拦一次）
+    const dockerReason = isDocker ? dockerBlockReason() : "";
+    const dockerBlocked = !!dockerReason;
+    const available = isModelAvailable(model.need_ram) && !dockerBlocked;
     const dockerImages = st.dockerImages || {};
     const downloaded = isDocker ? !!dockerImages[model.model_id] : isModelDownloaded(model.model_id);
     const dockerTask = isDocker ? (st.dockerTasks || {})[model.model_id] : null;
     const isRunning = st.runningModelId === model.model_id;
 
     const card = document.createElement("div");
-    card.className = "model-card" + (isRunning ? " card-running" : (!available ? " card-unavailable" : ""));
+    card.className = "model-card" + (isRunning ? " card-running" : (dockerBlocked ? " card-unsupported" : (!available ? " card-unavailable" : "")));
 
     let statusHtml = "";
     if (isRunning) {
@@ -720,6 +766,8 @@ function renderModelTable() {
           escapeHtml(dockerTask.message || _t("处理中...")) + ' ' + (dockerTask.progress || 0) + '%</button>';
       } else if (downloaded) {
         downloadBtnHtml = '';
+      } else if (dockerBlocked) {
+        downloadBtnHtml = '<button class="btn btn-download" disabled title="' + escapeHtml(dockerReason) + '">' + _t("下载") + '</button>';
       } else if (available) {
         downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-image="' + escapeHtml(model.model_images || '') + '" data-docker="1" id="dl-' + safeModelId + '">' + _t("下载") + '</button>';
       } else {
@@ -747,7 +795,9 @@ function renderModelTable() {
     } else if (downloaded && available) {
       actionsHtml = '<button class="btn btn-start" data-start-btn="' + safeModelId + '"' + dockerAttr + ' id="start-' + safeModelId + '">' + _t("启动") + '</button>';
     } else if (downloaded) {
-      actionsHtml = '<button class="btn btn-start" disabled>' + _t("启动") + '</button>';
+      actionsHtml = dockerBlocked
+        ? '<button class="btn btn-start" disabled title="' + escapeHtml(dockerReason) + '">' + _t("启动") + '</button>'
+        : '<button class="btn btn-start" disabled>' + _t("启动") + '</button>';
     } else {
       actionsHtml = '';
     }
@@ -761,6 +811,8 @@ function renderModelTable() {
     if (model.support_images) features.push('<span class="feature-badge feature-supported">' + _t("图片识别") + '</span>');
     const featuresHtml = features.length > 0 ? '<div class="card-features">' + features.join('') + '</div>' : '';
     const descHtml = model.model_description ? '<div class="card-desc">' + escapeHtml(model.model_description) + '</div>' : '';
+    // 运行中说明该容器确实起来了，此时再挂"不支持"提示会自相矛盾
+    const hintHtml = (dockerBlocked && !isRunning) ? '<div class="card-hint">' + escapeHtml(dockerReason) + '</div>' : '';
 
     const isDownloadingPhase = isDownloadingMmproj;
     const progressVisible = downloadingProgress !== undefined || isDownloadingPhase || !!dockerTask;
@@ -771,6 +823,7 @@ function renderModelTable() {
       '<div class="card-meta">' + escapeHtml(model.model_type || '-') + ' · ' + escapeHtml(model.model_size) + ' · ' + _t("需内存 ") + escapeHtml(model.need_ram) + _t(" GB") + '</div>' +
       descHtml +
       featuresHtml +
+      hintHtml +
       '<div class="card-actions">' + downloadBtnHtml + actionsHtml + '</div>' +
       '<div class="card-progress" data-progress-wrap="' + safeModelId + '" style="display:' + (progressVisible ? 'block' : 'none') + ';">' +
         '<div class="card-progress-fill" data-progress-bar="' + safeModelId + '" style="width:' + progressValue + '%;"></div>' +
@@ -908,10 +961,23 @@ async function handleDockerDownload(btn) {
   const image = btn.dataset.modelImage;
   const st = getDockerState();
   console.log("[model_list] docker 下载模型:", modelId, "image:", image);
+  // 平台/显卡不满足时直接提示，不走安装流程（避免白下 Docker Desktop 与镜像）
+  const blocked = dockerBlockReason();
+  if (blocked) {
+    showToast(blocked);
+    return;
+  }
   btn.disabled = true;
   btn.textContent = _t("检查环境中...");
   try {
     const env = await invoke()("check_docker_env");
+    if (env && env.supported === false) {
+      st.dockerEnv = env;
+      renderModelTable();
+      showToast(env.unsupported_reason || _t("当前设备不支持图片生成模型"));
+      return;
+    }
+    st.dockerEnv = env;
     if (!env.installed) {
       const ok = await showDockerConfirm(
         _t("安装 Docker 运行环境"),
@@ -930,11 +996,15 @@ async function handleDockerDownload(btn) {
     await invoke()("setup_docker_model", { modelId: modelId, image: image });
     delete st.dockerTasks[modelId];
     st.dockerImages[modelId] = true;
+    // Docker 装好后才能判断 GPU 直通能力，重新取一次环境（不满足时卡片会置灰并给出原因）
+    await refreshDockerEnv();
     showToast(_t("镜像下载完成"));
     renderModelTable();
   } catch (e) {
     console.error("[model_list] docker 准备失败:", e);
     delete st.dockerTasks[modelId];
+    // 失败原因可能是 GPU 直通能力不足（后端在此复检），刷新环境让卡片同步置灰
+    await refreshDockerEnv();
     showToast(friendlyError(e, { prefix: _t("下载失败: ") }));
     renderModelTable();
   }
@@ -944,6 +1014,11 @@ async function handleDockerStart(btn) {
   const modelId = btn.dataset.startBtn;
   const image = btn.dataset.modelImage;
   console.log("[model_list] 启动图片生成模型:", modelId);
+  const blocked = dockerBlockReason();
+  if (blocked) {
+    showToast(blocked);
+    return;
+  }
   btn.textContent = _t("启动中...");
   btn.disabled = true;
   try {
@@ -959,6 +1034,8 @@ async function handleDockerStart(btn) {
     renderModelTable();
   } catch (e) {
     console.error("[model_list] 启动图片生成模型失败:", e);
+    // 启动前后端会复检 GPU 直通能力，失败时刷新环境让卡片同步置灰
+    await refreshDockerEnv();
     showToast(friendlyError(e, { prefix: _t("启动失败: ") }));
     renderModelTable();
   }
@@ -1198,7 +1275,8 @@ if (status.running) {
     showToast(friendlyError(e, { prefix: "获取模型列表失败: " }));
   }
 
-  // 图片生成模型（docker）：进行中的任务 + 本地是否已有镜像
+  // 图片生成模型（docker）：运行要求（平台/显卡）+ 进行中的任务 + 本地是否已有镜像
+  try { await refreshDockerEnv(); } catch (e) { console.warn("[model_list] 检查 Docker 环境失败:", e); }
   try {
     const tasks = await invoke()("get_docker_tasks");
     getDockerState().dockerTasks = tasks || {};

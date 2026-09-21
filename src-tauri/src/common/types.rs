@@ -210,6 +210,10 @@ pub struct DockerEnvStatus {
     pub platform: String,
     /// 当前平台 Docker Desktop 安装包下载地址（linux 为空，需手动安装）
     pub download_url: Option<String>,
+    /// 当前机器是否满足图片生成模型的运行要求（仅 Windows + NVIDIA 显卡）
+    pub supported: bool,
+    /// 不满足要求的原因（直接展示给用户；满足时为 None）
+    pub unsupported_reason: Option<String>,
 }
 
 /// Docker 长任务进度（下载/安装 Docker Desktop、拉取镜像），供 UI 显示与重载后恢复

@@ -15,7 +15,7 @@
 use crate::app_state::AppState;
 use crate::common::config;
 use crate::common::utils::download::download_with_resume;
-use crate::common::utils::platform::create_hidden_command;
+use crate::common::utils::platform::{create_hidden_command, get_gpu_devices};
 use crate::common::*;
 use crate::bail;
 use crate::dbg_log;
@@ -333,6 +333,85 @@ fn has_nvidia_runtime(cli: &Path) -> bool {
     docker_output(cli, &["info", "--format", "{{json .Runtimes}}"])
         .map(|s| s.contains("\"nvidia\""))
         .unwrap_or(false)
+}
+
+// ===== 平台 / 显卡要求（图片生成模型仅 Windows + NVIDIA 可用）=====
+// Docker Desktop 的 GPU 直通依赖 WSL2 + nvidia-container-toolkit：macOS 无法把独显直通给
+// 容器、Linux 未适配、AMD / Intel / 核显没有对应镜像。不满足时必须在下载镜像前就拦住，
+// 否则用户会白下几十 GB 镜像，最后只看到容器启动失败的模糊报错。
+
+enum NvidiaGpuState {
+    /// 驱动可用且能枚举到显卡
+    Ready,
+    /// 检测到 NVIDIA 显卡，但驱动不可用（nvidia-smi 跑不起来）
+    DriverMissing,
+    /// 没有 NVIDIA 显卡
+    NoGpu,
+}
+
+/// 当前机器是否满足运行要求：None = 满足，Some(原因) = 不可用原因（直接展示给用户）
+pub fn requirement_reason() -> Option<String> {
+    if !cfg!(target_os = "windows") {
+        return Some(format!(
+            "图片生成模型目前仅支持 Windows + NVIDIA 显卡（当前系统：{}），macOS / Linux 暂不支持",
+            platform_str()
+        ));
+    }
+    match nvidia_gpu_state() {
+        NvidiaGpuState::Ready => None,
+        NvidiaGpuState::DriverMissing => Some(
+            "未检测到可用的 NVIDIA 显卡驱动（nvidia-smi 不可用），请安装 / 更新 NVIDIA 显卡驱动后重试"
+                .to_string(),
+        ),
+        NvidiaGpuState::NoGpu => Some(
+            "未检测到 NVIDIA 显卡：图片生成模型需要 NVIDIA 显卡（不支持 AMD / Intel / 核显）"
+                .to_string(),
+        ),
+    }
+}
+
+/// docker 引擎是否具备 NVIDIA GPU 直通能力（nvidia runtime）。
+/// 依赖已就绪的引擎，引擎没起来时无法判断（此时返回 None，由后续启动流程复检）。
+/// `docker info` 本身执行失败也按"无法判断"处理 —— 该命令会因 daemon 瞬时不可用、超时等原因
+/// 失败，若当成"没有 nvidia runtime"会把支持的机器误判为不支持，宁可漏拦不可误拦
+/// （`wait_daemon` 刚验证过引擎就绪，这里失败的概率极低）。
+fn nvidia_runtime_reason(cli: &Path) -> Option<String> {
+    let output = docker_output(cli, &["info", "--format", "{{json .Runtimes}}"]).ok()?;
+    if output.contains("\"nvidia\"") {
+        None
+    } else {
+        Some(
+            "Docker 未启用 NVIDIA GPU 直通（缺少 nvidia runtime）：请安装 / 更新支持 WSL 2 的 NVIDIA 显卡驱动，并在 Docker Desktop 设置中启用 WSL 2 后端"
+                .to_string(),
+        )
+    }
+}
+
+fn nvidia_gpu_state() -> NvidiaGpuState {
+    if nvidia_smi_works() {
+        NvidiaGpuState::Ready
+    } else if get_gpu_devices().iter().any(|d| d.name.to_lowercase().contains("nvidia")) {
+        NvidiaGpuState::DriverMissing
+    } else {
+        NvidiaGpuState::NoGpu
+    }
+}
+
+/// nvidia-smi 是否可用且能枚举到显卡。第二项是 Windows 默认安装位置（PATH 未刷新时兜底），
+/// 非 Windows 上该路径不存在、spawn 直接失败；而 `requirement_reason()` 在非 Windows 提前返回，
+/// 实际走不到这里（用数组字面量而非 `#[cfg]` push，免得非 Windows 目标报 unused_mut 警告）。
+fn nvidia_smi_works() -> bool {
+    for exe in ["nvidia-smi", r"C:\Windows\System32\nvidia-smi.exe"] {
+        let ok = create_hidden_command(exe)
+            .args(["--query-gpu=name", "--format=csv,noheader"])
+            .output()
+            .map(|out| out.status.success() && !String::from_utf8_lossy(&out.stdout).trim().is_empty())
+            .unwrap_or(false);
+        if ok {
+            return true;
+        }
+    }
+    false
 }
 
 // ===== Docker Desktop 下载 / 安装 =====
@@ -668,12 +747,25 @@ pub async fn check_docker_env() -> Result<DockerEnvStatus, AppError> {
         .as_ref()
         .and_then(|c| docker_output(c, &["version", "--format", "{{.Client.Version}}"]).ok())
         .map(|s| s.trim().to_string());
+    // 平台 / 显卡要求（Qwen-Image 2.1 仅 Windows + NVIDIA 可运行）
+    let mut unsupported_reason = requirement_reason();
+    // GPU 直通能力依赖已就绪的引擎，引擎没起来时无法判断，留给下载 / 启动流程复检
+    if unsupported_reason.is_none() && daemon_running {
+        if let Some(c) = &cli {
+            unsupported_reason = nvidia_runtime_reason(c);
+        }
+    }
+    if let Some(reason) = &unsupported_reason {
+        dbg_log!("[docker] 环境不满足图片生成模型运行要求: {}", reason);
+    }
     Ok(DockerEnvStatus {
         installed,
         daemon_running,
         version,
         platform: platform_str().to_string(),
         download_url: download_url(),
+        supported: unsupported_reason.is_none(),
+        unsupported_reason,
     })
 }
 
@@ -747,6 +839,9 @@ pub async fn setup_docker_model(
     if image.trim().is_empty() {
         bail!("该模型未配置镜像地址");
     }
+    if let Some(reason) = requirement_reason() {
+        bail!("{}", reason);
+    }
     let state_ref: &AppState = &state;
     set_progress(&app, state_ref, &model_id, "check", 0, "正在检查 Docker 环境…");
 
@@ -768,6 +863,12 @@ pub async fn setup_docker_model(
     if image_exists(&cli, &image) {
         set_progress(&app, state_ref, &model_id, "pull", 100, "镜像已存在，跳过下载");
     } else {
+        // GPU 直通能力依赖已就绪的引擎、此时才判得出来：只在真要开始拉镜像时拦，
+        // 镜像已在本地就没必要拦（能否运行由 check_docker_env / start 决定）
+        if let Some(reason) = nvidia_runtime_reason(&cli) {
+            clear_task(state_ref, &model_id);
+            bail!("{}", reason);
+        }
         let app_c = app.clone();
         let mid = model_id.clone();
         let img = image.clone();
@@ -806,6 +907,9 @@ pub async fn start_docker_model(
             bail!("已有图片生成模型在运行中，请先关闭当前模型");
         }
     }
+    if let Some(reason) = requirement_reason() {
+        bail!("{}", reason);
+    }
 
     let name = container_name(&model_id);
     let app_a = app.clone();
@@ -820,6 +924,12 @@ pub async fn start_docker_model(
         })?;
 
         wait_daemon(&app_a, &state, &cli, &mid, 180)?;
+
+        // GPU 直通能力必须存在，否则容器只能跑 CPU（必然超时或直接退出）
+        if let Some(reason) = nvidia_runtime_reason(&cli) {
+            clear_task(&state, &mid);
+            bail!("{}", reason);
+        }
 
         if !image_exists(&cli, &img) {
             bail!("镜像尚未下载完成，请先点击「下载」");
@@ -890,7 +1000,7 @@ pub async fn start_docker_model(
         // 等待期间容器若退出（显存/内存不足、镜像问题等），不能标记为已启动
         if container_state(&cli, &name_a) != Some(true) {
             clear_task(&state, &mid);
-            bail!("容器已退出，模型启动失败：请确认显存/内存是否充足，或打开 Docker Desktop 查看该容器日志");
+            bail!("容器已退出，模型启动失败：请确认显存/内存是否充足（本模型需要 NVIDIA 显卡直通），或打开 Docker Desktop 查看该容器日志");
         }
 
         {
