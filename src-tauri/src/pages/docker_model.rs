@@ -14,8 +14,8 @@
 
 use crate::app_state::AppState;
 use crate::common::config;
-use crate::common::utils::download::download_with_resume;
-use crate::common::utils::platform::{create_hidden_command, get_gpu_devices};
+use crate::common::utils::download::download_with_resume_cancellable;
+use crate::common::utils::platform::{assign_child_to_kill_job, create_hidden_command, get_gpu_devices, kill_process_tree};
 use crate::common::*;
 use crate::bail;
 use crate::dbg_log;
@@ -23,13 +23,16 @@ use crate::dbg_log;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 use tauri::Emitter;
 use tauri::Manager;
 
 /// 图片生成模型对外端口（宿主）：0.0.0.0:64646 → 容器 8188
 pub const DOCKER_MODEL_PORT: u16 = 64646;
+/// 用户主动取消 docker 长任务时的统一提示（前端据此按提示而非失败展示）
+const CANCELLED_MSG: &str = "已取消";
 /// 容器内 ComfyUI 端口（与镜像 entrypoint 一致）
 const CONTAINER_PORT: u16 = 8188;
 /// Docker Desktop 下载页（手动安装指引）
@@ -164,13 +167,24 @@ fn docker_ok(cli: &Path, args: &[&str]) -> bool {
         .unwrap_or(false)
 }
 
-/// 执行 docker 命令并逐行回调输出（stdout / stderr 合并），同时收集最近 60 行用于报错
-fn run_streaming(cli: &Path, args: &[&str], mut on_line: impl FnMut(&str)) -> Result<(ExitStatus, Vec<String>), AppError> {
+/// 执行 docker 命令并逐行回调输出（stdout / stderr 合并），同时收集最近 60 行用于报错。
+/// `tracker` 不为空时登记该子进程 PID：用户点「取消」或应用退出时据此强杀，
+/// 避免 `docker pull` 在应用消失后继续在后台下载。
+fn run_streaming(
+    cli: &Path,
+    args: &[&str],
+    tracker: Option<(&AppState, &str)>,
+    mut on_line: impl FnMut(&str),
+) -> Result<(ExitStatus, Vec<String>), AppError> {
     let mut child = create_hidden_command(cli)
         .args(args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()?;
+
+    if let Some((state, model_id)) = tracker {
+        register_child(state, model_id, child.id());
+    }
 
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
@@ -211,6 +225,9 @@ fn run_streaming(cli: &Path, args: &[&str], mut on_line: impl FnMut(&str)) -> Re
         let _ = h.join();
     }
     let status = child.wait()?;
+    if let Some((state, model_id)) = tracker {
+        unregister_child(state, model_id);
+    }
     Ok((status, tail))
 }
 
@@ -275,6 +292,78 @@ pub fn clear_running_docker(state: &AppState) {
     *state.running_container.lock().unwrap_or_else(|e| e.into_inner()) = None;
     *state.running_model_id.lock().unwrap_or_else(|e| e.into_inner()) = None;
     *state.running_port.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
+// ===== 长任务取消 / 子进程生命周期 =====
+// docker 长任务（下载安装包、拉镜像、等待引擎、启动容器）可能持续几十分钟，
+// 期间必须能被用户中止；而 `docker pull` 是独立子进程，强杀 ADM 后它会继续在后台
+// 下载，所以既要登记 PID（供取消与退出清理强杀），也要挂 Windows Job（父死子死）。
+
+/// 开始一个 docker 长任务：注册取消标志，并清掉上一次的残留记录
+fn begin_docker_task(state: &AppState, model_id: &str) {
+    if let Ok(mut m) = state.docker_cancels.lock() {
+        m.insert(model_id.to_string(), Arc::new(AtomicBool::new(false)));
+    }
+    if let Ok(mut m) = state.docker_children.lock() {
+        m.remove(model_id);
+    }
+}
+
+/// 结束 docker 长任务：注销取消标志与子进程记录
+fn end_docker_task(state: &AppState, model_id: &str) {
+    if let Ok(mut m) = state.docker_cancels.lock() {
+        m.remove(model_id);
+    }
+    if let Ok(mut m) = state.docker_children.lock() {
+        m.remove(model_id);
+    }
+}
+
+/// 该任务是否已被用户取消
+fn task_cancelled(state: &AppState, model_id: &str) -> bool {
+    state
+        .docker_cancels
+        .lock()
+        .ok()
+        .and_then(|m| m.get(model_id).cloned())
+        .map(|f| f.load(Ordering::Relaxed))
+        .unwrap_or(false)
+}
+
+/// 登记任务子进程：供「取消」与退出清理强杀；Windows 上同时挂到父进程退出即杀的 Job
+fn register_child(state: &AppState, model_id: &str, pid: u32) {
+    if let Ok(mut m) = state.docker_children.lock() {
+        m.insert(model_id.to_string(), pid);
+    }
+    assign_child_to_kill_job(pid);
+}
+
+fn unregister_child(state: &AppState, model_id: &str) {
+    if let Ok(mut m) = state.docker_children.lock() {
+        m.remove(model_id);
+    }
+}
+
+/// 强杀某任务正在运行的子进程（取消时调用）
+fn kill_task_children(state: &AppState, model_id: &str) {
+    let pid = state.docker_children.lock().ok().and_then(|m| m.get(model_id).copied());
+    if let Some(pid) = pid {
+        dbg_log!("[docker] 取消任务，强杀子进程 {}", pid);
+        kill_process_tree(pid);
+    }
+}
+
+/// 退出清理：强杀所有仍在运行的 docker 子进程，避免应用退出后仍在后台下载
+pub fn kill_all_task_children(state: &AppState) {
+    let pids: Vec<u32> = state
+        .docker_children
+        .lock()
+        .map(|m| m.values().copied().collect())
+        .unwrap_or_default();
+    for pid in pids {
+        dbg_log!("[docker] 退出清理：强杀子进程 {}", pid);
+        kill_process_tree(pid);
+    }
 }
 
 /// 容器名：与 model_id 一一对应
@@ -361,8 +450,10 @@ pub fn prune_stopped_containers() -> usize {
 }
 
 /// 应用退出时清理：正在运行的图片生成容器需要停止（与 llama-server 一致，
-/// 避免退出后仍占用内存/显存与 64646 端口）。幂等，可重复调用。
+/// 避免退出后仍占用内存/显存与 64646 端口），进行中的 docker 子进程（拉镜像等）
+/// 也要强杀 —— 它们是独立进程，不杀会在应用退出后继续在后台下载。幂等，可重复调用。
 pub fn cleanup_on_exit(state: &AppState) {
+    kill_all_task_children(state);
     let kind = state.running_kind.lock().unwrap_or_else(|e| e.into_inner()).clone();
     if kind.as_deref() != Some("docker") {
         return;
@@ -550,16 +641,28 @@ async fn ensure_docker_installed(app: &tauri::AppHandle, state: &AppState, model
 
     let app_cb = app.clone();
     let mid = model_id.to_string();
-    download_with_resume(&client, &url, &final_path, &part_path, move |pct, downloaded, total| {
-        emit_progress(
-            &app_cb,
-            &mid,
-            "download-desktop",
-            pct,
-            &format!("正在下载 Docker Desktop… {}", human_size(downloaded, total)),
-        );
-    })
+    let mid_cancel = model_id.to_string();
+    download_with_resume_cancellable(
+        &client,
+        &url,
+        &final_path,
+        &part_path,
+        move |pct, downloaded, total| {
+            emit_progress(
+                &app_cb,
+                &mid,
+                "download-desktop",
+                pct,
+                &format!("正在下载 Docker Desktop… {}", human_size(downloaded, total)),
+            );
+        },
+        move || task_cancelled(state, &mid_cancel),
+    )
     .await?;
+
+    if task_cancelled(state, model_id) {
+        bail!("{}", CANCELLED_MSG);
+    }
 
     set_progress(app, state, model_id, "install-desktop", 0, "正在安装 Docker Desktop（如弹出系统授权窗口请点击允许）…");
     let path_clone = final_path.clone();
@@ -595,6 +698,9 @@ fn wait_daemon(app: &tauri::AppHandle, state: &AppState, cli: &Path, model_id: &
     loop {
         if docker_ok(cli, &["info", "--format", "{{.ServerVersion}}"]) {
             return Ok(());
+        }
+        if task_cancelled(state, model_id) {
+            bail!("{}", CANCELLED_MSG);
         }
         let secs = start.elapsed().as_secs();
         if secs > timeout_secs {
@@ -668,6 +774,9 @@ fn split_layer_line(line: &str) -> Option<(String, String)> {
 }
 
 fn pull_image(app: &tauri::AppHandle, state: &AppState, cli: &Path, model_id: &str, image: &str) -> Result<(), AppError> {
+    if task_cancelled(state, model_id) {
+        bail!("{}", CANCELLED_MSG);
+    }
     let sizes = layer_sizes(cli, image);
     let total: u64 = sizes.values().sum();
     dbg_log!("[docker] pull {} (layers={}, total={}B)", image, sizes.len(), total);
@@ -678,7 +787,7 @@ fn pull_image(app: &tauri::AppHandle, state: &AppState, cli: &Path, model_id: &s
     let mut last_pct: i32 = -1;
     let mut last_emit = Instant::now() - Duration::from_secs(10);
 
-    let (status, tail) = run_streaming(cli, &["pull", image], |line| {
+    let (status, tail) = run_streaming(cli, &["pull", image], Some((state, model_id)), |line| {
         let line = line.trim();
         if line.is_empty() {
             return;
@@ -711,6 +820,10 @@ fn pull_image(app: &tauri::AppHandle, state: &AppState, cli: &Path, model_id: &s
         }
     })?;
 
+    // 用户点「取消」时 docker pull 被强杀（daemon 侧连接断开后也会停止下载），按取消处理
+    if task_cancelled(state, model_id) {
+        bail!("{}", CANCELLED_MSG);
+    }
     if !status.success() {
         let joined = tail.join("\n");
         if joined.contains("unauthorized") || joined.contains("authentication required") || joined.contains("denied") {
@@ -742,6 +855,10 @@ fn wait_http_ready(app: &tauri::AppHandle, state: &AppState, cli: &Path, name: &
         // 容器已退出则直接放弃等待
         if container_state(cli, name) == Some(false) {
             set_progress(app, state, model_id, "start", 99, "容器已退出，请打开 Docker Desktop 查看日志");
+            return;
+        }
+        // 用户取消：不再等待就绪，由调用方负责清理容器
+        if task_cancelled(state, model_id) {
             return;
         }
         let addr = format!("127.0.0.1:{}", DOCKER_MODEL_PORT);
@@ -901,13 +1018,26 @@ pub async fn setup_docker_model(
     model_id: String,
     image: String,
 ) -> Result<(), AppError> {
+    // 注册取消标志：下载安装包 / 拉镜像期间用户可点「取消」中止（并强杀子进程）
+    begin_docker_task(&state, &model_id);
+    let result = setup_docker_model_inner(app, &state, model_id.clone(), image).await;
+    end_docker_task(&state, &model_id);
+    result
+}
+
+async fn setup_docker_model_inner(
+    app: tauri::AppHandle,
+    state: &AppState,
+    model_id: String,
+    image: String,
+) -> Result<(), AppError> {
     if image.trim().is_empty() {
         bail!("该模型未配置镜像地址");
     }
     if let Some(reason) = requirement_reason() {
         bail!("{}", reason);
     }
-    let state_ref: &AppState = &state;
+    let state_ref: &AppState = state;
     set_progress(&app, state_ref, &model_id, "check", 0, "正在检查 Docker 环境…");
 
     // 1) 环境（必要时下载并安装 Docker Desktop）
@@ -956,6 +1086,19 @@ pub async fn setup_docker_model(
 pub async fn start_docker_model(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
+    model_id: String,
+    image: String,
+) -> Result<(), AppError> {
+    // 注册取消标志：等待引擎 / 启动容器期间用户可点「取消」中止
+    begin_docker_task(&state, &model_id);
+    let result = start_docker_model_inner(app, &state, model_id.clone(), image).await;
+    end_docker_task(&state, &model_id);
+    result
+}
+
+async fn start_docker_model_inner(
+    app: tauri::AppHandle,
+    state: &AppState,
     model_id: String,
     image: String,
 ) -> Result<(), AppError> {
@@ -1062,6 +1205,13 @@ pub async fn start_docker_model(
 
         wait_http_ready(&app_a, &state, &cli, &name_a, &mid, 300);
 
+        // 用户取消启动：删掉刚起的容器，避免留下半启动的容器占显存
+        if task_cancelled(&state, &mid) {
+            remove_container_blocking(&name_a);
+            clear_task(&state, &mid);
+            bail!("{}", CANCELLED_MSG);
+        }
+
         // 等待期间容器若退出（显存/内存不足、镜像问题等），不能标记为已启动
         if container_state(&cli, &name_a) != Some(true) {
             // 退出失败的容器直接删掉，否则会以 exited 状态留在 docker ps -a
@@ -1084,6 +1234,31 @@ pub async fn start_docker_model(
     })
     .await
     .map_err(|e| AppError::msg(format!("启动任务执行失败: {}", e)))?
+}
+
+/// 取消进行中的 docker 长任务（下载 Docker Desktop 安装包 / 拉镜像 / 等待引擎 / 启动容器）。
+/// 置取消标志让各阶段循环自行中止，同时强杀子进程（`docker pull` 被强杀后
+/// daemon 侧连接断开也会停止下载）。挂起的 setup/start 命令以「已取消」错误结束。
+#[tauri::command]
+pub async fn cancel_docker_task(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    model_id: String,
+) -> Result<bool, AppError> {
+    let active = state
+        .docker_cancels
+        .lock()
+        .map(|m| m.contains_key(&model_id))
+        .unwrap_or(false);
+    if let Ok(m) = state.docker_cancels.lock() {
+        if let Some(flag) = m.get(&model_id) {
+            flag.store(true, Ordering::Relaxed);
+        }
+    }
+    kill_task_children(&state, &model_id);
+    clear_task(&state, &model_id);
+    emit_progress(&app, &model_id, "cancelled", 0, "已取消");
+    Ok(active)
 }
 
 /// 停止并删除图片生成容器

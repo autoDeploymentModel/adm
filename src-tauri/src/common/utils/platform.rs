@@ -73,6 +73,59 @@ pub fn kill_process_by_name(name: &str) {
         .spawn();
 }
 
+/// 把子进程挂到「父进程结束即被杀」的 Job Object 上（仅 Windows 有效，其他平台空实现）。
+///
+/// 任务管理器强杀 / 进程崩溃时不会执行任何 Rust 清理代码，`docker pull` 这类
+/// 独立客户端会继续在后台下载。Job 带 KILL_ON_JOB_CLOSE：ADM 进程结束时系统关闭
+/// 其句柄 → job 关闭 → job 内所有子进程被终止。
+#[cfg(target_os = "windows")]
+pub fn assign_child_to_kill_job(pid: u32) {
+    use std::sync::OnceLock;
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    use windows::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
+
+    // job 句柄全程持有（0 = 创建失败，后续直接跳过）
+    static JOB: OnceLock<isize> = OnceLock::new();
+
+    unsafe {
+        let raw = *JOB.get_or_init(|| {
+            let job = match CreateJobObjectW(None, PCWSTR::null()) {
+                Ok(h) => h,
+                Err(_) => return 0,
+            };
+            let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let set = SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                &info as *const _ as *const std::ffi::c_void,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            );
+            if set.is_err() {
+                let _ = CloseHandle(job);
+                return 0;
+            }
+            job.0 as isize
+        });
+        if raw == 0 {
+            return;
+        }
+        let job = HANDLE(raw as *mut std::ffi::c_void);
+        if let Ok(proc) = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, false, pid) {
+            let _ = AssignProcessToJobObject(job, proc);
+            let _ = CloseHandle(proc);
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn assign_child_to_kill_job(_pid: u32) {}
+
 pub fn get_gpu_info() -> (u64, u64, bool) {
     let mut total_vram: u64 = 0;
     let used_vram: u64 = 0;

@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use sysinfo::System;
 
+
 /// admAgent server 模式会话：每个 workspace 一个独立会话，持有该 workspace 的
 /// SSE 转发任务。子进程由 AppState.agent_child 全局管理（单进程 server
 /// 被所有 workspace 共享）。
@@ -29,6 +30,12 @@ pub struct AppState {
     pub running_container: Mutex<Option<String>>,
     /// docker 长任务进度（model_id -> 任务），供 UI 重载后恢复
     pub docker_tasks: Mutex<HashMap<String, DockerTask>>,
+    /// docker 长任务取消标志（model_id -> 标志）：任务启动时创建、结束时移除，
+    /// 「取消」命令置位，下载 / 等待引擎 / 拉镜像等循环读取后中止
+    pub docker_cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// docker 长任务拉起的子进程（model_id -> pid）：取消与退出清理时强杀，
+    /// 避免 `docker pull` 在应用退出后继续在后台下载
+    pub docker_children: Mutex<HashMap<String, u32>>,
     pub downloading_progress: Mutex<HashMap<String, u8>>,
     pub downloading_phase: Mutex<HashMap<String, String>>,
     pub sys: Mutex<System>,
@@ -58,6 +65,8 @@ impl AppState {
             running_kind: Mutex::new(None),
             running_container: Mutex::new(None),
             docker_tasks: Mutex::new(HashMap::new()),
+            docker_cancels: Mutex::new(HashMap::new()),
+            docker_children: Mutex::new(HashMap::new()),
             downloading_progress: Mutex::new(HashMap::new()),
             downloading_phase: Mutex::new(HashMap::new()),
             sys: Mutex::new(System::new_all()),

@@ -184,6 +184,7 @@ pub fn run() {
             docker_model::setup_docker_model,
             docker_model::start_docker_model,
             docker_model::stop_docker_model,
+            docker_model::cancel_docker_task,
             docker_model::delete_docker_image,
             // settings.rs
             settings::save_settings,

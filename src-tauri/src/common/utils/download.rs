@@ -20,6 +20,30 @@ pub async fn download_with_resume(
     part_path: &Path,
     on_progress: impl Fn(u8, u64, u64),
 ) -> Result<(), AppError> {
+    download_inner(client, url, final_path, part_path, on_progress, || false).await
+}
+
+/// 同 `download_with_resume`，但支持取消：`should_abort` 返回 true 时立即中止，
+/// 已下载内容保留在 `.part` 里（下次可续传），并返回「已取消」错误。
+pub async fn download_with_resume_cancellable(
+    client: &reqwest::Client,
+    url: &str,
+    final_path: &Path,
+    part_path: &Path,
+    on_progress: impl Fn(u8, u64, u64),
+    should_abort: impl Fn() -> bool,
+) -> Result<(), AppError> {
+    download_inner(client, url, final_path, part_path, on_progress, should_abort).await
+}
+
+async fn download_inner(
+    client: &reqwest::Client,
+    url: &str,
+    final_path: &Path,
+    part_path: &Path,
+    on_progress: impl Fn(u8, u64, u64),
+    should_abort: impl Fn() -> bool,
+) -> Result<(), AppError> {
     // 文件已存在，跳过下载
     if final_path.exists() {
         let _ = std::fs::remove_file(part_path);
@@ -98,6 +122,12 @@ pub async fn download_with_resume(
             .await
             .map_err(|e| AppError::msg(format!("写入文件失败: {}", e)))?;
         downloaded += chunk.len() as u64;
+
+        if should_abort() {
+            // 已下载部分留在 .part 里，下次可续传
+            file.flush().await.ok();
+            return Err(AppError::msg("已取消下载"));
+        }
 
         let progress = if total_size > 0 {
             ((downloaded as f64 / total_size as f64) * 100.0).min(99.0) as u8

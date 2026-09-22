@@ -209,6 +209,13 @@ const template = `
     border: 1px solid rgba(33, 150, 243, 0.3);
   }
 
+  /* 图片生成模型：容器启动 / 镜像下载进行中 */
+  .status-starting {
+    background: rgba(255, 152, 0, 0.15);
+    color: #ff9800;
+    border: 1px solid rgba(255, 152, 0, 0.3);
+  }
+
   .btn {
     display: inline-block;
     padding: 5px 14px;
@@ -554,6 +561,35 @@ function isDockerModel(model) {
   return !!(model && model.model_images);
 }
 
+// 可取消的任务阶段：安装 Docker Desktop（install-desktop）会拉起安装程序，
+// 中途强杀可能把安装装坏，因此不提供取消
+const DOCKER_CANCELLABLE_STAGES = ["check", "download-desktop", "start-daemon", "pull", "start"];
+function isDockerTaskCancellable(stage) {
+  return DOCKER_CANCELLABLE_STAGES.indexOf(stage) >= 0;
+}
+
+// 启动阶段（等待引擎 / 创建并启动容器 / 等待 ComfyUI 就绪）
+function isDockerStarting(stage) {
+  return stage === "start" || stage === "start-daemon";
+}
+
+// 取消是用户主动行为，不作为失败提示
+function isCancelError(e) {
+  const msg = typeof e === "string" ? e : String((e && e.message) || "");
+  return msg.indexOf("已取消") >= 0;
+}
+
+// 下载刚点击 / 刚完成的极短时间内忽略「启动」点击：下载完成会重渲染卡片（「下载」按钮的
+// 位置变成「启动」），连击或手快的第二次点击会误落在新按钮上，表现为"下载完就自动启动"
+const dockerRecentAction = { at: 0, modelId: null };
+function markDockerAction(modelId) {
+  dockerRecentAction.at = Date.now();
+  dockerRecentAction.modelId = modelId;
+}
+function isRecentDockerAction(modelId) {
+  return dockerRecentAction.modelId === modelId && Date.now() - dockerRecentAction.at < 1200;
+}
+
 function getDockerState() {
   const st = S();
   if (!st.dockerImages) st.dockerImages = {};
@@ -724,6 +760,17 @@ function initModelTabs() {
   });
 }
 
+// 卡片按钮点击穿透保护：renderModelTable() 会整体替换按钮（「下载」完成变成「启动」、
+// 「关闭模型」后变成「启动」），连击/手快的第二下会落在新按钮上，表现为"自己又启动了"。
+// 渲染后极短时间内忽略卡片上的动作按钮点击（「查看模型」无害、不拦）。
+const CLICK_THROUGH_MS = 350;
+let lastCardRenderAt = 0;
+function isClickThrough() {
+  const hit = Date.now() - lastCardRenderAt < CLICK_THROUGH_MS;
+  if (hit) console.log("[model_list] 忽略重渲染后的误触点击");
+  return hit;
+}
+
 function renderModelTable() {
   const grid = document.getElementById("model-grid");
   const filteredList = getFilteredModelList();
@@ -745,13 +792,18 @@ function renderModelTable() {
     const dockerImages = st.dockerImages || {};
     const downloaded = isDocker ? !!dockerImages[model.model_id] : isModelDownloaded(model.model_id);
     const dockerTask = isDocker ? (st.dockerTasks || {})[model.model_id] : null;
+    // 任务进行中（下载/启动）：只显示进度 + 取消，不显示启动/关闭/删除按钮
+    const dockerBusy = isDocker && !!dockerTask;
     const isRunning = st.runningModelId === model.model_id;
 
     const card = document.createElement("div");
     card.className = "model-card" + (isRunning ? " card-running" : (dockerBlocked ? " card-unsupported" : (!available ? " card-unavailable" : "")));
 
     let statusHtml = "";
-    if (isRunning) {
+    if (dockerBusy && isDockerStarting(dockerTask.stage)) {
+      // 启动进行中：状态直接显示「启动中」，不再显示启动按钮
+      statusHtml = '<span class="status-badge status-starting">' + _t("启动中") + '</span>';
+    } else if (isRunning) {
       statusHtml = '<span class="status-badge status-running">' + _t("已启动") + '</span>';
     } else if (available) {
       statusHtml = '<span class="status-badge status-available">' + _t("可用") + '</span>';
@@ -767,8 +819,16 @@ function renderModelTable() {
     if (isDocker) {
       // 图片生成模型：downloaded = 本地已有镜像；dockerTask 存在 = 正在安装/下载
       if (dockerTask) {
+        const pct = dockerTask.progress || 0;
+        // 启动阶段统一显示「模型启动中」，具体阶段说明放到卡片提示行
+        const label = isDockerStarting(dockerTask.stage)
+          ? _t("模型启动中…")
+          : (dockerTask.message || _t("处理中..."));
         downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" disabled>' +
-          escapeHtml(dockerTask.message || _t("处理中...")) + ' ' + (dockerTask.progress || 0) + '%</button>';
+          escapeHtml(label) + ' ' + pct + '%</button>';
+        if (isDockerTaskCancellable(dockerTask.stage)) {
+          downloadBtnHtml += '<button class="btn btn-stop" data-docker-cancel="' + safeModelId + '" id="cancel-' + safeModelId + '">' + _t("取消") + '</button>';
+        }
       } else if (downloaded) {
         downloadBtnHtml = '';
       } else if (dockerBlocked) {
@@ -794,7 +854,9 @@ function renderModelTable() {
 
     const dockerAttr = isDocker ? ' data-model-image="' + escapeHtml(model.model_images || '') + '" data-docker="1"' : '';
     let actionsHtml = "";
-    if (isRunning) {
+    if (dockerBusy) {
+      actionsHtml = '';
+    } else if (isRunning) {
       actionsHtml = '<button class="btn btn-view" id="view-' + safeModelId + '">' + _t("查看模型") + '</button>';
       actionsHtml += '<button class="btn btn-stop" data-stop-btn="' + safeModelId + '"' + dockerAttr + ' id="stop-' + safeModelId + '">' + _t("关闭模型") + '</button>';
     } else if (downloaded && available) {
@@ -806,7 +868,7 @@ function renderModelTable() {
     } else {
       actionsHtml = '';
     }
-    if (downloaded && !isRunning) {
+    if (downloaded && !isRunning && !dockerBusy) {
       actionsHtml += '<button class="btn btn-delete" data-delete-btn="' + safeModelId + '"' + dockerAttr + '>' + _t("删除") + '</button>';
     }
 
@@ -817,7 +879,11 @@ function renderModelTable() {
     const featuresHtml = features.length > 0 ? '<div class="card-features">' + features.join('') + '</div>' : '';
     const descHtml = model.model_description ? '<div class="card-desc">' + escapeHtml(model.model_description) + '</div>' : '';
     // 运行中说明该容器确实起来了，此时再挂"不支持"提示会自相矛盾
-    const hintHtml = (dockerBlocked && !isRunning) ? '<div class="card-hint">' + escapeHtml(dockerReason) + '</div>' : '';
+    let hintHtml = (dockerBlocked && !isRunning) ? '<div class="card-hint">' + escapeHtml(dockerReason) + '</div>' : '';
+    // 启动阶段：进度按钮只写「模型启动中」，详细阶段说明放这里
+    if (dockerBusy && isDockerStarting(dockerTask.stage) && dockerTask.message) {
+      hintHtml = '<div class="card-hint" data-hint="' + safeModelId + '">' + escapeHtml(dockerTask.message) + '</div>';
+    }
 
     const isDownloadingPhase = isDownloadingMmproj;
     const progressVisible = downloadingProgress !== undefined || isDownloadingPhase || !!dockerTask;
@@ -837,6 +903,7 @@ function renderModelTable() {
     grid.appendChild(card);
   });
 
+  lastCardRenderAt = Date.now();
   bindRowEvents();
 }
 
@@ -845,6 +912,7 @@ function bindRowEvents() {
   const dlBtns = document.querySelectorAll('#model-grid .btn-download:not(.downloaded):not([disabled])');
   dlBtns.forEach(function(btn) {
     btn.addEventListener('click', function() {
+      if (isClickThrough()) return;
       if (btn.dataset.docker === '1') handleDockerDownload(btn);
       else handleDownload(btn);
     });
@@ -852,6 +920,7 @@ function bindRowEvents() {
   const startBtns = document.querySelectorAll('#model-grid .btn-start[data-start-btn]');
   startBtns.forEach(function(btn) {
     btn.addEventListener('click', function() {
+      if (isClickThrough()) return;
       if (btn.dataset.docker === '1') handleDockerStart(btn);
       else handleStart(btn);
     });
@@ -859,8 +928,16 @@ function bindRowEvents() {
   const stopBtns = document.querySelectorAll('#model-grid .btn-stop[data-stop-btn]');
   stopBtns.forEach(function(btn) {
     btn.addEventListener('click', function() {
+      if (isClickThrough()) return;
       if (btn.dataset.docker === '1') handleDockerStop(btn);
       else handleStop(btn);
+    });
+  });
+  const cancelBtns = document.querySelectorAll('#model-grid .btn-stop[data-docker-cancel]');
+  cancelBtns.forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      // 取消按钮由阶段切换的重渲染刚刚插入，不做穿透保护，保证能立刻点
+      handleDockerCancel(btn);
     });
   });
   const viewBtns = document.querySelectorAll('#model-grid .btn-view');
@@ -966,6 +1043,7 @@ async function handleDockerDownload(btn) {
   const image = btn.dataset.modelImage;
   const st = getDockerState();
   console.log("[model_list] docker 下载模型:", modelId, "image:", image);
+  markDockerAction(modelId);
   // 平台/显卡不满足时直接提示，不走安装流程（避免白下 Docker Desktop 与镜像）
   const blocked = dockerBlockReason();
   if (blocked) {
@@ -1001,6 +1079,7 @@ async function handleDockerDownload(btn) {
     await invoke()("setup_docker_model", { modelId: modelId, image: image });
     delete st.dockerTasks[modelId];
     st.dockerImages[modelId] = true;
+    markDockerAction(modelId);
     // Docker 装好后才能判断 GPU 直通能力，重新取一次环境（不满足时卡片会置灰并给出原因）
     await refreshDockerEnv();
     showToast(_t("镜像下载完成"));
@@ -1008,9 +1087,41 @@ async function handleDockerDownload(btn) {
   } catch (e) {
     console.error("[model_list] docker 准备失败:", e);
     delete st.dockerTasks[modelId];
+    if (isCancelError(e)) {
+      // 用户主动取消：不算失败，刷新镜像状态让按钮回到「下载」
+      await refreshDockerImages();
+      showToast(_t("已取消下载"));
+      renderModelTable();
+      return;
+    }
     // 失败原因可能是 GPU 直通能力不足（后端在此复检），刷新环境让卡片同步置灰
     await refreshDockerEnv();
     showToast(friendlyError(e, { prefix: _t("下载失败: ") }));
+    renderModelTable();
+  }
+}
+
+// 取消进行中的 docker 任务：后端置取消标志并强杀 docker pull 等子进程，
+// 挂起的 setup/start 命令会以「已取消」结束（下面 catch 里按提示而非失败展示）
+async function handleDockerCancel(btn) {
+  const modelId = btn.dataset.dockerCancel;
+  const st = getDockerState();
+  const ok = await showDockerConfirm(
+    _t("取消下载任务"),
+    _t("确定要取消当前任务吗？已下载的内容会保留，下次可以继续。"),
+    _t("确定取消")
+  );
+  if (!ok) return;
+  btn.disabled = true;
+  btn.textContent = _t("取消中...");
+  try {
+    // 提示统一由挂起命令的 catch 给出（避免重复弹两次）
+    await invoke()("cancel_docker_task", { modelId: modelId });
+    delete st.dockerTasks[modelId];
+    await refreshDockerImages();
+    renderModelTable();
+  } catch (e) {
+    showToast(friendlyError(e, { prefix: _t("取消失败: ") }));
     renderModelTable();
   }
 }
@@ -1024,6 +1135,12 @@ async function handleDockerStart(btn) {
     showToast(blocked);
     return;
   }
+  // 下载刚结束的误触保护：启动必须是一次独立的手动点击（见 markDockerAction 注释）
+  if (isRecentDockerAction(modelId)) {
+    console.log("[model_list] 忽略下载结束后的误触启动:", modelId);
+    showToast(_t("已忽略下载结束后的误触，如需启动请再次点击「启动」"));
+    return;
+  }
   btn.textContent = _t("启动中...");
   btn.disabled = true;
   try {
@@ -1035,10 +1152,19 @@ async function handleDockerStart(btn) {
         S().runningModelPort = status.port;
       }
     } catch (_) {}
+    // 启动任务结束，清掉残留的进度/取消按钮
+    delete getDockerState().dockerTasks[modelId];
     showToast(_t("已启动：请在 ComfyUI 左侧「工作流」中选择 adm-qwen-image-2.1-t2i（文生图）或 adm-qwen-image-2.1-image-edit（图生图）"));
     renderModelTable();
   } catch (e) {
     console.error("[model_list] 启动图片生成模型失败:", e);
+    const dst = getDockerState();
+    delete dst.dockerTasks[modelId];
+    if (isCancelError(e)) {
+      showToast(_t("已取消启动"));
+      renderModelTable();
+      return;
+    }
     // 启动前后端会复检 GPU 直通能力，失败时刷新环境让卡片同步置灰
     await refreshDockerEnv();
     showToast(friendlyError(e, { prefix: _t("启动失败: ") }));
@@ -1119,13 +1245,27 @@ function handleTauriEvent(type, payload) {
       if (payload.stage === "done") {
         delete dst.dockerTasks[model_id];
         dst.dockerImages[model_id] = true;
+        markDockerAction(model_id);
         updateProgressBar(model_id, 100);
+        renderModelTable();
+      } else if (payload.stage === "cancelled") {
+        // 用户取消：任务结束，镜像未就绪，按钮回到「下载」
+        delete dst.dockerTasks[model_id];
         renderModelTable();
       } else {
         dst.dockerTasks[model_id] = { stage: payload.stage, progress: payload.progress || 0, message: payload.message || "" };
         updateProgressBar(model_id, payload.progress || 0);
         const btn = document.querySelector('[data-model-id="' + model_id + '"]');
-        if (btn) btn.textContent = (payload.message || _t("处理中...")) + " " + (payload.progress || 0) + "%";
+        if (btn) {
+          // 启动阶段按钮统一显示「模型启动中」，细节放卡片提示行
+          const label = isDockerStarting(payload.stage) ? _t("模型启动中…") : (payload.message || _t("处理中..."));
+          btn.textContent = label + " " + (payload.progress || 0) + "%";
+        }
+        const hint = document.querySelector('[data-hint="' + model_id + '"]');
+        if (hint && isDockerStarting(payload.stage) && payload.message) hint.textContent = payload.message;
+        // 阶段切换会影响「取消」按钮是否出现（安装 Docker Desktop 阶段不可取消）
+        const hasCancelBtn = !!document.querySelector('[data-docker-cancel="' + model_id + '"]');
+        if (isDockerTaskCancellable(payload.stage) !== hasCancelBtn) renderModelTable();
       }
       break;
     }
@@ -1204,12 +1344,15 @@ function handleTauriEvent(type, payload) {
 case "model-started": {
       st.runningModelId = model_id;
       st.runningModelPort = port;
+      // 启动任务已结束：清掉残留的进度/取消按钮（后端 clear_task 不发事件）
+      delete getDockerState().dockerTasks[model_id];
       renderModelTable();
       break;
     }
     case "model-stopped": {
       st.runningModelId = null;
       st.runningModelPort = null;
+      delete getDockerState().dockerTasks[model_id];
       renderModelTable();
       break;
     }
