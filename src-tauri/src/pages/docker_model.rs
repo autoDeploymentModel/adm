@@ -12,7 +12,7 @@
 //   model-stopped    { model_id }                            容器停止
 // 出错通过命令返回的 Err 传递给前端（friendlyError + showToast），不使用事件
 
-use crate::app_state::AppState;
+use crate::app_state::{AppState, DockerCancel};
 use crate::common::config;
 use crate::common::utils::download::download_with_resume_cancellable;
 use crate::common::utils::platform::{assign_child_to_kill_job, create_hidden_command, get_gpu_devices, kill_process_tree};
@@ -23,7 +23,7 @@ use crate::dbg_log;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 use tauri::Emitter;
@@ -185,6 +185,7 @@ fn run_streaming(
     if let Some((state, model_id)) = tracker {
         register_child(state, model_id, child.id());
     }
+    let tracked_pid = tracker.map(|_| child.id());
 
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
@@ -225,8 +226,8 @@ fn run_streaming(
         let _ = h.join();
     }
     let status = child.wait()?;
-    if let Some((state, model_id)) = tracker {
-        unregister_child(state, model_id);
+    if let (Some((state, model_id)), Some(pid)) = (tracker, tracked_pid) {
+        unregister_child(state, model_id, pid);
     }
     Ok((status, tail))
 }
@@ -299,23 +300,31 @@ pub fn clear_running_docker(state: &AppState) {
 // 期间必须能被用户中止；而 `docker pull` 是独立子进程，强杀 ADM 后它会继续在后台
 // 下载，所以既要登记 PID（供取消与退出清理强杀），也要挂 Windows Job（父死子死）。
 
-/// 开始一个 docker 长任务：注册取消标志，并清掉上一次的残留记录
-fn begin_docker_task(state: &AppState, model_id: &str) {
+/// 任务令牌自增源（区分同一 model 上的重叠任务）
+static TASK_TOKEN: AtomicU64 = AtomicU64::new(1);
+
+/// 开始一个 docker 长任务：注册取消标志，并清掉上一次的残留记录；返回本次任务令牌
+fn begin_docker_task(state: &AppState, model_id: &str) -> u64 {
+    let token = TASK_TOKEN.fetch_add(1, Ordering::Relaxed);
     if let Ok(mut m) = state.docker_cancels.lock() {
-        m.insert(model_id.to_string(), Arc::new(AtomicBool::new(false)));
+        m.insert(
+            model_id.to_string(),
+            DockerCancel { token, flag: Arc::new(AtomicBool::new(false)) },
+        );
     }
     if let Ok(mut m) = state.docker_children.lock() {
         m.remove(model_id);
     }
+    token
 }
 
-/// 结束 docker 长任务：注销取消标志与子进程记录
-fn end_docker_task(state: &AppState, model_id: &str) {
+/// 结束 docker 长任务：仅当仍是本次任务（令牌一致）时才注销取消标志，
+/// 避免旧任务的收尾把重叠的新任务标志抹掉（子进程记录由 `unregister_child` 按 pid 收尾）
+fn end_docker_task(state: &AppState, model_id: &str, token: u64) {
     if let Ok(mut m) = state.docker_cancels.lock() {
-        m.remove(model_id);
-    }
-    if let Ok(mut m) = state.docker_children.lock() {
-        m.remove(model_id);
+        if m.get(model_id).map(|c| c.token) == Some(token) {
+            m.remove(model_id);
+        }
     }
 }
 
@@ -325,8 +334,7 @@ fn task_cancelled(state: &AppState, model_id: &str) -> bool {
         .docker_cancels
         .lock()
         .ok()
-        .and_then(|m| m.get(model_id).cloned())
-        .map(|f| f.load(Ordering::Relaxed))
+        .and_then(|m| m.get(model_id).map(|c| c.flag.load(Ordering::Relaxed)))
         .unwrap_or(false)
 }
 
@@ -338,9 +346,12 @@ fn register_child(state: &AppState, model_id: &str, pid: u32) {
     assign_child_to_kill_job(pid);
 }
 
-fn unregister_child(state: &AppState, model_id: &str) {
+/// 注销任务子进程：仅当记录仍是同一个 pid 时才删除（旧任务不得抹掉新任务的记录）
+fn unregister_child(state: &AppState, model_id: &str, pid: u32) {
     if let Ok(mut m) = state.docker_children.lock() {
-        m.remove(model_id);
+        if m.get(model_id) == Some(&pid) {
+            m.remove(model_id);
+        }
     }
 }
 
@@ -958,9 +969,15 @@ pub async fn get_docker_tasks(state: tauri::State<'_, AppState>) -> Result<HashM
     Ok(map.clone())
 }
 
-/// 清理残留的已停止容器（返回清理数量），供进入模型页时对账
+/// 清理残留的已停止容器（返回清理数量），供进入模型页时对账。
+/// 有任务在进行中时跳过：`docker run`/`docker start` 执行期间容器会瞬时处于
+/// created/exited 状态，此刻删除会把刚创建的容器删掉，导致启动莫名失败。
 #[tauri::command]
-pub async fn prune_docker_containers() -> Result<usize, AppError> {
+pub async fn prune_docker_containers(state: tauri::State<'_, AppState>) -> Result<usize, AppError> {
+    let busy = state.docker_tasks.lock().map(|m| !m.is_empty()).unwrap_or(false);
+    if busy {
+        return Ok(0);
+    }
     tauri::async_runtime::spawn_blocking(prune_stopped_containers)
         .await
         .map_err(|e| AppError::msg(format!("清理残留容器失败: {}", e)))
@@ -975,12 +992,16 @@ pub async fn sync_docker_container(
 ) -> Result<bool, AppError> {
     let name = container_name(&model_id);
     let name_probe = name.clone();
+    // 有任务在进行中（可能正在 docker run/start）：不删容器，避免把刚创建的删掉
+    let busy = state.docker_tasks.lock().map(|m| m.contains_key(&model_id)).unwrap_or(false);
     let running = tauri::async_runtime::spawn_blocking(move || {
         if container_running(&name_probe) {
             true
         } else {
             // 容器已停止 / 上次被强杀留下的残留：直接删除，避免在 docker ps -a 里堆积
-            remove_container_blocking(&name_probe);
+            if !busy {
+                remove_container_blocking(&name_probe);
+            }
             false
         }
     })
@@ -1019,9 +1040,9 @@ pub async fn setup_docker_model(
     image: String,
 ) -> Result<(), AppError> {
     // 注册取消标志：下载安装包 / 拉镜像期间用户可点「取消」中止（并强杀子进程）
-    begin_docker_task(&state, &model_id);
+    let token = begin_docker_task(&state, &model_id);
     let result = setup_docker_model_inner(app, &state, model_id.clone(), image).await;
-    end_docker_task(&state, &model_id);
+    end_docker_task(&state, &model_id, token);
     result
 }
 
@@ -1090,9 +1111,9 @@ pub async fn start_docker_model(
     image: String,
 ) -> Result<(), AppError> {
     // 注册取消标志：等待引擎 / 启动容器期间用户可点「取消」中止
-    begin_docker_task(&state, &model_id);
+    let token = begin_docker_task(&state, &model_id);
     let result = start_docker_model_inner(app, &state, model_id.clone(), image).await;
-    end_docker_task(&state, &model_id);
+    end_docker_task(&state, &model_id, token);
     result
 }
 
@@ -1251,8 +1272,8 @@ pub async fn cancel_docker_task(
         .map(|m| m.contains_key(&model_id))
         .unwrap_or(false);
     if let Ok(m) = state.docker_cancels.lock() {
-        if let Some(flag) = m.get(&model_id) {
-            flag.store(true, Ordering::Relaxed);
+        if let Some(cancel) = m.get(&model_id) {
+            cancel.flag.store(true, Ordering::Relaxed);
         }
     }
     kill_task_children(&state, &model_id);

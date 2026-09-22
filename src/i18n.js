@@ -284,6 +284,7 @@ const EN = {
   "已取消下载": "Download cancelled",
   "已取消启动": "Startup cancelled",
   "模型启动中…": "Starting model…",
+  "界面刚刷新，已忽略这次误触，请再点一次": "The list just refreshed and that click was ignored — please click again.",
   "已忽略下载结束后的误触，如需启动请再次点击「启动」": "Ignored a click that arrived right after the download finished — click \"Start\" again to launch.",
   "检测到图片生成模型仍在运行（上次未正常退出）": "An image generation model is still running (the app did not exit cleanly last time)",
   "当前设备不支持图片生成模型": "This device does not support image generation models",

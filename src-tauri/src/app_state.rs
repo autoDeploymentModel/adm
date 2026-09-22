@@ -4,6 +4,13 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use sysinfo::System;
 
+/// docker 长任务的取消标志 + 令牌。
+/// 同一 model 上可能出现重叠任务（取消后立刻重下 / 重启动），token 保证只有
+/// 当前任务的收尾才会清掉记录，旧任务不得抹掉新任务的取消标志。
+pub struct DockerCancel {
+    pub token: u64,
+    pub flag: Arc<AtomicBool>,
+}
 
 /// admAgent server 模式会话：每个 workspace 一个独立会话，持有该 workspace 的
 /// SSE 转发任务。子进程由 AppState.agent_child 全局管理（单进程 server
@@ -30,9 +37,9 @@ pub struct AppState {
     pub running_container: Mutex<Option<String>>,
     /// docker 长任务进度（model_id -> 任务），供 UI 重载后恢复
     pub docker_tasks: Mutex<HashMap<String, DockerTask>>,
-    /// docker 长任务取消标志（model_id -> 标志）：任务启动时创建、结束时移除，
+    /// docker 长任务取消标志（model_id -> 取消记录）：任务启动时创建、结束时移除，
     /// 「取消」命令置位，下载 / 等待引擎 / 拉镜像等循环读取后中止
-    pub docker_cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    pub docker_cancels: Mutex<HashMap<String, DockerCancel>>,
     /// docker 长任务拉起的子进程（model_id -> pid）：取消与退出清理时强杀，
     /// 避免 `docker pull` 在应用退出后继续在后台下载
     pub docker_children: Mutex<HashMap<String, u32>>,

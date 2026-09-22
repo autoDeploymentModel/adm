@@ -762,12 +762,16 @@ function initModelTabs() {
 
 // 卡片按钮点击穿透保护：renderModelTable() 会整体替换按钮（「下载」完成变成「启动」、
 // 「关闭模型」后变成「启动」），连击/手快的第二下会落在新按钮上，表现为"自己又启动了"。
-// 渲染后极短时间内忽略卡片上的动作按钮点击（「查看模型」无害、不拦）。
+// 渲染后极短时间内忽略卡片上的动作按钮点击（「查看模型」无害、不拦）；
+// 被拦时给提示，避免用户以为按钮坏了（llama 与 docker 卡片都适用）。
 const CLICK_THROUGH_MS = 350;
 let lastCardRenderAt = 0;
 function isClickThrough() {
   const hit = Date.now() - lastCardRenderAt < CLICK_THROUGH_MS;
-  if (hit) console.log("[model_list] 忽略重渲染后的误触点击");
+  if (hit) {
+    console.log("[model_list] 忽略重渲染后的误触点击");
+    showToast(_t("界面刚刷新，已忽略这次误触，请再点一次"));
+  }
   return hit;
 }
 
