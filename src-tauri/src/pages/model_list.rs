@@ -419,13 +419,21 @@ pub async fn start_model(
     }
     *state.model_supports_images.lock().unwrap_or_else(|e| e.into_inner()) = vision_enabled;
 
-    // 推理能力：UI 已不再暴露推理开关，按 llama-server 默认 auto 行为处理
-    // （llama-server 按模型格式自动启用，能出推理内容即具备该能力）
+    // 思考模式（--reasoning）：off 关闭思考、on 强制开启、auto（默认）不传参按模板检测
+    let reasoning = params
+        .reasoning
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .filter(|s| *s == "on" || *s == "off");
+    if let Some(r) = reasoning {
+        args.extend(["--reasoning".to_string(), r.to_string()]);
+    }
     // 同步记录到 AppState 供 Agent 配置（admAgent.json 的 can_reason）使用。
     *state
         .model_supports_reasoning
         .lock()
-        .unwrap_or_else(|e| e.into_inner()) = true;
+        .unwrap_or_else(|e| e.into_inner()) = reasoning != Some("off");
 
     // 上下文大小（UI 唯一允许调整的参数），0 = 不传，使用模型自带上下文
     if let Some(ctx) = params.ctx_size {

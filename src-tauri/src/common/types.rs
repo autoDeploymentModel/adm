@@ -64,6 +64,9 @@ pub struct LaunchParams {
     /// 因此保持 opt-in，由用户核对 `--list-devices` 输出后自行开启。
     #[serde(default)]
     pub exclude_integrated: bool,
+    /// 思考/推理模式（--reasoning）：on / off / auto（默认 auto，不传参）
+    #[serde(default)]
+    pub reasoning: Option<String>,
 }
 
 

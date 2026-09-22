@@ -261,6 +261,17 @@ const template = `
             <div class="param-label">${_t("上下文大小")}<div class="param-key">-c, --ctx-size</div></div>
             <div class="param-input"><input type="number" id="ctx_size" value="25600" min="0"><div class="param-desc">${_t("仅修改此参数；其它参数已固定为 llama-server 默认值，留 0 表示使用模型自带上下文")}</div></div>
           </div>
+          <div class="param-row">
+            <div class="param-label">${_t("思考模式")}<div class="param-key">-rea, --reasoning</div></div>
+            <div class="param-input">
+              <select id="reasoning">
+                <option value="auto">auto — ${_t("按模型模板自动检测（默认）")}</option>
+                <option value="on">on — ${_t("强制开启思考")}</option>
+                <option value="off">off — ${_t("关闭思考")}</option>
+              </select>
+              <div class="param-desc">${_t("控制模型是否输出思考/推理内容；关闭后可加快响应速度")}</div>
+            </div>
+          </div>
         </div>
 
         <div class="param-group">
@@ -557,6 +568,7 @@ function getParamsFromForm() {
     main_gpu: Number.isFinite(mgVal) ? mgVal : null,
     device: readListField("device", RE_DEVICE_LIST, "设备列表"),
     exclude_integrated: document.getElementById("exclude_integrated").checked,
+    reasoning: (document.getElementById("reasoning") || {}).value || "auto",
   };
 }
 
@@ -576,6 +588,8 @@ function fillFormFromParams(params) {
   // 默认关闭（与后端 serde 默认一致）：自动注入的 --device 用的是系统报告名，
   // 与 llama-server --list-devices 的取值格式不保证一致，不能默认改动启动行为
   document.getElementById("exclude_integrated").checked = p.exclude_integrated === true;
+  const reaEl = document.getElementById("reasoning");
+  if (reaEl) reaEl.value = p.reasoning || "auto";
 }
 
 async function saveParams() {
@@ -602,7 +616,7 @@ function resetParams() {
 function autoSave() { saveParams(); }
 
 function setupAutoSave() {
-  ["ctx_size", "port", "host", "multi_gpu", "split_mode", "tensor_split", "main_gpu", "device", "exclude_integrated"].forEach(function (id) {
+  ["ctx_size", "reasoning", "port", "host", "multi_gpu", "split_mode", "tensor_split", "main_gpu", "device", "exclude_integrated"].forEach(function (id) {
     var el = document.getElementById(id);
     if (el) el.addEventListener("change", autoSave);
   });
