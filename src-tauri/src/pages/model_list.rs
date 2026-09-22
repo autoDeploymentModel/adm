@@ -9,8 +9,52 @@ use crate::dbg_log;
 use crate::pages::agent::api_debug_log;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tauri::Emitter;
 use tauri::Manager;
+
+/// 启动就绪探测窗口（秒）：超过该时长仍未就绪的进程退出不再当作「启动失败」上报，
+/// 避免把运行一段时间后的崩溃（OOM 等）说成启动失败
+const READY_PROBE_SECS: u64 = 120;
+
+/// 探测 llama-server 是否已可服务：TCP 可连且 `/health` 返回 200。
+/// 不用日志文案做权威判据（llama.cpp 日志走 stderr 且文案随版本变化）。
+/// 注意：端口上的 200 可能来自别的进程，退出时需按「本进程退出后端口是否仍 200」复核，
+/// 否则端口被占用、本进程绑定失败的场景会被误判成就绪（见 start_model 监控线程）。
+fn server_port_ready(host: &str, port: u16) -> bool {
+    use std::io::{Read, Write};
+    use std::net::{TcpStream, ToSocketAddrs};
+
+    let addrs = match (host, port).to_socket_addrs() {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+    for addr in addrs {
+        let stream = TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(500));
+        let mut stream = match stream {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(1000)));
+        let req = format!(
+            "GET /health HTTP/1.1\r\nHost: {}:{}\r\nConnection: close\r\n\r\n",
+            host, port
+        );
+        if stream.write_all(req.as_bytes()).is_err() {
+            continue;
+        }
+        let mut buf = [0u8; 32];
+        // 只读状态行即可判定（模型加载中返回 503，加载完成才 200）
+        if let Ok(n) = stream.read(&mut buf) {
+            let head = String::from_utf8_lossy(&buf[..n]);
+            if head.starts_with("HTTP/1.1 200") || head.starts_with("HTTP/1.0 200") {
+                return true;
+            }
+        }
+    }
+    false
+}
 
 // ===== Tauri Command =====
 
@@ -325,6 +369,9 @@ pub async fn start_model(
         }
     }
 
+    // 复位停止意图：本次启动后进程在进入监听前退出、且非用户主动停止，即视为启动异常
+    state.model_stop_intent.store(false, Ordering::SeqCst);
+
     let server_path = config::get_llama_server_path(Some(&app))?;
 
     // Windows 前置校验：VC++ 运行库缺失时系统加载器会弹「找不到 VCRUNTIME140_1.dll」
@@ -553,7 +600,7 @@ pub async fn start_model(
 
     // 监听地址（默认 127.0.0.1 仅本地）
     let host = params.host.clone().unwrap_or_else(|| "127.0.0.1".to_string());
-    args.extend(["--host".to_string(), host]);
+    args.extend(["--host".to_string(), host.clone()]);
 
     args.push("--verbose".to_string());
 
@@ -687,6 +734,50 @@ pub async fn start_model(
     let app_clone2 = app.clone();
     let model_id_clone2 = model_id.clone();
 
+    // 启动成功判据（未就绪就退出 = 启动异常）：
+    //   ① 本进程 stdout/stderr 出现 listening 行（确证是我们这个进程在服务）
+    //   ② TCP 端口 /health 返回 200（不依赖日志文案的权威判据；但端口上可能
+    //      跑着别的进程，退出时必须复核——见监控线程里的 still_serving）
+    let ready_child = Arc::new(AtomicBool::new(false));
+    let ready_child_out = ready_child.clone();
+    let ready_child_err = ready_child.clone();
+    let ready_child_exit = ready_child.clone();
+    let ready_probe = Arc::new(AtomicBool::new(false));
+    let ready_probe_exit = ready_probe.clone();
+    let started_at = std::time::Instant::now();
+    let probe_host = if host.is_empty() || host == "0.0.0.0" || host == "::" {
+        "127.0.0.1".to_string()
+    } else {
+        host.clone()
+    };
+    {
+        let probe_host = probe_host.clone();
+        let probe_child = ready_child.clone();
+        let probe_app = app.clone();
+        std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(READY_PROBE_SECS);
+            while std::time::Instant::now() < deadline
+                && !ready_probe.load(Ordering::SeqCst)
+                && !probe_child.load(Ordering::SeqCst)
+            {
+                if server_port_ready(&probe_host, port) {
+                    ready_probe.store(true, Ordering::SeqCst);
+                    return;
+                }
+                // 进程已退出（启动失败）：交给监控线程报错，无需继续探测
+                let alive = {
+                    let st = probe_app.state::<AppState>();
+                    let cur = *st.running_process.lock().unwrap_or_else(|e| e.into_inner());
+                    cur == Some(pid)
+                };
+                if !alive {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(300));
+            }
+        });
+    }
+
     std::thread::spawn(move || {
         use std::io::{BufRead, BufReader};
 
@@ -712,6 +803,7 @@ pub async fn start_model(
                         || line.contains("HTTP server listening")
                         || line.contains("listening on")
                     {
+                        ready_child_out.store(true, Ordering::SeqCst);
                         app_c
                             .emit(
                                 "model-started",
@@ -734,6 +826,13 @@ pub async fn start_model(
             Some(std::thread::spawn(move || {
                 let reader = BufReader::new(stderr);
                 for line in reader.lines().map_while(Result::ok) {
+                    // llama.cpp 的日志走 stderr：就绪判据必须同时看这一路
+                    if line.contains("llama server listening")
+                        || line.contains("HTTP server listening")
+                        || line.contains("listening on")
+                    {
+                        ready_child_err.store(true, Ordering::SeqCst);
+                    }
                     app_c
                         .emit(
                             "model-log",
@@ -779,6 +878,53 @@ pub async fn start_model(
             }
         }
 
+        // 未就绪就退出 = 启动异常（用户主动停止时不提示）：
+        // - 仅启动窗口内的退出算启动失败（跑起来很久后才崩属运行时故障，不套用启动失败文案）
+        // - pid 校验：避免「停止后立刻重启」时旧进程的收尾误报到新进程上
+        // - 端口复核：本进程退出后 /health 仍 200，说明之前那个 200 来自端口上的
+        //   其它进程（本进程多半因端口被占用而绑定失败），不能算作已就绪
+        let child_ready = ready_child_exit.load(Ordering::SeqCst);
+        let in_startup_window = !child_ready
+            && started_at.elapsed() < std::time::Duration::from_secs(READY_PROBE_SECS);
+        // 只在启动窗口内、且本进程没自己报就绪时才花时间复核端口（最多 ~1.5s）
+        let still_serving = in_startup_window && server_port_ready(&probe_host, port);
+        let is_ready = child_ready
+            || (ready_probe_exit.load(Ordering::SeqCst) && !still_serving);
+        let port_busy = !is_ready && still_serving;
+        let startup_failed = !is_ready
+            && in_startup_window
+            && !app_clone2
+                .state::<AppState>()
+                .model_stop_intent
+                .swap(false, Ordering::SeqCst)
+            && {
+                let state = app_clone2.state::<AppState>();
+                let cur = *state.running_process.lock().unwrap_or_else(|e| e.into_inner());
+                cur == Some(pid)
+            };
+        if startup_failed {
+            let exit_code = match &exit_status {
+                Ok(status) => status.code(),
+                Err(_) => None,
+            };
+            app_clone2
+                .emit(
+                    "model-error",
+                    serde_json::json!({
+                        "model_id": &model_id_clone2,
+                        "error": if port_busy {
+                            "推理引擎启动失败：端口被其它程序占用"
+                        } else {
+                            "推理引擎进程异常退出"
+                        },
+                        "exit_code": exit_code,
+                        // 供前端选择对应提示（不要靠匹配已翻译的错误文案）
+                        "port_busy": port_busy,
+                    }),
+                )
+                .ok();
+        }
+
         // 清除 AppState 中的状态，确保进程退出后可以重新启动
         {
             let state = app_clone2.state::<AppState>();
@@ -806,6 +952,8 @@ pub async fn stop_model(state: tauri::State<'_, AppState>) -> Result<(), AppErro
         pid_lock.ok_or("没有正在运行的模型")?
     };
 
+    // 先标记主动停止再 kill：监控线程看到该标记时不把退出当启动失败报错
+    state.model_stop_intent.store(true, Ordering::SeqCst);
     crate::common::utils::platform::kill_process_tree(pid);
 
     {

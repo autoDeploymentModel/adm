@@ -41,6 +41,10 @@ fn cleanup_processes(app: &tauri::AppHandle) {
     // 强杀记录中的模型进程（整棵进程树）
     let pid_opt = state.running_process.lock().ok().and_then(|l| *l);
     if let Some(pid) = pid_opt {
+        // 标记为主动停止：退出时的强杀不该被监控线程当成「启动异常」弹出提示
+        state
+            .model_stop_intent
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         crate::common::utils::platform::kill_process_tree(pid);
     }
     // 兜底：按进程名清理任何残留的 llama-server 子进程
@@ -163,6 +167,7 @@ pub fn run() {
             index::check_update,
             index::check_vc_redist,
             index::download_and_extract_llamacpp,
+            index::reinstall_llamacpp,
             // model_list.rs
             model_list::scan_local_models,
             model_list::scan_part_files,

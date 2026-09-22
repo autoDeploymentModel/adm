@@ -407,6 +407,38 @@ pub fn check_vc_redist(app: tauri::AppHandle) -> bool {
 
 #[tauri::command]
 pub async fn download_and_extract_llamacpp(app: tauri::AppHandle, url: String) -> Result<(), AppError> {
+    install_llamacpp_from_url(app, url).await
+}
+
+/// 重新安装：先删除现有 llamacpp 目录，再按当前硬件重新下载安装包
+/// （复用升级用的下载/解压逻辑，只是不比较版本号）
+#[tauri::command]
+pub async fn reinstall_llamacpp(app: tauri::AppHandle) -> Result<(), AppError> {
+    // Windows：VC++ 运行库缺失时 llama-server 无法运行，先拦下，避免白等一次下载
+    #[cfg(target_os = "windows")]
+    if !check_vc_redist_installed(llama_server_dir(&app).as_deref()) {
+        bail!("系统缺少 Visual C++ 运行库（VCRUNTIME140_1.dll），请先安装 VC++ 2015-2022 运行库后重试。");
+    }
+
+    // 先解析下载地址：拿不到地址（如不支持的系统）时不删除现有文件
+    let hardware = detect_hardware_for_llamacpp();
+    let url = get_llamacpp_download_url(&hardware)?;
+
+    let llamacpp_dir = config::get_llamacpp_dir(Some(&app))?;
+    if llamacpp_dir.exists() {
+        std::fs::remove_dir_all(&llamacpp_dir).map_err(|e| {
+            format!(
+                "删除旧版 llamacpp 文件失败（llama-server 可能正在运行或被杀软占用，请先停止模型后重试）: {}",
+                e
+            )
+        })?;
+        eprintln!("[INFO] llamacpp directory removed for reinstall: {:?}", llamacpp_dir);
+    }
+
+    install_llamacpp_from_url(app, url).await
+}
+
+async fn install_llamacpp_from_url(app: tauri::AppHandle, url: String) -> Result<(), AppError> {
     if url.trim().is_empty() || !url.starts_with("http") {
         bail!(
             "下载地址无效: {}，请重新检查更新",

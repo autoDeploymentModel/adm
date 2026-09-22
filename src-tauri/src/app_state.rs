@@ -61,6 +61,9 @@ pub struct AppState {
     pub model_supports_images: Mutex<bool>,
     pub model_supports_reasoning: Mutex<bool>,
     pub model_generation: Mutex<u64>,
+    /// 用户主动停止 llama-server 的意图：stop_model 在 kill 前置位、start_model 复位。
+    /// 启动监控线程据此区分「用户点关闭」与「llama-server 启动异常退出」，后者发 model-error 提示
+    pub model_stop_intent: AtomicBool,
 }
 
 impl AppState {
@@ -86,6 +89,7 @@ impl AppState {
             model_supports_images: Mutex::new(false),
             model_supports_reasoning: Mutex::new(false),
             model_generation: Mutex::new(0),
+            model_stop_intent: AtomicBool::new(false),
         }
     }
 

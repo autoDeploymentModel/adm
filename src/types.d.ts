@@ -42,6 +42,8 @@ declare global {
       hideUpdateDialog: () => void;
       checkForUpdate: (silent?: boolean) => Promise<void>;
       showVcRedistInstallDialog: () => void;
+      /** 设置页「重新安装」：后端删除 llamacpp 目录后重新下载安装包，成功返回 true */
+      reinstallLlamacpp: () => Promise<boolean>;
       i18n?: {
         t: (str: string) => string;
         tV: (str: string, vars?: Record<string, string | number>) => string;

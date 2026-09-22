@@ -1,6 +1,6 @@
 // @ts-nocheck -- 历史视图暂未类型化（jsconfig checkJs 全局开启，新代码请勿加此标记）
 import { t as _t } from "../i18n.js";
-import { friendlyError } from "./agent/error.js";
+import { friendlyError, getErrorMessage } from "./agent/error.js";
 const template = `
 <style>
   /* 全局 reset（*）由 index.html 壳层统一提供，视图内不重复定义；选择器尽量限定在本视图容器内 */
@@ -1011,10 +1011,18 @@ async function handleStart(btn) {
     console.error("[model_list] 启动失败:", e);
     // VC++ 运行库缺失时后端会直接拒绝启动（避免弹「找不到 VCRUNTIME140_1.dll」系统错误框），
     // 这里接着引导去安装，而不是只给一条错误提示
-    let vcMissing = false;
-    try { vcMissing = (await invoke()("check_vc_redist")) === false; } catch (vcErr) { console.warn("[model_list] VC++ 运行库检测失败:", vcErr); }
+    const raw = getErrorMessage(e);
+    // 后端报错文本已点明缺运行库时直接引导安装（后端用的是同源检测，比再查一次更可信）
+    let vcMissing = /vcruntime|visual c\+\+/i.test(raw);
+    if (!vcMissing) {
+      try { vcMissing = (await invoke()("check_vc_redist")) === false; } catch (vcErr) { console.warn("[model_list] VC++ 运行库检测失败:", vcErr); }
+    }
     if (vcMissing && window.ADM && window.ADM.showVcRedistInstallDialog) {
       window.ADM.showVcRedistInstallDialog();
+    } else if (/llama|llamacpp/i.test(raw)) {
+      // llama-server 拉起失败（可执行文件缺失/损坏等）属推理引擎问题：保留原始错误文本
+      // （含具体路径/命令），只在后面追加可操作提示
+      showToast(friendlyError(e, { prefix: "启动失败: " }) + _t("，请到设置检查推理引擎"));
     } else {
       showToast(friendlyError(e, { prefix: "启动失败: " }));
     }
@@ -1361,7 +1369,13 @@ case "model-started": {
       break;
     }
     case "model-error": {
-      showToast(friendlyError(error, { prefix: _t("模型错误 [") + model_id + _t("]: ") }));
+      // llamacpp 启动异常（未进入监听就退出，后端 model_list.rs 监控线程发出）
+      const code = payload.exit_code;
+      const codeText = (typeof code === "number" && /^-?\d+$/.test(String(code))) ? " (" + String(code) + ")" : "";
+      const detail = (typeof error === "string" && error) ? _t(error) : _t("推理引擎启动异常");
+      // 用后端显式标志判断端口占用：错误文案已按当前语言翻译过，不能拿中文关键字匹配
+      const hint = payload.port_busy === true ? _t("，请先释放被占用的端口") : _t("，请到设置检查推理引擎");
+      showToast(_t("启动失败: ") + detail + codeText + hint);
       break;
     }
   }

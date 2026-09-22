@@ -65,7 +65,7 @@
 ## Rust 后端（`src-tauri/src/`）
 | 模块 | 关键命令 |
 |--------|-------------|
-| `index.rs` | `get_system_info`, `check_update`, `download_and_extract_llamacpp` |
+| `index.rs` | `get_system_info`, `check_update`, `download_and_extract_llamacpp`, `reinstall_llamacpp`（设置页「重新安装」：先删 llamacpp 目录再重新下载，复用升级的下载/解压逻辑，不比较版本号） |
 | `model_list.rs` | `fetch_model_list`, `scan_local_models`, `download_model`, `start_model`, `stop_model`, `get_model_status` |
 | `docker_model.rs` | `check_docker_env`, `check_docker_image`, `get_docker_tasks`, `setup_docker_model`, `start_docker_model`, `stop_docker_model`, `delete_docker_image` |
 | `settings.rs` | `save_settings`（原子写入：`.tmp` + `rename`）, `load_settings`, `get_app_version`, `get_llamacpp_version` |

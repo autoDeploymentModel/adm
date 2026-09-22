@@ -442,7 +442,7 @@ const template = `
           <tr><td>${_t("Tauri 版本")}</td><td id="v-tauri">${_t("检测中...")}</td></tr>
           <tr>
             <td>${_t("llama.cpp 版本")}</td>
-            <td><span id="v-llamacpp" style="margin-right:8px;">${_t("检测中...")}</span><button class="btn-delete-llamacpp" id="delete-llamacpp-btn">${_t("删除")}</button></td>
+            <td><span id="v-llamacpp" style="margin-right:8px;">${_t("检测中...")}</span><button class="btn-delete-llamacpp" id="reinstall-llamacpp-btn">${_t("重新安装")}</button></td>
           </tr>
           <tr><td>${_t("admAgent 版本")}</td><td id="v-admagent">${_t("检测中...")}</td></tr>
           <tr><td>${_t("操作系统")}</td><td id="v-os">${_t("检测中...")}</td></tr>
@@ -693,8 +693,9 @@ async function loadVersionInfo() {
 
 let _confirmResolve = null;
 
-function showConfirmDialog(message) {
+function showConfirmDialog(message, title) {
   const overlay = document.getElementById("confirm-overlay");
+  document.getElementById("confirm-title").textContent = title || _t("删除提示");
   document.getElementById("confirm-message").textContent = message;
   overlay.classList.add("show");
   return new Promise((resolve) => { _confirmResolve = resolve; });
@@ -705,15 +706,33 @@ function closeConfirmDialog(result) {
   if (_confirmResolve) { _confirmResolve(result); _confirmResolve = null; }
 }
 
-async function deleteLlamacpp() {
-  const confirmed = await showConfirmDialog(_t("确定要删除 llamacpp 文件夹吗？\n删除后需要重新下载才能使用 llama.cpp 相关功能。"));
+async function reinstallLlamacpp() {
+  if (typeof window.ADM?.reinstallLlamacpp !== "function") {
+    showToast(_t("重新安装功能不可用，请重启软件后重试"), true);
+    return;
+  }
+  const confirmed = await showConfirmDialog(
+    _t("确定要重新安装 llama.cpp 吗？\n将先删除现有 llamacpp 文件夹，再重新下载安装包（约数百 MB），期间请勿关闭软件。"),
+    _t("重新安装提示")
+  );
   if (!confirmed) return;
+  // 重新安装期间用户可能切走视图（元素被卸载），每次写回都重新取一次并判空
+  const setVersionText = (txt) => {
+    const el = document.getElementById("v-llamacpp");
+    if (el) el.textContent = txt;
+  };
+  const ok = await window.ADM.reinstallLlamacpp();
+  // 无论成败都重新读一次版本：删除失败时旧版还在，删了但没下载成功时则显示未安装，
+  // 不能直接把结果写死
+  setVersionText(_t("检测中..."));
   try {
-    await invoke()("delete_llamacpp");
-    document.getElementById("v-llamacpp").textContent = _t("未安装");
-    showToast(_t("llamacpp 文件夹已删除"), false);
+    const version = await invoke()("get_llamacpp_version");
+    setVersionText(version || _t("未知"));
+    if (ok) showToast(_t("llama.cpp 已重新安装"));
   } catch (e) {
-    showToast(friendlyError(e, { prefix: "删除失败: " }), true);
+    setVersionText(_t("未安装或无法检测"));
+    // 失败原因已在进度弹窗里展示，只在安装成功却读不到版本时才额外提示
+    if (ok) showToast(String(e), true);
   }
 }
 
@@ -981,7 +1000,7 @@ export default {
     });
     document.getElementById("reset-btn").addEventListener("click", resetParams);
     document.getElementById("check-update-btn").addEventListener("click", checkUpdateNow);
-    document.getElementById("delete-llamacpp-btn").addEventListener("click", deleteLlamacpp);
+    document.getElementById("reinstall-llamacpp-btn").addEventListener("click", reinstallLlamacpp);
     document.getElementById("confirm-cancel-btn").addEventListener("click", function() { closeConfirmDialog(false); });
     document.getElementById("confirm-ok-btn").addEventListener("click", function() { closeConfirmDialog(true); });
 

@@ -703,6 +703,32 @@
       }
     }
 
+    // 设置页「重新安装」：后端先删除 llamacpp 目录再重新下载解压，
+    // 复用升级弹窗的进度条与 llamacpp-download-progress 监听；成功返回 true
+    async function reinstallLlamacpp() {
+      llamacppIsMandatory = true;
+      showUpdateDialog(`
+        <div class="update-icon">🔧</div>
+        <div class="update-title">${t("正在重新安装 LLamaCPP")}</div>
+        <div class="update-desc">${t("将删除现有文件并重新下载安装包，请勿关闭软件")}</div>
+        <div class="llamacpp-progress-bar"><div class="llamacpp-progress-fill" id="llamacpp-progress-fill" style="width: 0%"></div></div>
+        <div class="llamacpp-status-text" id="llamacpp-status-text">${t("准备下载...")}</div>
+        <div class="update-buttons" style="margin-top:16px;"><button class="update-btn-secondary" onclick="hideUpdateDialog()">${t("关闭")}</button></div>`);
+      try {
+        await invoke("reinstall_llamacpp");
+        return true;
+      } catch (e) {
+        const statusText = document.getElementById("llamacpp-status-text");
+        if (statusText) statusText.textContent = _errMod.friendlyError(e, { prefix: "重新安装失败: " });
+        const progressFill = document.getElementById("llamacpp-progress-fill");
+        if (progressFill) progressFill.style.width = "0%";
+        return false;
+      } finally {
+        // 失败时立即允许关闭；成功时进度监听里的 done 分支会自行关闭弹窗
+        llamacppIsMandatory = false;
+      }
+    }
+
     function setupLlamacppProgressListener() {
       if (typeof listen !== "function") return;
       try {
@@ -791,6 +817,7 @@
       hideUpdateDialog,
       checkForUpdate,
       showVcRedistInstallDialog,
+      reinstallLlamacpp,
     };
     window.hideUpdateDialog = hideUpdateDialog;
     window.goAgent = goAgent;
