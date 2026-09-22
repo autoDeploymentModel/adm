@@ -305,13 +305,59 @@ pub fn container_running(name: &str) -> bool {
     }
 }
 
-/// 停止容器（阻塞，退出清理与 stop 命令共用）；返回是否成功
+/// 停止并删除容器（阻塞，退出清理与 stop 命令共用）；返回是否成功执行了清理动作。
+/// 关闭模型后不能只 stop：容器会以 exited 状态留在 `docker ps -a` 里持续堆积。
+/// 输出/输入/用户目录都挂载在宿主上，删除容器不丢数据，下次启动按原参数重建。
 pub fn stop_container_blocking(name: &str) -> bool {
-    match docker_cli() {
-        // -t 2：最多等 2 秒优雅退出，超时由 docker 自己 SIGKILL
-        Some(cli) => docker_output(&cli, &["stop", "-t", "2", name]).is_ok(),
-        None => false,
+    let cli = match docker_cli() {
+        Some(c) => c,
+        None => return false,
+    };
+    // -t 2：最多等 2 秒优雅退出，超时由 docker 自己 SIGKILL
+    let stopped = docker_output(&cli, &["stop", "-t", "2", name]).is_ok();
+    // 删除容器（同时覆盖上次异常退出残留的 stopped 容器）
+    let removed = docker_output(&cli, &["rm", "-f", name]).is_ok();
+    stopped || removed
+}
+
+/// 仅删除容器（不管是否在运行），用于清理已退出/挂掉的残留容器
+pub fn remove_container_blocking(name: &str) {
+    if let Some(cli) = docker_cli() {
+        let _ = docker_output(&cli, &["rm", "-f", name]);
     }
+}
+
+/// 清理所有已停止的 `adm-*` 容器（历史版本换过 model_id、进程被强杀、容器启动失败等场景会留下
+/// exited 容器，占内存/磁盘且在 `docker ps -a` 里越堆越多），返回清理数量。
+/// 只删非运行中的容器：运行中的由 sync / stop 逻辑处理，避免误删正在服务的容器。
+pub fn prune_stopped_containers() -> usize {
+    let cli = match docker_cli() {
+        Some(c) => c,
+        None => return 0,
+    };
+    let out = match docker_output(
+        &cli,
+        &["ps", "-a", "--filter", "name=^adm-", "--format", "{{.Names}}|{{.State}}"],
+    ) {
+        Ok(o) => o,
+        Err(_) => return 0,
+    };
+    let mut removed = 0usize;
+    for line in out.lines() {
+        let mut parts = line.trim().split('|');
+        let (name, st) = match (parts.next(), parts.next()) {
+            (Some(n), Some(s)) => (n.trim(), s.trim()),
+            _ => continue,
+        };
+        if name.is_empty() || st == "running" {
+            continue;
+        }
+        if docker_output(&cli, &["rm", "-f", name]).is_ok() {
+            dbg_log!("[docker] 清理残留容器 {}", name);
+            removed += 1;
+        }
+    }
+    removed
 }
 
 /// 应用退出时清理：正在运行的图片生成容器需要停止（与 llama-server 一致，
@@ -323,7 +369,7 @@ pub fn cleanup_on_exit(state: &AppState) {
     }
     let container = state.running_container.lock().unwrap_or_else(|e| e.into_inner()).clone();
     if let Some(name) = container {
-        dbg_log!("[docker] 退出清理：停止容器 {}", name);
+        dbg_log!("[docker] 退出清理：停止并删除容器 {}", name);
         let _ = stop_container_blocking(&name);
     }
     clear_running_docker(state);
@@ -755,6 +801,9 @@ pub async fn check_docker_env() -> Result<DockerEnvStatus, AppError> {
             unsupported_reason = nvidia_runtime_reason(c);
         }
     }
+    // 仅在调试构建里输出：dbg_log! 在 release 下展开为空，若不加 cfg 包裹，
+    // release 编译会报 reason 未使用（变量只在宏参数里被引用）。
+    #[cfg(debug_assertions)]
     if let Some(reason) = &unsupported_reason {
         dbg_log!("[docker] 环境不满足图片生成模型运行要求: {}", reason);
     }
@@ -792,6 +841,14 @@ pub async fn get_docker_tasks(state: tauri::State<'_, AppState>) -> Result<HashM
     Ok(map.clone())
 }
 
+/// 清理残留的已停止容器（返回清理数量），供进入模型页时对账
+#[tauri::command]
+pub async fn prune_docker_containers() -> Result<usize, AppError> {
+    tauri::async_runtime::spawn_blocking(prune_stopped_containers)
+        .await
+        .map_err(|e| AppError::msg(format!("清理残留容器失败: {}", e)))
+}
+
 /// 启动时对账：查询该模型容器是否仍在运行（上次被强杀 / 崩溃时容器会残留），
 /// 在运行则恢复后端运行状态，供 UI 显示「已启动」并允许关闭。
 #[tauri::command]
@@ -801,9 +858,17 @@ pub async fn sync_docker_container(
 ) -> Result<bool, AppError> {
     let name = container_name(&model_id);
     let name_probe = name.clone();
-    let running = tauri::async_runtime::spawn_blocking(move || container_running(&name_probe))
-        .await
-        .map_err(|e| AppError::msg(format!("容器状态查询失败: {}", e)))?;
+    let running = tauri::async_runtime::spawn_blocking(move || {
+        if container_running(&name_probe) {
+            true
+        } else {
+            // 容器已停止 / 上次被强杀留下的残留：直接删除，避免在 docker ps -a 里堆积
+            remove_container_blocking(&name_probe);
+            false
+        }
+    })
+    .await
+    .map_err(|e| AppError::msg(format!("容器状态查询失败: {}", e)))?;
 
     if running {
         {
@@ -999,6 +1064,8 @@ pub async fn start_docker_model(
 
         // 等待期间容器若退出（显存/内存不足、镜像问题等），不能标记为已启动
         if container_state(&cli, &name_a) != Some(true) {
+            // 退出失败的容器直接删掉，否则会以 exited 状态留在 docker ps -a
+            remove_container_blocking(&name_a);
             clear_task(&state, &mid);
             bail!("容器已退出，模型启动失败：请确认显存/内存是否充足（本模型需要 NVIDIA 显卡直通），或打开 Docker Desktop 查看该容器日志");
         }
@@ -1019,7 +1086,7 @@ pub async fn start_docker_model(
     .map_err(|e| AppError::msg(format!("启动任务执行失败: {}", e)))?
 }
 
-/// 停止图片生成容器
+/// 停止并删除图片生成容器
 #[tauri::command]
 pub async fn stop_docker_model(app: tauri::AppHandle, model_id: String) -> Result<(), AppError> {
     let name = container_name(&model_id);

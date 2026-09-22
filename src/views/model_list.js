@@ -603,9 +603,14 @@ async function refreshDockerImages() {
 }
 
 // 启动时对账：上次被强杀/崩溃时容器会残留（--restart unless-stopped），
-// 逐个查询容器状态，仍在运行则恢复「已启动」显示
+// 逐个查询容器状态，仍在运行则恢复「已启动」显示；已停止的容器直接清除，
+// 避免 exited 容器一直堆在 `docker ps -a` 里
 async function refreshDockerRunning() {
   const st = getDockerState();
+  try {
+    const pruned = await invoke()("prune_docker_containers");
+    if (pruned > 0) console.log("[model_list] 已清理残留容器:", pruned);
+  } catch (e) { console.warn("[model_list] 清理残留容器失败:", e); }
   const list = (st.modelList || []).filter(isDockerModel);
   for (const m of list) {
     try {

@@ -101,7 +101,7 @@
   4. 容器固定名 `adm-<model_id>`，端口 `64646:8188`（宿主 0.0.0.0:64646 → ComfyUI 8188），输出/输入/用户目录挂到 `data_dir/comfyui/{output,input,user}`；启动前已确认 `nvidia` runtime 存在（见上方运行要求），因此一律加 `--gpus all`（代码里仍保留条件判断）。
   5. **不置位 `model_running`**（那是「LLM 已就绪」的全局标志，图片模型置位会让 Agent 页误判）；运行状态记在 `running_kind=Some("docker")` + `running_container`，`get_model_status` 对 docker 类型改用 `docker inspect -f {{.State.Running}}`；「查看模型」按 `running_port=64646` 用系统浏览器打开。
   6. 进度事件 `docker-progress {model_id, stage, progress, message}`（stage: check/download-desktop/install-desktop/start-daemon/pull/start/done），`get_docker_tasks` 供视图重载后恢复按钮进度；启动/停止复用 `model-started`/`model-stopped` 事件（`model-started` 带 `port`）。
-  7. **退出 / 强杀对账**：真正退出时 `lib.rs` 的 `cleanup_processes` 调 `docker_model::cleanup_on_exit` 停止容器（`docker stop -t 2`，与 llama-server 一致，释放内存/显存与 64646 端口；Windows 点窗口关闭只是隐藏到托盘，容器继续跑，符合预期）。若进程被强杀 / 崩溃，容器会因 `--restart unless-stopped` 残留 —— 视图 `init()` 的 `refreshDockerRunning()` 会对每个 docker 模型调 `sync_docker_container`，把运行中的容器状态写回 `AppState` 并提示"上次未正常退出"。
+  7. **退出 / 强杀对账**：容器生命周期一律"停止即删除"（`docker stop -t 2` + `docker rm -f`），输出/输入/用户目录挂载在宿主，删除容器不丢数据，下次启动按原参数重建。点「关闭」走 `stop_docker_model`；真正退出时 `lib.rs` 的 `cleanup_processes` 调 `docker_model::cleanup_on_exit` 做同样清理（与 llama-server 一致，释放内存/显存与 64646 端口；Windows 点窗口关闭只是隐藏到托盘，容器继续跑，符合预期）。启动失败的容器（显存不足等）同样在 `start_docker_model` 里直接删除，避免 exited 容器堆积。若进程被强杀 / 崩溃，容器会因 `--restart unless-stopped` 残留 —— 视图 `init()` 的 `refreshDockerRunning()` 先调 `prune_docker_containers` 清掉所有已停止的 `adm-*` 容器，再对每个 docker 模型调 `sync_docker_container`，把运行中的容器状态写回 `AppState` 并提示"上次未正常退出"。
 - **Windows**：`main.rs` 中的 `#![windows_subsystem = "windows"]` + `build.rs` 中的 `/SUBSYSTEM:WINDOWS` 隐藏控制台。
 
 ## 构建与发布

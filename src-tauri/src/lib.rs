@@ -179,6 +179,7 @@ pub fn run() {
             docker_model::check_docker_env,
             docker_model::check_docker_image,
             docker_model::get_docker_tasks,
+            docker_model::prune_docker_containers,
             docker_model::sync_docker_container,
             docker_model::setup_docker_model,
             docker_model::start_docker_model,
