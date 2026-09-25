@@ -8,6 +8,7 @@ import { getErrorMessage } from "./error.js";
 import { renderMessages, renderTodos } from "./render.js";
 import { resetPermissionState } from "./permission.js";
 import { log } from "./log.js";
+import { updateDecisionModeUI, stripDecisionControlText, clearDecisionMode, clearDecisionModes } from "./decision_mode.js";
 
 // 自动创建会话的连续失败计数：workspace 状态异常时（activeWsId 为 null、workspace 未注册），
 // store 各 setter 静默失败、currentConvId 恒为 null，loadConversations ↔ newConversation
@@ -215,6 +216,7 @@ async function doClearAllConversations(wsId, ids) {
     }
   }
   clearAllInFlight = false;
+  clearDecisionModes(wsId, Object.keys(deleted));
 
   // 本地状态收尾：列表按实际删除结果过滤；被删的当前会话清空消息；被删会话内
   // 的 run 服务端已取消，本地同步解除发送态（否则界面一直显示运行中）
@@ -224,6 +226,7 @@ async function doClearAllConversations(wsId, ids) {
     store.setConversations(wsId, wsState.conversations.filter(function(c) { return !deleted[c.id]; }));
     if (wsState.currentConvId && deleted[wsState.currentConvId]) {
       store.setCurrentConvId(wsId, null);
+      updateDecisionModeUI();
       store.setCurrentConv(wsId, null);
       store.setMessages(wsId, []);
     }
@@ -442,13 +445,13 @@ function getMessagePreview(msg) {
     for (var i = 0; i < msg.parts.length; i++) {
       var p = msg.parts[i];
       if (p && p.type === "text" && p.data && p.data.text) {
-        var t = String(p.data.text).replace(/\s+/g, " ").trim();
+        var t = stripDecisionControlText(String(p.data.text)).replace(/\s+/g, " ").trim();
         if (t) return t.slice(0, 60);
       }
     }
   }
   if (msg.content) {
-    var c = String(msg.content).replace(/\s+/g, " ").trim();
+    var c = stripDecisionControlText(String(msg.content)).replace(/\s+/g, " ").trim();
     if (c) return c.slice(0, 60);
   }
   return "";
@@ -604,9 +607,11 @@ function handleConvAction(action, convId) {
       showConfirm(_t("确定删除此会话？"), function() {
         api("DELETE", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions/" + convId)
           .then(function() {
+            clearDecisionMode(S.serverInfo.workspace_id, convId);
             if (S.currentConvId === convId) {
               resetPermissionState();
               store.setCurrentConvId(S.serverInfo.workspace_id, null);
+              updateDecisionModeUI();
               syncWxFollowSession();
               store.setCurrentConv(S.serverInfo.workspace_id, null);
               store.setMessages(S.serverInfo.workspace_id, []);
@@ -626,6 +631,7 @@ export async function selectConversation(convId) {
   log.debug("SESSION", "selectConversation convId=" + (convId || "").slice(0, 8));
   if (convId !== S.currentConvId) { resetPermissionState(); exitManualScrollMode(); clearErrorNotices(); }
   store.setCurrentConvId(S.serverInfo.workspace_id, convId);
+  updateDecisionModeUI();
   syncWxFollowSession();
   renderConversationList();
   // 切换后同步按钮语义（运行中→取消 / 排队中→取消排队 / 其它→发送），
@@ -697,6 +703,7 @@ export async function selectConversation(convId) {
     if (isGone) {
       if (S.currentConvId === convId) {
         store.setCurrentConvId(S.serverInfo.workspace_id, null);
+        updateDecisionModeUI();
         store.setCurrentConv(S.serverInfo.workspace_id, null);
         store.setMessages(S.serverInfo.workspace_id, []);
         syncWxFollowSession();
@@ -733,6 +740,7 @@ export async function newConversation() {
     exitManualScrollMode();
     clearErrorNotices();
     store.setCurrentConvId(S.serverInfo.workspace_id, resp.id);
+    updateDecisionModeUI();
     syncWxFollowSession();
     store.setMessages(S.serverInfo.workspace_id, []);
     store.setCurrentConv(S.serverInfo.workspace_id, resp);

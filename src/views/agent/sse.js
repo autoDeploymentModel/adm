@@ -13,6 +13,7 @@ import { refreshAgentInfo, reloadAgentConfig } from "./model.js";
 import { log } from "./log.js";
 import { onSessionUpdated } from "./compact.js";
 import { onRunComplete as onPdfBatchRunComplete, reconcilePdfBatching } from "./pdf_batch.js";
+import { parseDecisionResult, updateDecisionModeUI } from "./decision_mode.js";
 
 // ===== SSE 事件 =====
 
@@ -45,6 +46,46 @@ function clearRunCompleteFallback() {
 }
 // 视图卸载时解除布防(agent.js unmount 调用),避免定时器在视图切走后继续收尾
 export function cancelRunCompleteFallback() { clearRunCompleteFallback(); }
+
+function messageDecisionText(message) {
+  if (!message) return "";
+  if (message.content) return String(message.content);
+  if (!Array.isArray(message.parts)) return "";
+  return message.parts.filter(function(part) { return part && part.type === "text" && part.data; }).map(function(part) {
+    return String(part.data.text || "");
+  }).join("\n");
+}
+
+function hasCompletedDecisionResult(messages) {
+  // 本轮起点 = 最后一条用户消息：旧协议在它的正文里带 <adm_decision_request>，
+  // 新协议（服务端契约走系统提示词）用户消息里没有请求块，但起点位置一样。
+  var start = -1;
+  for (var i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "user") {
+      start = i;
+      break;
+    }
+  }
+  if (start < 0) return false;
+  for (var j = start + 1; j < messages.length; j++) {
+    var m = messages[j];
+    if (m.role !== "assistant") continue;
+    // P2：服务端把结果写成专用 decision part；旧会话仍是正文标签。
+    if (Array.isArray(m.parts) && m.parts.some(function(p) { return p && p.type === "decision"; })) return true;
+    if (parseDecisionResult(messageDecisionText(m))) return true;
+  }
+  return false;
+}
+
+function verifyDecisionRun(sessionId, mode) {
+  if (!S.currentConvId) return;
+  var sameSession = sessionId === S.currentConvId;
+  refreshMessages().then(function() {
+    if (sameSession && mode && mode !== "text" && S.currentConvId === sessionId && !hasCompletedDecisionResult(S.messages)) {
+      showWarning(_t("模型未返回有效的 Choice / Bool / Score 决策结果，请重试或切换普通对话"));
+    }
+  });
+}
 
 // 只对"当前正在运行的会话"布防，且排除子 Agent（含 $$ 的复合 session_id）事件
 function armRunCompleteFallback(wsId, sessionId, runId) {
@@ -79,13 +120,15 @@ function scheduleRunCompleteFallbackCheck(wsId, sessionId, runId) {
     }
     if (!S.isSending || !S.activeRun || S.activeRun.sessionId !== sessionId) return;
     log.warn("SSE", "run_complete 未到达且服务端已空闲，兜底收尾 session=" + sessionId + " run=" + (runId || ""));
+    var fallbackDecisionMode = S.runStats && S.runStats.sessionId === sessionId ? S.runStats.decisionMode : null;
     store.completeRun(wsId);
     // run_complete 丢失的兜底收尾同样要推进 PDF 批次泵（见 pdf_batch.js）
     reconcilePdfBatching();
     updateSendButton();
     updateStatusBar("ready", null, S.contextUsage.used);
     loadConversations();
-    if (S.currentConvId) refreshMessages();
+    if (S.currentConvId === sessionId) verifyDecisionRun(sessionId, fallbackDecisionMode);
+    else refreshMessages();
     refreshAgentInfo();
   }, RUN_COMPLETE_FALLBACK_DELAY_MS);
 }
@@ -156,6 +199,7 @@ function onSSEEventReceived(event) {
   // 都需要用 store 处理前的状态，否则会误杀前序运行
   var prevActiveRun = S.activeRun;
   var prevQueuedRun = S.queuedRun;
+  var prevRunStats = S.runStats;
   var prevCurrentConvId = S.currentConvId;
   store.handleSSEEvent(eventWsId, payload);
 
@@ -170,7 +214,7 @@ function onSSEEventReceived(event) {
 
   // 当前 tab 的事件继续走原有 UI 处理逻辑
   if (eventWsId === S.activeWsId) {
-    handleSSEEvent(payload, { prevActiveRun: prevActiveRun, prevQueuedRun: prevQueuedRun, prevCurrentConvId: prevCurrentConvId });
+    handleSSEEvent(payload, { prevActiveRun: prevActiveRun, prevQueuedRun: prevQueuedRun, prevRunStats: prevRunStats, prevCurrentConvId: prevCurrentConvId });
   }
 }
 
@@ -450,7 +494,11 @@ function onRunCompleteSSEEvent(ev, ctx) {
   // 运行完成后刷新会话列表和消息
   loadConversations();
   if (S.currentConvId) {
-    refreshMessages();
+    var completedStats = ctx.prevRunStats;
+    var completedDecisionSession = actualData.session_id || (completedStats && completedStats.sessionId) || "";
+    var completedDecisionMode = completedStats && completedStats.sessionId === completedDecisionSession ? completedStats.decisionMode : null;
+    if (action.kind === "ok") verifyDecisionRun(completedDecisionSession, completedDecisionMode);
+    else refreshMessages();
   }
 }
 
@@ -640,6 +688,7 @@ function handleSessionSSEEvent(action, sessData, ctx) {
   } else if (action === "deleted") {
     renderConversationList();
     if ((ctx && ctx.prevCurrentConvId) === sessData.id) {
+      updateDecisionModeUI();
       resetPermissionState();
       syncWxFollowSession();
       renderMessages();

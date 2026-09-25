@@ -101,6 +101,8 @@ pub struct WorkDirEntry {
     pub is_default: bool,
 }
 
+fn default_thinking_enabled() -> bool { true }
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Settings {
 pub launch_params: LaunchParams,
@@ -113,7 +115,9 @@ pub agent_workdir: String,
     /// Agent 默认 Provider（如 "local" / "xiaomimimo" 等）
 #[serde(default)]
 pub agent_default_provider: String,
-/// Agent 推理强度（auto / low / medium / high）
+#[serde(default = "default_thinking_enabled")]
+pub agent_thinking_enabled: bool,
+/// Agent 推理强度（low / medium / high）
 #[serde(default)]
 pub agent_reasoning_effort: String,
 /// Agent 采样温度

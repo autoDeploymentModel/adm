@@ -1090,6 +1090,58 @@ export const template = `
   }
   .toolbar-skill-icon { font-size: 12px; }
 
+  .toolbar-decision-selector { position: relative; }
+  .toolbar-decision-mode-btn.on {
+    background: rgba(var(--c-accent-rgb), 0.18);
+    color: var(--c-accent);
+  }
+  .decision-mode-icon { color: var(--c-accent); font-size: 14px; }
+  .decision-mode-dropdown { min-width: 190px; }
+  .decision-mode-option { justify-content: space-between; }
+  .decision-mode-option.selected::before { content: '●'; color: var(--c-accent); }
+  .decision-mode-hint { color: var(--c-text-4); font-size: 11px; }
+
+  .decision-card {
+    margin: 10px 0;
+    border: 1px solid rgba(var(--c-accent-rgb), 0.38);
+    border-radius: 10px;
+    background: linear-gradient(145deg, rgba(var(--c-accent-rgb), 0.10), var(--c-raise));
+    overflow: hidden;
+  }
+  .decision-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--c-border);
+    color: var(--c-accent);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .decision-badge {
+    padding: 2px 7px;
+    border-radius: 10px;
+    background: rgba(var(--c-accent-rgb), 0.16);
+    font-size: 10px;
+    font-weight: 500;
+  }
+  .decision-card-body { padding: 10px 12px; color: var(--c-text-2); font-size: 13px; }
+  .decision-row { display: grid; grid-template-columns: 72px 1fr; gap: 8px; margin-bottom: 6px; }
+  .decision-label { color: var(--c-text-4); }
+  .decision-value { color: var(--c-text); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .decision-subtitle { margin-top: 8px; color: var(--c-text-3); font-size: 12px; font-weight: 600; }
+  .decision-card-body ul { margin: 5px 0 0; padding-left: 20px; }
+  .decision-note { margin-top: 9px; color: var(--c-text-4); font-size: 11px; }
+  .decision-card-score { border-color: rgba(80, 180, 255, 0.5); }
+  .decision-card-score .decision-card-header { color: #50b4ff; }
+  .decision-card-score .decision-badge { background: rgba(80, 180, 255, 0.14); }
+  .decision-card-bool-true { border-color: rgba(80, 200, 120, 0.5); }
+  .decision-card-bool-true .decision-card-header { color: #4fbf7b; }
+  .decision-card-bool-true .decision-badge { background: rgba(80, 200, 120, 0.14); }
+  .decision-card-bool-false { border-color: rgba(255, 120, 120, 0.5); }
+  .decision-card-bool-false .decision-card-header { color: #ff7b7b; }
+  .decision-card-bool-false .decision-badge { background: rgba(255, 120, 120, 0.14); }
+
   .skill-dropdown-header {
     padding: 6px 12px;
     font-size: 11px;
@@ -1978,6 +2030,20 @@ export const template = `
             <div class="model-dropdown" id="agent-model-dropdown">
             </div>
           </div>
+          <div class="toolbar-decision-selector">
+            <button class="model-current toolbar-decision-mode-btn" id="agent-decision-mode-btn" title="${_t("选择普通对话或 Choice / Bool / Score 决策输出模式；选择决策模式会自动关闭思考")}" aria-pressed="false" disabled>
+              <span class="decision-mode-icon">◇</span>
+              <span id="agent-decision-mode-name">${_t("普通对话")}</span>
+              <span class="dropdown-arrow">▾</span>
+            </button>
+            <div class="model-dropdown decision-mode-dropdown" id="agent-decision-mode-dropdown">
+              <div class="model-item decision-mode-option selected" data-decision-mode="text" role="option" aria-selected="true">${_t("普通对话")}</div>
+              <div class="model-item decision-mode-option" data-decision-mode="auto" role="option" aria-selected="false"><span>${_t("决策·自动判断")}</span><span class="decision-mode-hint">Auto</span></div>
+              <div class="model-item decision-mode-option" data-decision-mode="choice" role="option" aria-selected="false"><span>${_t("决策·选项选择")}</span><span class="decision-mode-hint">Choice</span></div>
+              <div class="model-item decision-mode-option" data-decision-mode="bool" role="option" aria-selected="false"><span>${_t("决策·布尔判断")}</span><span class="decision-mode-hint">Bool</span></div>
+              <div class="model-item decision-mode-option" data-decision-mode="score" role="option" aria-selected="false"><span>${_t("决策·评分")}</span><span class="decision-mode-hint">Score</span></div>
+            </div>
+          </div>
           <!-- ②a 技能选择下拉（只显示用户/项目技能；选中后作为 markdown 附件随下一条消息发送） -->
           <div class="toolbar-skill-selector">
             <button class="model-current toolbar-skill-btn" id="agent-skill-btn" title="${_t("选择技能（仅显示用户与项目技能）；选中后将随下一条消息一起发送")}">
@@ -2061,6 +2127,16 @@ export const template = `
       <!-- 模型配置 -->
       <div class="param-group">
         <div class="param-group-title">${_t("模型配置")}</div>
+        <div class="param-row">
+          <div class="param-label">${_t("思考模式")}</div>
+          <div class="param-input">
+            <div class="checkbox-wrap">
+              <input type="checkbox" id="settings-thinking-enabled">
+              <span>${_t("启用模型思考")}</span>
+            </div>
+            <div class="param-desc">${_t("关闭后向支持该参数的模型发送 reasoning_effort: none")}</div>
+          </div>
+        </div>
         <div class="param-row">
           <div class="param-label">${_t("推理强度")}</div>
           <div class="param-input">

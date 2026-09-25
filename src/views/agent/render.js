@@ -5,6 +5,7 @@ import { renderMarkdown, formatTime, splitSystemInfo, isFullyAtBottom } from "./
 import { updateScrollBottomBtn, reportError } from "./ui.js";
 import { scheduleMessageOutline } from "./session.js";
 import { log } from "./log.js";
+import { appendDecisionCard, appendDecisionResult, decisionFromPart, getActiveDecisionMode, hasDecisionSyntax, parseDecisionResult, stripDecisionControlText, stripDecisionRequestText } from "./decision_mode.js";
 
 // ===== 渲染调度（rAF 合并）=====
 // SSE 流式 message updated 每个 delta 都会到达；逐个同步渲染时单帧内可能渲染多次。
@@ -157,12 +158,17 @@ function unavailableToolCallIds(parts) {
 // 走 buildPartElement 的"完成后折叠"逻辑；否则折叠不会发生（早返回短路了）
 function partSig(part) {
   var d = (part && part.data) || {};
+  // 决策结果可能来自正文标签（旧协议）或专用 decision part（P2）：两者都要
+  // 参与签名，否则卡片内容变化时不会触发重渲染。
+  var decision = part && part.type === "decision" ? JSON.stringify(d)
+    : (d.text && d.text.indexOf("<adm_decision_result") >= 0 ? JSON.stringify(parseDecisionResult(d.text)) : "");
   return (part.type || "?") + ":" +
     ((d.text || "").length + (d.thinking || "").length + (d.input || "").length +
      String(d.content || d.data || "").length + (d.output || "").length + (d.url || "").length) +
      ":" + (d.finished === false ? "r" : "f") + (d.is_error ? "e" : "") +
      (d.finished_at ? ":" + d.finished_at : "") +
-     ":" + (d.name || "") + (d.reason || "") + (d.exit_code !== undefined ? d.exit_code : "") + (d.path || "");
+     ":" + (d.name || "") + (d.reason || "") + (d.exit_code !== undefined ? d.exit_code : "") + (d.path || "") +
+     (decision ? ":" + decision : "");
 }
 
 // 消息内容签名：变化才触发该消息节点的更新
@@ -251,7 +257,17 @@ export function renderMessages() {
     if (el) delete existingRounds[round.roundKey];
     if (!el) el = buildRoundNode(round);
     applyRoundState(el, round, roundIdx === rounds.length - 1);
-    alignMessagesInContainer(getRoundBody(el), round.items);
+    var decisionRequest = roundHasDecisionRequest(round);
+    // 决策结果轮：只保留本轮最后一张结果卡片。
+    // 本轮仍在跑（尚无结果）时用哨兵值提前隐藏全部过程输出，否则会先闪一段正文/工具过程
+    // 再被卡片替换；跑完仍未产出有效结果时回落为 null，照常展示全部内容便于排查。
+    var decisionCardKey = null;
+    if (decisionRequest) {
+      var lastCardKey = roundLastDecisionResultKey(round);
+      var roundRunning = roundIdx === rounds.length - 1 && !!S.activeRun && S.activeRun.sessionId === S.currentConvId;
+      decisionCardKey = lastCardKey || (roundRunning ? DECISION_PENDING_KEY : null);
+    }
+    alignMessagesInContainer(getRoundBody(el), round.items, decisionRequest, decisionCardKey);
     var expected = area.children[pos];
     if (expected !== el) area.insertBefore(el, expected || null);
     pos++;
@@ -508,12 +524,80 @@ function roundTitleText(round) {
         if (p && p.type === "text" && p.data && p.data.text) { text = p.data.text; break; }
       }
     }
+    text = stripDecisionControlText(text);
     var info = splitSystemInfo(text);
     if (info) text = info.text || "";
   }
   text = String(text).replace(/\s+/g, " ").trim();
   return text || (m ? "" : _t("系统消息"));
 }
+
+function roundHasDecisionRequest(round) {
+  var items = round.items || (round.firstUserMsg ? [round.firstUserMsg] : []);
+  for (var i = 0; i < items.length; i++) {
+    var m = items[i];
+    if (!m) continue;
+    // 旧协议（P1 之前）：控制块拼在用户消息里
+    if (m.role === "user" && messageHasDecisionRequest(m)) return true;
+    // 新协议：契约由服务端系统提示词负责，用户消息里没有请求块，只能从结果块识别
+    if (m.role !== "user" && messageHasDecisionResult(m)) return true;
+  }
+  // 新协议下本轮运行中（尚无结果）也要隐藏过程输出，因此以当前会话的决策模式作为
+  // 兜底判据（模式按 workspace+session 存本地，由决策模式选择器维护）
+  return getActiveDecisionMode() !== "text";
+}
+
+function messageHasDecisionRequest(msg) {
+  var text = "";
+  if (typeof msg.content === "string" && msg.content) text = msg.content;
+  else if (Array.isArray(msg.parts)) {
+    for (var i = 0; i < msg.parts.length; i++) {
+      var p = msg.parts[i];
+      if (p && p.type === "text" && p.data && p.data.text) { text = p.data.text; break; }
+    }
+  }
+  return /<adm_decision_request>/i.test(text);
+}
+
+// 决策模式：该消息是否已输出决策结果（专用 decision part 或旧的正文标签）。
+function messageHasDecisionResult(msg) {
+  if (!msg || msg.role === "user") return false;
+  if (typeof msg.content === "string" && msg.content && parseDecisionResult(msg.content)) return true;
+  return lastDecisionResultPartIdx(msg.parts) >= 0;
+}
+
+// 决策模式：结果卡片所在 part 的下标（-1 = 无）。
+// P2：服务端把结果作为 `decision` part 落库；旧会话仍以正文里的结果标签为准。
+function lastDecisionResultPartIdx(parts) {
+  if (!Array.isArray(parts)) return -1;
+  var found = -1;
+  for (var i = 0; i < parts.length; i++) {
+    var p = parts[i];
+    if (!p) continue;
+    if (p.type === "decision") { found = i; continue; }
+    if (p.type === "text" && p.data && parseDecisionResult(p.data.text || "")) found = i;
+  }
+  return found;
+}
+
+// 决策模式：本轮最后一条输出决策结果的 assistant 消息 key。
+// 模型可能分步/重试里重复输出结果，前端只认最后一条，避免同一问题出现多张重复卡片。
+function roundLastDecisionResultKey(round) {
+  var items = round.items || (round.firstUserMsg ? [round.firstUserMsg] : []);
+  var found = null;
+  for (var i = 0; i < items.length; i++) {
+    if (messageHasDecisionResult(items[i])) found = String(items[i].id || ("idx" + i));
+  }
+  return found;
+}
+
+// 决策结果轮中被隐去的 assistant part 类型（text 仅保留带结果卡片的那一份）；
+// 图片/附件类 part 不在此列，保留展示
+var DECISION_HIDDEN_PART_TYPES = ["text", "reasoning", "tool_call", "tool_result", "shell_command"];
+
+// 决策模式本轮仍在跑、尚无结果时的哨兵 key：表示 assistant 侧输出一律不渲染、也暂不出卡片。
+// 消息 key 为真实消息 id 或 "idxN"，不会与之冲突。
+var DECISION_PENDING_KEY = "\u0000adm-decision-pending";
 
 // 展开/折叠的“保持展开”标记：运行中把末轮 key 记入 lastOpenRoundKey；
 // run 完成后 activeRun 消失，但 key 仍在 → 末轮保持展开；下一轮开始时 key
@@ -543,7 +627,7 @@ function applyRoundState(el, round, isLastRound) {
 // 在指定容器（轮节点）内做消息级增量对齐：
 // 按 data-msgid 复用旧节点；sig 变化就更新/重建；结构未变就地更新文本；
 // 不在 messages 中的节点移除（本地错误气泡随消息列表生命周期管理）。
-function alignMessagesInContainer(container, items) {
+function alignMessagesInContainer(container, items, allowDecision, decisionCardKey) {
   // 轮级 tool_call → tool_result 映射（结果可能在下一条 assistant 消息里），
   // 供合并渲染与就位同步使用
   var callResultMap = buildCallResultMap(items);
@@ -568,14 +652,20 @@ function alignMessagesInContainer(container, items) {
     var el = existing[key];
     if (el) delete existing[key]; // 防重复 id 时同一节点被重用
     var sig = msgSignature(msg);
-    if (el && el._admSig === sig) {
-      // 内容未变化，原样保留
-    } else if (el && updateMessageNode(el, msg, callResultMap)) {
+    // 决策态（本轮哪条消息负责显示卡片 / 运行中哨兵）必须参与复用判断：
+    // 模型在一轮里分步输出多份结果时，"卡片消息"会从旧消息移到新消息，旧卡片节点
+    // 内容虽未变也必须重建为隐藏态，否则同一轮会残留多张卡片。
+    var decisionState = decisionCardKey || null;
+    if (el && el._admSig === sig && el._admDecisionKey === decisionState) {
+      // 内容与决策态均未变化，原样保留
+    } else if (el && updateMessageNode(el, msg, callResultMap, allowDecision, decisionCardKey)) {
       el._admSig = sig; // 结构未变：已就地更新文本
+      el._admDecisionKey = decisionState;
     } else {
-      var fresh = buildMessageNode(msg, key, callResultMap);
+      var fresh = buildMessageNode(msg, key, callResultMap, allowDecision, decisionCardKey);
       if (!fresh) { if (el) el.remove(); return; } // 无内容消息跳过
       /** @type {any} */ (fresh)._admSig = sig;
+      /** @type {any} */ (fresh)._admDecisionKey = decisionState;
       if (el) {
         // 重建时恢复旧节点中已展开的折叠块（msg-reasoning 由自身 _admDetailsState + toggle
         // 监听在 msg 级别维护，此处跳过，避免"流式展开 → 完成后又被强制展开"）
@@ -640,20 +730,38 @@ function msgThinkingOpen(parts) {
 }
 
 // 构建完整消息节点
-function buildMessageNode(msg, key, callResultMap) {
+function buildMessageNode(msg, key, callResultMap, allowDecision, decisionCardKey) {
   var role = msg.role || "assistant";
+  // 决策结果轮：decisionCardKey 为本轮唯一允许展示的卡片消息 key
+  var decisionHide = !!decisionCardKey && role !== "user";
+  var decisionCardHere = decisionCardKey === key;
   var div = document.createElement("div");
   div.className = "msg " + role;
   div.setAttribute("data-msgid", key);
 
   if (msg._streaming && msg.content) {
     // 流式消息（SSE 临时构建的），直接渲染 content
-    div.textContent = msg.content;
+    if (decisionHide) {
+      // 决策结果轮：仅最后一条结果消息成卡，其余消息整体不渲染
+      if (!decisionCardHere || !parseDecisionResult(msg.content)) return null;
+      appendDecisionResult(div, msg.content);
+    } else {
+      var streamingText = allowDecision ? stripDecisionControlText(msg.content) : stripDecisionRequestText(msg.content);
+      if (streamingText) div.innerHTML = renderMarkdown(streamingText);
+      if (allowDecision) appendDecisionResult(div, msg.content);
+    }
   } else if (msg.parts && Array.isArray(msg.parts) && msg.parts.length > 0) {
-    renderMessageParts(div, msg.parts, role, key, div, callResultMap);
+    renderMessageParts(div, msg.parts, role, key, div, callResultMap, allowDecision, decisionCardKey);
   } else if (msg.content) {
     // 兼容旧格式
-    div.textContent = msg.content;
+    if (decisionHide) {
+      if (!decisionCardHere || !parseDecisionResult(msg.content)) return null;
+      appendDecisionResult(div, msg.content);
+    } else {
+      var legacyText = allowDecision ? stripDecisionControlText(msg.content) : stripDecisionRequestText(msg.content);
+      if (legacyText) div.innerHTML = renderMarkdown(legacyText);
+      if (allowDecision) appendDecisionResult(div, msg.content);
+    }
   } else {
     return null; // 无内容则跳过
   }
@@ -690,8 +798,11 @@ function buildMessageNode(msg, key, callResultMap) {
 }
 
 // 就地更新消息节点（结构未变时只更新文本，保住 <details> 身份使流式期间可点开/收起）
-function updateMessageNode(el, msg, callResultMap) {
+function updateMessageNode(el, msg, callResultMap, allowDecision, decisionCardKey) {
   var role = msg.role || "assistant";
+  // 决策结果轮：卡片之外的 assistant 内容全部不展示，消息结构可能整体变化 →
+  // 始终交给 buildMessageNode 重建（就地更新按 part 就位对齐，跳过 part 会写错元素）
+  if (decisionCardKey && role !== "user") return false;
   var struct = msgStructSig(msg, role, callResultMap);
   if (struct === "plain" || el._admStruct !== struct) return false;
   var partEls = el.querySelectorAll(":scope > [data-pk]");
@@ -708,11 +819,19 @@ function updateMessageNode(el, msg, callResultMap) {
     var d = part.data || {};
     switch (part.type) {
       case "text":
+        if (hasDecisionSyntax(d.text || "")) {
+          var decisionPart = buildPartElement(part, i, role, el.getAttribute("data-msgid"), el, msgThinkingOpen(msg.parts), null, allowDecision);
+          if (!decisionPart) return false;
+          decisionPart.setAttribute("data-pk", String(i));
+          decisionPart.setAttribute("data-ptype", part.type);
+          pe.replaceWith(decisionPart);
+          break;
+        }
         if (role === "user" && splitSystemInfo(d.text || "")) {
           // 含 <system_info> 引导块：结构特殊（正文 + 折叠附件信息），整体重建该 part；
           // 重建前记录已展开的折叠块并在重建后恢复
           var wasOpen = pe.querySelector("details[data-key][open]");
-          var np = buildPartElement(part, i, role, el.getAttribute("data-msgid"), el, msgThinkingOpen(msg.parts));
+          var np = buildPartElement(part, i, role, el.getAttribute("data-msgid"), el, msgThinkingOpen(msg.parts), null, allowDecision);
           if (!np) return false;
           np.setAttribute("data-pk", String(i));
           np.setAttribute("data-ptype", part.type);
@@ -794,19 +913,24 @@ function updateMessageNode(el, msg, callResultMap) {
 
 // 渲染 ContentPart 数组（msgKey 用于给折叠块生成稳定 data-key，重渲染时恢复展开状态；
 // msgEl 用于 reasoning 部分在 msg 级别持久化用户手动折叠状态，跨重建保留）
-function renderMessageParts(container, parts, role, msgKey, msgEl, callResultMap) {
+function renderMessageParts(container, parts, role, msgKey, msgEl, callResultMap, allowDecision, decisionCardKey) {
   var hiddenCallIds = unavailableToolCallIds(parts);
+  var decisionHide = !!decisionCardKey && role !== "user";
+  // 同一消息里出现多个结果块时也只渲染最后一个（整轮仅一张卡片）
+  var cardPartIdx = decisionHide && decisionCardKey === msgKey ? lastDecisionResultPartIdx(parts) : -1;
   var thinkingOpen = msgThinkingOpen(parts);
   var map = callResultMap || {};
   parts.forEach(function(part, partIdx) {
     if (!isPartRenderable(part, role, hiddenCallIds)) return;
     // 已合并进对应 tool_call 块（结果在本轮任意消息中配到对）→ 不单独渲染
     if (part.type === "tool_result" && part.data && map[String(part.data.tool_call_id)] !== undefined) return;
+    // 决策结果轮：只保留唯一的结果卡片正文，其余（正文/思考/工具调用与结果）不渲染
+    if (decisionHide && DECISION_HIDDEN_PART_TYPES.indexOf(part.type) >= 0 && partIdx !== cardPartIdx) return;
     var resultPart = null;
     if (part.type === "tool_call" && part.data && part.data.id) {
       resultPart = map[String(part.data.id)] || null;
     }
-    var el = buildPartElement(part, partIdx, role, msgKey, msgEl, thinkingOpen, resultPart);
+    var el = buildPartElement(part, partIdx, role, msgKey, msgEl, thinkingOpen, resultPart, allowDecision);
     if (!el) return;
     el.setAttribute("data-pk", String(partIdx));
     el.setAttribute("data-ptype", part.type);
@@ -833,30 +957,55 @@ function buildSystemInfoEl(info, partKey) {
 // 构建单个 part 的根元素（供全量渲染与就地更新时局部重建共用）
 // msgEl 仅 reasoning 使用：在 msg 元素上挂 _admDetailsState[partKey] 保存用户手动 toggle 的选择，
 // 流式期间频繁重建时也能保留用户偏好（不展开 / 不折叠）
-function buildPartElement(part, partIdx, role, msgKey, msgEl, thinkingOpen, resultPart) {
+function buildPartElement(part, partIdx, role, msgKey, msgEl, thinkingOpen, resultPart, allowDecision) {
   var partType = part.type;
   var partData = part.data || {};
   var partKey = (msgKey || "") + ":" + partIdx;
 
   switch (partType) {
+    case "decision":
+      // 服务端决策轮的结构化结果（P2）：直接画卡片，正文里不再有 JSON
+      var decisionWrap = document.createElement("div");
+      decisionWrap.className = "msg-decision";
+      if (appendDecisionCard(decisionWrap, decisionFromPart(partData))) return decisionWrap;
+      // 未知/未来类型：折叠展示原始 JSON，避免内容静默消失
+      var unknown = document.createElement("details");
+      unknown.className = "msg-decision-raw";
+      var unknownSummary = document.createElement("summary");
+      unknownSummary.textContent = "🔧 " + _t("决策结果 (原始 JSON)");
+      unknownSummary.style.cssText = "cursor:pointer;font-size:12px;color:var(--c-text-3);";
+      var unknownBody = document.createElement("pre");
+      unknownBody.style.cssText = "white-space:pre-wrap;font-size:12px;color:var(--c-text-2);margin:6px 0 0;";
+      unknownBody.textContent = partData.raw || JSON.stringify(partData, null, 2);
+      unknown.appendChild(unknownSummary);
+      unknown.appendChild(unknownBody);
+      decisionWrap.appendChild(unknown);
+      return decisionWrap;
+
     case "text":
       var textDiv = document.createElement("div");
       textDiv.className = "msg-text";
+      var rawText = partData.text || "";
+      var decisionResult = role === "user" ? null : parseDecisionResult(rawText);
+      var displayText = allowDecision ? stripDecisionControlText(rawText) : stripDecisionRequestText(rawText);
+      // 决策模式：带决策结果的正文只呈现结果卡片，模型的解释性文字不再显示
+      if (decisionResult) displayText = "";
       if (role === "user") {
         // 服务端在用户消息末尾注入 <system_info> 附件读取引导：不直接展示原始标签文本，
         // 折叠为「📎 附件: 文件名」的可展开块（展开可见完整引导，便于核对附件处理方式）。
-        var info = splitSystemInfo(partData.text || "");
+        var info = splitSystemInfo(displayText);
         if (info) {
           var mdDiv = document.createElement("div");
           mdDiv.innerHTML = renderMarkdown(info.text || "");
           textDiv.appendChild(mdDiv);
           textDiv.appendChild(buildSystemInfoEl(info, partKey + ":sys"));
+          if (allowDecision) appendDecisionResult(textDiv, rawText);
           return textDiv;
         }
       }
-      // 使用 Markdown 渲染；记录已渲染文本，供流式更新时比对跳过（见 scheduleMarkdownText）
-      textDiv.innerHTML = renderMarkdown(partData.text || "");
-      /** @type {any} */ (textDiv)._admMdText = partData.text || "";
+      if (displayText) textDiv.innerHTML = renderMarkdown(displayText);
+      if (allowDecision) appendDecisionResult(textDiv, rawText);
+      /** @type {any} */ (textDiv)._admMdText = rawText;
       return textDiv;
 
     case "reasoning":

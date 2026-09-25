@@ -2,7 +2,7 @@
 import { t as _t } from "../../i18n.js";
 import { S, invoke, store } from "./store.js";
 import { api } from "./api.js";
-import { escapeHtml, formatTokens, slugifyModelId, normalizeReasoningEffort } from "./utils.js";
+import { escapeHtml, formatTokens, slugifyModelId, getRequestReasoningEffort, normalizeReasoningEffort } from "./utils.js";
 import { reportError, updateContextUsage } from "./ui.js";
 import { log } from "./log.js";
 
@@ -39,6 +39,7 @@ export async function switchModel(providerKey, displayName, ctxLen) {
   try {
     var s = await invoke("load_settings");
     s.agent_default_provider = S.settings.agent_default_provider || "local";
+    s.agent_thinking_enabled = S.settings.agent_thinking_enabled !== false;
     s.agent_reasoning_effort = normalizeReasoningEffort(S.settings.agent_reasoning_effort);
     s.agent_temperature = S.settings.agent_temperature || null;
     await invoke("save_settings", { settings: s });
@@ -54,8 +55,7 @@ export async function switchModel(providerKey, displayName, ctxLen) {
     try {
       var target = resolveAgentModel(providerKey);
       var modelCfg = { provider: target.provider, model: target.model };
-      // 三档制后必发推理强度（旧值 ""/"auto" 归一化为 medium）
-      modelCfg.reasoning_effort = normalizeReasoningEffort(S.settings.agent_reasoning_effort);
+      modelCfg.reasoning_effort = getRequestReasoningEffort(S.settings.agent_thinking_enabled, S.settings.agent_reasoning_effort);
       if (typeof S.settings.agent_temperature === "number") modelCfg.temperature = S.settings.agent_temperature;
       await api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/config/model", {
         scope: 0,

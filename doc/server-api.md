@@ -805,7 +805,12 @@ POST /v1/workspaces/{id}/agent
       "mime_type": "image/png",
       "content": "base64编码内容"
     }
-  ]
+  ],
+  "decision": {
+    "mode": "auto",
+    "tool_policy": "none",
+    "structured_output": "auto"
+  }
 }
 ```
 
@@ -815,11 +820,42 @@ POST /v1/workspaces/{id}/agent
 | `run_id` | string | 否 | 运行 ID，用于精确关联 `RunComplete` 事件 |
 | `prompt` | string | 是 | 用户提示内容 |
 | `attachments` | []Attachment | 否 | 附件列表（content 为 base64 编码） |
+| `decision` | DecisionSpec | 否 | 决策输出模式（见下）；省略 = 普通对话，行为与历史版本完全一致 |
+
+**决策输出模式（`decision`，仅桌面端使用）**
+
+带 `decision` 的请求走服务端的**独立决策轮**：不注册工具、不做空 stop / 叙述性 stop / todos nudge 重试，只允许一次结果校验重定向重试，必须在回复里返回一个结构化决策结果。
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `decision.mode` | string | 是 | `auto` / `choice` / `bool` / `score` |
+| `decision.tool_policy` | string | 否 | 目前仅支持 `none`（默认）；决策轮是"给结论"，不执行任何操作 |
+| `decision.structured_output` | string | 否 | `auto`（默认）或 `off`；`auto` 当前等同提示词约束（`response_format` 强制为后续阶段） |
+
+服务端在该轮的系统提示词里注入输出契约（不进用户消息、不落历史），要求整条回复只包含一个 `<adm_decision_result>` JSON 块：
+
+```json
+{"type":"choice","selected":"value","reason":"...","candidates":[{"value":"...","label":"...","rationale":"..."}]}
+{"type":"bool","value":true,"reason":"..."}
+{"type":"score","score":8,"min":0,"max":10,"level":"...","reason":"..."}
+```
+
+契约不满足时服务端会带具体原因重试一次；两次仍不满足则以 `run_complete.error = invalid decision output after 2 attempts: …` 结束本轮（前端据此提示，不再靠客户端事后兜底）。
+
+**结果落库形式**：校验通过的轮次，assistant 消息会带一个专用 ContentPart，正文里不再保留 JSON 块：
+
+```json
+{ "type": "decision", "data": { "kind": "bool", "mode": "bool", "value": true, "reason": "…", "raw": "{…}" } }
+```
+
+`kind` 为 `choice`（带 `selected` + `candidates[]`）/ `bool`（`value`）/ `score`（`score`/`min`/`max`/`level`）；`raw` 是模型原文，便于排查。未知 kind 的 part 应被客户端忽略或折叠展示，不要当作错误（前向兼容）。旧会话历史里仍是正文 `<adm_decision_result>` 标签。
+
+**结构化输出**：`decision.structured_output=auto`（默认）时服务端会附带 `response_format: {type: "json_schema", …}`；上游明确拒绝该参数时自动去掉它重试一次，并按 `base URL + model` 记住不支持，后续请求不再探测（模型此时可能返回无标签的裸 JSON，服务端解析同样接受）。传 `off` 可完全关闭。
 
 **响应**：`202 Accepted`（无响应体）
 
 **错误**：
-- `400` - Agent 未初始化
+- `400` - Agent 未初始化；或 `decision.mode` / `decision.tool_policy` / `decision.structured_output` 取值非法
 - `409` - 会话繁忙且无法排队
 
 > **GUI 提示**：发送消息后，通过 SSE 事件流接收 `message`（增量更新）和 `run_complete`（结束信号）事件。如果需要在多个并发运行中精确匹配某次请求的结果，请在发送时设置 `run_id`。
@@ -1052,13 +1088,26 @@ POST /v1/workspaces/{id}/config/model
 }
 ```
 
+DeepSeek 非思考模式支持以下两种等价写法，admAgent 会兼容并按配置透传：
+
+```json
+{ "reasoning_effort": "none" }
+```
+
+```json
+{ "thinking": { "type": "disabled" } }
+```
+
+桌面端只负责把选定的写法写进模型配置（关闭思考时默认写 `reasoning_effort: "none"`），**回退不发生在桌面端**：admAgent 调用上游 LLM 时，若上游明确返回 `400`（包括只给 `invalid_request_error / invalid request` 的通用参数错误），且不属于上下文超限、配额、内容安全、鉴权等其它错误，admAgent 会自动用另一种写法重试一次，并按 `base URL + model` 在进程内存中记住成功的那一种；网络错误、超时、`5xx` 不会触发该回退。两种写法都被拒绝时返回 `400`（`thinking mode unsupported`），错误文本同时给出两次失败原因摘要。
+
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `scope` | int | 是 | 配置范围 |
 | `model.model` | string | 是 | 模型 ID |
 | `model.provider` | string | 是 | 提供商 ID |
-| `model.reasoning_effort` | string | 否 | 推理强度：`low`/`medium`/`high` |
-| `model.think` | bool | 否 | 启用思考模式（Anthropic） |
+| `model.reasoning_effort` | string | 否 | 推理强度：`none`/`low`/`medium`/`high`；`off` 为 `none` 的兼容别名。DeepSeek 使用 `none` 关闭思考 |
+| `model.thinking.type` | string | 否 | 思考模式：`enabled`/`disabled`。DeepSeek 可使用 `disabled` 关闭思考；省略时沿用提供商默认行为 |
+| `model.think` | bool | 否 | 旧版 Anthropic 思考开关 |
 | `model.temperature` | *float64 | 否 | 采样温度 |
 | `model.top_p` | *float64 | 否 | Top-p |
 | `model.top_k` | *int64 | 否 | Top-k |
@@ -1887,8 +1936,9 @@ interface ModelInfoOptions {
 interface SelectedModel {
   model: string;
   provider: string;
-  reasoning_effort?: string;     // low | medium | high
+  reasoning_effort?: string;     // none | low | medium | high | off
   think?: boolean;
+  thinking?: { type: "enabled" | "disabled" };
   temperature?: number;
   top_p?: number;
   top_k?: number;

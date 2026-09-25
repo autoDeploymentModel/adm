@@ -720,6 +720,30 @@ const EN = {
   "部分对话清除失败（": "Some sessions could not be cleared (",
   " 个），请重试": "), please retry",
   "已清除全部对话": "All sessions cleared",
+  // 决策输出模式（Choice / Bool / Score）
+  "普通对话": "Normal chat",
+  "决策·自动判断": "Decision · auto",
+  "决策·选项选择": "Decision · choice",
+  "决策·布尔判断": "Decision · bool",
+  "决策·评分": "Decision · score",
+  "选择普通对话或 Choice / Bool / Score 决策输出模式；选择决策模式会自动关闭思考": "Choose normal chat or Choice / Bool / Score decision output; decision modes turn reasoning off automatically",
+  "决策建议": "Recommendation",
+  "成立": "True",
+  "不成立": "False",
+  "结论": "Conclusion",
+  "依据": "Basis",
+  "候选方案": "Candidates",
+  "评分": "Score",
+  "归一化值": "Normalized",
+  "等级": "Level",
+  "当前模式不提供概率；此结果不会自动执行任何操作。": "Probabilities are unavailable in this mode; this result never triggers actions automatically.",
+  "决策输出暂不支持 PDF 分批处理，请切换为普通对话后重试": "Decision output does not support batched PDFs yet; switch to normal chat and retry",
+  "决策结果 (原始 JSON)": "Decision result (raw JSON)",
+  "模型未返回有效的 Choice / Bool / Score 决策结果，请重试或切换普通对话": "The model returned no valid Choice / Bool / Score decision result; retry or switch to normal chat",
+  // 思考开关
+  "启用模型思考": "Enable model reasoning",
+  "关闭后向支持该参数的模型发送 reasoning_effort: none": "When off, sends reasoning_effort: none to models that support it",
+  "应用思考设置失败: ": "Failed to apply reasoning settings: ",
 };
 
 let lang = "zh";

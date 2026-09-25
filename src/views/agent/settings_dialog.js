@@ -74,14 +74,16 @@ export function initProjectMemoryUI() {
 }
 
 export function updateSettingsUI() {
+  var thinkingEnabled = $input("settings-thinking-enabled");
   var reasoningSelect = $input("settings-reasoning-effort");
   var tempInput = $input("settings-temperature");
 
   // 调试模式（持久化到 config.json 的 debug_logging，由后端开关控制）
   $input("settings-debug-logging").checked = !!S.settings.debug_logging;
 
-  // 推理强度（旧版存过 ""/"auto"，归一化为 medium 回显）
+  thinkingEnabled.checked = S.settings.agent_thinking_enabled !== false;
   reasoningSelect.value = normalizeReasoningEffort(S.settings.agent_reasoning_effort);
+  reasoningSelect.disabled = !thinkingEnabled.checked;
 
   // 温度
   tempInput.value = S.settings.agent_temperature || "";
@@ -166,6 +168,7 @@ export async function saveSettings() {
     // 保存 agent 设置到 config
     var s = await invoke("load_settings");
     s.agent_default_provider = S.settings.agent_default_provider || "local";
+    s.agent_thinking_enabled = S.settings.agent_thinking_enabled !== false;
     s.agent_reasoning_effort = normalizeReasoningEffort(S.settings.agent_reasoning_effort);
     s.agent_temperature = S.settings.agent_temperature || null;
     s.debug_logging = S.settings.debug_logging || false;

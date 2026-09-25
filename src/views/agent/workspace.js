@@ -10,6 +10,7 @@ import { loadTools } from "./tools.js";
 import { refreshAgentInfo, refreshServerProviders, updateModelDropdown } from "./model.js";
 import { resetPermissionState, syncModeToServer } from "./permission.js";
 import { reconcilePdfBatching } from "./pdf_batch.js";
+import { updateDecisionModeUI } from "./decision_mode.js";
 
 // ===== 会话上下文压缩 =====
 // 全局默认开启自动压缩（Compact 模式）：上下文接近上限时服务端自动生成摘要压缩，
@@ -43,6 +44,7 @@ export async function switchToWorkspace(wsId, wsPath) {
 
   // Store 统一处理：保存旧 workspace 状态 + 切换 activeWsId + 恢复目标 workspace
   store.setActive(wsId);
+  updateDecisionModeUI();
   S.workspaceInfo = { id: wsId, path: wsPath || "", name: wsPath ? wsPath.split(/[\\/]/).pop() : _t("默认工作区") };
   // 记录 path → wsId 映射，供 remove_workdir / validate_workdirs 清理状态池使用
   if (wsPath) S.wsIdByPath[wsPath] = wsId;
@@ -99,6 +101,7 @@ export async function switchToWorkspace(wsId, wsPath) {
   await refreshProvidersOnSwitch(wsId);
 
   updateWorkspaceSelector();
+  updateDecisionModeUI();
   // 切换工作区后同步微信 follow session，防止微信消息仍用旧 workspace 的 session ID
   syncWxFollowSession();
 }

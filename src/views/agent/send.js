@@ -14,6 +14,7 @@ import { clearAttachedSkillsAfterSend } from "./skill_selector.js";
 import { splitPdfItems, buildPlans, confirmLargePlans, renderPlanBatch, registerPlans } from "./pdf_batch.js";
 import { friendlyPdfError } from "./pdf.js";
 import { isCompacting } from "./compact.js";
+import { getActiveDecisionMode, decisionRequestPayload } from "./decision_mode.js";
 
 // ===== 发送消息 =====
 
@@ -145,8 +146,11 @@ async function sendText(overrideText, filesOverride, expectedTarget) {
   }
   // 折叠插入（中途插入）：当前会话正在运行，再发送 = 不带 run_id 发给服务端，
   // 服务端在下一步边界把它折叠进当前轮（不是排队等本轮结束、也不取消本轮）；
-  // 不重开 run、不改运行统计、不重设续跑预算，仅新增一条待插入的用户消息
-  var foldIn = !!(S.isSending && S.activeRun && S.activeRun.sessionId === S.currentConvId);
+  // 不重开 run、不改运行统计、不重设续跑预算，仅新增一条待插入的用户消息。
+  // 决策模式例外：决策轮是服务端的独立单次执行（不能折叠进普通轮），因此
+  // 强制走排队路径（带 run_id），会话忙时排队而不是插入。
+  var decisionMode = filesOverride != null ? "text" : getActiveDecisionMode();
+  var foldIn = decisionMode === "text" && !!(S.isSending && S.activeRun && S.activeRun.sessionId === S.currentConvId);
   if (foldIn) log.debug("SEND", "sendMessage: 当前会话运行中 → 折叠插入（无 run_id）");
   if (!S.currentConvId) {
     var input = /** @type {HTMLTextAreaElement} */ (document.getElementById("agent-input"));
@@ -197,6 +201,10 @@ async function sendText(overrideText, filesOverride, expectedTarget) {
   var otherFiles = pdfSplit.others;
   var pdfPlans = [];
   var firstPdfBatch = null;
+  if (pdfSplit.pdfs.length > 0 && decisionMode !== "text") {
+    showWarning(_t("决策输出暂不支持 PDF 分批处理，请切换为普通对话后重试"));
+    return { ok: false, error: "decision_pdf_unsupported" };
+  }
   if (pdfSplit.pdfs.length > 0) {
     var otherImages = otherFiles.filter(function(f) { return f.type && f.type.indexOf("image/") === 0; }).length;
     pdfPlans = buildPlans(pdfSplit.pdfs, otherImages);
@@ -299,6 +307,10 @@ async function sendText(overrideText, filesOverride, expectedTarget) {
       session_id: sessionId,
       prompt: promptText,
     };
+    // 决策模式：规格随请求下发（服务端 decision_turn.go 走独立单次执行）；
+    // 普通对话不传该字段，请求与以前逐字相同
+    var decisionPayload = decisionRequestPayload(decisionMode);
+    if (decisionPayload) body.decision = decisionPayload;
     // 折叠插入不带 run_id（服务端下一步边界折叠进当前轮）；独立轮次才带 run_id 关联生命周期
     if (!foldIn) body.run_id = runId;
     if (attachments.length > 0) body.attachments = attachments;
@@ -319,6 +331,7 @@ async function sendText(overrideText, filesOverride, expectedTarget) {
       store.setRunStats(workspaceId, {
         sessionId: sessionId,
         prompt: promptText,
+        decisionMode: decisionMode,
         toolCalls: 0,
         sideEffectCalls: 0,
         sideEffectSuccess: 0,

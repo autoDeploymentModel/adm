@@ -12,6 +12,10 @@ export function normalizeReasoningEffort(v) {
   return v === "low" || v === "medium" || v === "high" ? v : "medium";
 }
 
+export function getRequestReasoningEffort(enabled, effort) {
+  return enabled === false ? "none" : normalizeReasoningEffort(effort);
+}
+
 // 生成 UUID (兼容性方案)
 export function generateUUID() {
   var d = Date.now();

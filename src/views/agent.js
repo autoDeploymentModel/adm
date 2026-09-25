@@ -22,6 +22,7 @@ import { bindSkillSelectorEvents, initSkillSelector, clearAttachedSkillsAfterSen
 import { bindCompactBtnEvents } from "./agent/compact.js";
 import { initMcpDialogUI } from "./agent/mcp_dialog.js";
 import { initPdfBatching, reconcilePdfBatching } from "./agent/pdf_batch.js";
+import { bindDecisionModeEvents, updateDecisionModeUI } from "./agent/decision_mode.js";
 
 // ===== 初始化 =====
 //
@@ -206,6 +207,7 @@ async function _doInit(seq) {
 
   updateModelDropdown();
   updateSettingsUI();
+  updateDecisionModeUI();
   if (seq !== S.initSeq) return;
 
   // 异步加载用户技能列表（不阻塞 init 主体；首屏渲染已含空态占位）
@@ -500,7 +502,7 @@ function bindEvents() {
   }
 
   // 设置项即时生效：任一字段变更立即应用并持久化（无保存/取消按钮）
-  ["settings-debug-logging", "settings-reasoning-effort", "settings-temperature", "settings-vision-model"].forEach(function(id) {
+  ["settings-debug-logging", "settings-thinking-enabled", "settings-reasoning-effort", "settings-temperature", "settings-vision-model"].forEach(function(id) {
     $input(id).addEventListener("change", applySettings);
   });
 
@@ -515,7 +517,9 @@ function bindEvents() {
 
   // 从所有设置弹窗字段读取并保存（即时生效，弹窗保持打开）
   async function applySettings() {
+    S.settings.agent_thinking_enabled = $input("settings-thinking-enabled").checked;
     S.settings.agent_reasoning_effort = normalizeReasoningEffort($input("settings-reasoning-effort").value);
+    $input("settings-reasoning-effort").disabled = !S.settings.agent_thinking_enabled;
     var tempVal = $input("settings-temperature").value;
     S.settings.agent_temperature = tempVal ? parseFloat(tempVal) : null;
     S.settings.agent_vision_model = $input("settings-vision-model").value || "admAgent/admImage-model";
@@ -543,6 +547,32 @@ function bindEvents() {
     }
   }
 
+  // 思考开关与决策模式的联动：决策模式必须关闭思考（要求正文末尾即结果 JSON）；
+  // 从决策模式切回普通对话时自动重新开启思考（用户的推理强度不受影响，仍沿用设置里的档位）。
+  // 同模式内切换会话/工作区（text → text / 决策 → 决策）不强行改写用户自己的开关。
+  var lastDecisionMode = null;
+  var onDecisionModeChanged = function(e) {
+    var detail = /** @type {any} */ (e).detail;
+    var mode = detail && detail.mode;
+    if (!mode) return;
+    var thinkingBox = $input("settings-thinking-enabled");
+    var reasoningSelect = $input("settings-reasoning-effort");
+    var previous = lastDecisionMode;
+    lastDecisionMode = mode;
+    var current = thinkingBox.checked;
+    var desired = mode === "text" ? (previous !== null && previous !== "text" ? true : current) : false;
+    if (current === desired) return;
+    thinkingBox.checked = desired;
+    reasoningSelect.disabled = !desired;
+    applySettings().catch(function(err) {
+      reportError(err, { prefix: _t("应用思考设置失败: ") });
+    });
+  };
+  document.addEventListener("agent-decision-mode-changed", onDecisionModeChanged);
+  S.unlisteners.push(function() {
+    document.removeEventListener("agent-decision-mode-changed", onDecisionModeChanged);
+  });
+
   // 云端模型管理
   document.getElementById("agent-add-cloud-btn").addEventListener("click", showAddModelDialog);
 
@@ -558,11 +588,22 @@ function bindEvents() {
     // 互斥：打开模型下拉时关闭技能下拉
     var skillDd = document.getElementById("agent-skill-dropdown");
     if (skillDd) skillDd.classList.remove("show");
+    var decisionDd = document.getElementById("agent-decision-mode-dropdown");
+    if (decisionDd) decisionDd.classList.remove("show");
     document.getElementById("agent-model-dropdown").classList.toggle("show");
-  });  document.addEventListener("click", function() {
-    var dd = document.getElementById("agent-model-dropdown");
-    if (dd) dd.classList.remove("show");
   });
+  var closeToolbarDropdowns = function() {
+    var dd = document.getElementById("agent-model-dropdown");
+    var decisionDd = document.getElementById("agent-decision-mode-dropdown");
+    if (dd) dd.classList.remove("show");
+    if (decisionDd) decisionDd.classList.remove("show");
+  };
+  document.addEventListener("click", closeToolbarDropdowns);
+  S.unlisteners.push(function() {
+    document.removeEventListener("click", closeToolbarDropdowns);
+  });
+
+  bindDecisionModeEvents();
 
   // 技能下拉（用户/项目技能，选中后随下一条消息发送）
   bindSkillSelectorEvents();
