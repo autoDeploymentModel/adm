@@ -16,7 +16,7 @@ import { syncModeToServer } from "./agent/permission.js";
 import { loadTools, activateToolsTab } from "./agent/tools.js";
 import { switchModel, refreshServerProviders, resolveAgentModel, updateModelDropdown, updateModelBtn, refreshAgentInfo } from "./agent/model.js";
 import { enableAutoCompact, updateWorkspaceSelector, toggleWorkDirDropdown, closeWorkDirDropdown, validateWorkDirs } from "./agent/workspace.js";
-import { showSettings, hideSettings, updateSettingsUI, saveSettings, showAddModelDialog, hideAddModelDialog, addModel, initProjectMemoryUI, renderVisionModelSelect } from "./agent/settings_dialog.js";
+import { showSettings, hideSettings, updateSettingsUI, saveSettings, showAddModelDialog, hideAddModelDialog, addModel, initProjectMemoryUI, renderVisionModelSelect, updateProviderKeyHint } from "./agent/settings_dialog.js";
 import { addPendingFiles, parseUriListPaths, addPastedPaths, looksLikeFilePath } from "./agent/attach.js";
 import { bindSkillSelectorEvents, initSkillSelector, clearAttachedSkillsAfterSend } from "./agent/skill_selector.js";
 import { bindCompactBtnEvents } from "./agent/compact.js";
@@ -587,6 +587,11 @@ function bindEvents() {
   // 模型添加
   document.getElementById("agent-add-model-close").addEventListener("click", hideAddModelDialog);
   document.getElementById("add-model-submit").addEventListener("click", addModel);
+  // 名称/模型ID 输入时同步展示派生出的 providers 键（同名冲突会标红，避免静默覆盖）
+  ["add-model-name", "add-model-modelid"].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.addEventListener("input", updateProviderKeyHint);
+  });
 
   // MCP 管理（MCP tab 添加按钮 + 列表点击编辑 + 添加/修改弹窗）
   initMcpDialogUI();

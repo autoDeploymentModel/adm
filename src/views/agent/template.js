@@ -2190,6 +2190,7 @@ export const template = `
       <div class="param-row" style="flex-direction:column;gap:6px;">
         <input type="text" class="settings-input" id="add-model-modelid" placeholder="${_t("模型ID (如 Big Pickle)")}">
         <input type="text" class="settings-input" id="add-model-name" placeholder="${_t("模型名称 (可选, 默认使用模型ID)")}">
+        <div id="add-model-key-hint" style="font-size:12px;color:var(--c-text-2);line-height:16px;min-height:16px;"></div>
         <input type="text" class="settings-input" id="add-model-baseurl" placeholder="${_t("API Base URL (如 https://api.example.com/v1)")}">
         <input type="text" class="settings-input" id="add-model-apikey" placeholder="API Key">
         <input type="text" class="settings-input" id="add-model-ctx" placeholder="${_t("上下文大小 (如 256K, 1M)")}">

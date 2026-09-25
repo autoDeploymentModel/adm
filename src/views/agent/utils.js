@@ -127,6 +127,14 @@ export function slugifyModelId(name) {
   return out || "model";
 }
 
+// 与 src-tauri agent.rs 的 slugify_provider_key 保持一致：只保留 ASCII 字母数字并转小写。
+// providers 的 JSON 键由「模型名称」派生（添加时计算一次，之后改名不变），因此两个
+// slug 后相同的名称会指向同一个键、互相覆盖。
+export function slugifyProviderKey(name) {
+  var out = String(name || "").replace(/[^0-9a-zA-Z]/g, "").toLowerCase();
+  return out || "cloud";
+}
+
 export function formatTokens(n) {
   if (n >= 1000000) return (n / 1000000).toFixed(1) + "M";
   if (n >= 1000) return (n / 1000).toFixed(1) + "K";

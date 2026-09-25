@@ -174,9 +174,10 @@ function partSig(part) {
 // 消息内容签名：变化才触发该消息节点的更新
 function msgSignature(msg) {
   if (msg._streaming || !msg.parts || !Array.isArray(msg.parts) || msg.parts.length === 0) {
-    return "c:" + (msg.content || "").length + ":" + (msg.model || "") + (msg.provider || "");
+    return "c:" + (msg.content || "").length + ":" + (msg.model || "") + ":" + providerDisplayName(msg.provider);
   }
-  return "p:" + msg.parts.map(partSig).join(";") + "|" + (msg.model || "") + (msg.provider || "") + (msg.created_at || "");
+  return "p:" + msg.parts.map(partSig).join(";") + "|" + (msg.model || "") +
+    ":" + providerDisplayName(msg.provider) + (msg.created_at || "");
 }
 
 // 消息结构签名：part 类型序列 + 是否有元信息，结构一致才允许就地更新。
@@ -191,7 +192,11 @@ function msgStructSig(msg, role, callResultMap) {
     if (isPartRenderable(p, role, hiddenCallIds) &&
         !(p.type === "tool_result" && p.data && map[String(p.data.tool_call_id)] !== undefined)) types.push(p.type);
   });
-  return types.join(",") + ((msg.model || msg.provider) ? "|meta" : "");
+  // 元信息内容（含 provider 显示名，随 provider 列表刷新变化）一并入签名，
+  // 否则就地更新路径会一直复用旧节点、改过的 provider 名称永远不生效
+  return types.join(",") + ((msg.model || msg.provider)
+    ? "|meta:" + (msg.model || "") + ":" + providerDisplayName(msg.provider)
+    : "");
 }
 
 export function renderMessages() {
@@ -729,6 +734,21 @@ function msgThinkingOpen(parts) {
   return hasThinking && !hasText && !hasFinish;
 }
 
+// 消息元信息里的 provider 显示名：msg.provider 存的是 admAgent.json providers 的 JSON 键
+// （添加云端模型时由「模型名称」slug 派生，见 src-tauri/src/pages/agent.rs 的
+// slugify_provider_key），直接展示是一串无分隔符小写（如 deepseekv4flashvisionexp）。
+// 这里按磁盘配置与 /providers 快照反查可读名称，都查不到才回退原始键。
+function providerDisplayName(key) {
+  if (!key) return "";
+  var disk = /** @type {any[]} */ (S.providers || []);
+  var snap = /** @type {any[]} */ (S.serverProviders || []);
+  var d = disk.find(function(p) { return p && p.key === key && p.name; });
+  if (d) return d.name;
+  var s = snap.find(function(sp) { return sp && sp.id === key && sp.name; });
+  if (s) return s.name;
+  return key;
+}
+
 // 构建完整消息节点
 function buildMessageNode(msg, key, callResultMap, allowDecision, decisionCardKey) {
   var role = msg.role || "assistant";
@@ -777,13 +797,17 @@ function buildMessageNode(msg, key, callResultMap, allowDecision, decisionCardKe
   // 供 renderMessages 按消息列表生命周期管理（切会话/刷新时随列表移除）
   if (msg._error) div.setAttribute("data-adm-local-error", "1");
 
-  // 消息元信息
+  // 消息元信息：模型 · provider 显示名 · 时间。provider 与模型同名时省略
+  // （添加云端模型时 provider 名称默认取模型名称，重复展示没有信息量）
   if (msg.model || msg.provider) {
     var meta = document.createElement("div");
     meta.className = "msg-meta";
     var metaParts = [];
     if (msg.model) metaParts.push(msg.model);
-    if (msg.provider) metaParts.push(msg.provider);
+    var providerLabel = providerDisplayName(msg.provider);
+    if (providerLabel && providerLabel.toLowerCase() !== String(msg.model || "").toLowerCase()) {
+      metaParts.push(providerLabel);
+    }
     if (msg.created_at) metaParts.push(formatTime(msg.created_at));
     meta.textContent = metaParts.join(" · ");
     div.appendChild(meta);

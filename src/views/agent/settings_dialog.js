@@ -2,7 +2,7 @@
 import { t as _t } from "../../i18n.js";
 import { S, invoke } from "./store.js";
 import { api } from "./api.js";
-import { parseContextSize, escapeHtml, $input, normalizeReasoningEffort, reasoningSettingValue } from "./utils.js";
+import { parseContextSize, escapeHtml, $input, normalizeReasoningEffort, reasoningSettingValue, slugifyProviderKey } from "./utils.js";
 import { showConfirm, reportError } from "./ui.js";
 import { updateWorkspaceSelector } from "./workspace.js";
 import { updateModelDropdown, switchModel, refreshServerProviders } from "./model.js";
@@ -198,8 +198,35 @@ function setAddModelDialogMode(isEdit) {
   if (submit) submit.textContent = isEdit ? _t("保存") : _t("添加");
 }
 
+// 名称 → providers 键的实时提示。键由「模型名称」派生（留空取模型ID，见 agent.rs 的
+// slugify_provider_key），且只在添加时计算一次；slug 后相同的名称会命中同一个键、
+// 后加的静默覆盖先加的，所以在输入阶段就把派生结果显示出来并在冲突时标红。
+export function updateProviderKeyHint() {
+  var el = document.getElementById("add-model-key-hint");
+  if (!el) return;
+  // 修改模式：键是既有的，不随名称变化（agent.rs 的 update_cloud_provider 按原键替换）
+  if (editingProviderKey !== null) {
+    el.textContent = _t("配置键（不随名称改变）：") + editingProviderKey;
+    el.style.color = "";
+    return;
+  }
+  var name = $input("add-model-name").value.trim() || $input("add-model-modelid").value.trim();
+  if (!name) {
+    el.textContent = "";
+    return;
+  }
+  var key = slugifyProviderKey(name);
+  var clash = S.providers.some(function(p) { return p && p.key === key; });
+  if (clash) {
+    el.textContent = _t("名称与已有模型重复，配置键：") + key;
+    el.style.color = "#ef4444";
+  } else {
+    el.textContent = _t("配置键：") + key;
+    el.style.color = "";
+  }
+}
+
 function clearAddModelForm() {
-  $input("add-model-name").value = "";
   $input("add-model-baseurl").value = "";
   $input("add-model-apikey").value = "";
   $input("add-model-modelid").value = "";
@@ -207,6 +234,27 @@ function clearAddModelForm() {
   $input("add-model-images").checked = false;
   $input("add-model-reasoning").checked = false;
   document.getElementById("add-model-msg").textContent = "";
+  updateProviderKeyHint();
+}
+
+// 清理「最近使用」里指向已删 provider 的条目（服务端数据配置的 recent_models，
+// TUI 模型菜单的"最近使用"分组数据源）。删除 provider 不会触碰它，若不在此清理，
+// 历史里会长期残留已删模型的键；TUI 菜单读时也会自动剔除，此处只是让配置保持干净。
+// 该字段仅 TUI 使用，写回不会影响 ADM 的模型选择。
+async function removeRecentModelsByProvider(wsId, providerKey) {
+  // recent_models 只存在服务端的全局数据配置里，需读 /v1/config 再按剩余条目写回
+  var cfg = await api("GET", "/v1/config");
+  var list = cfg && cfg.recent_models || null;
+  if (!Array.isArray(list)) return;
+  var kept = list.filter(function(m) { return !m || m.provider !== providerKey; });
+  if (kept.length === list.length) return; // 本就无残留，避免无谓写盘
+  var url = "/v1/workspaces/" + wsId + "/config/";
+  if (kept.length === 0) {
+    // 清空时直接删字段，避免留下 recent_models: []（omitempty 期望的是字段缺失）
+    await api("POST", url + "remove", { scope: 0, key: "recent_models" });
+  } else {
+    await api("POST", url + "set", { scope: 0, key: "recent_models", value: kept });
+  }
 }
 
 export function showAddModelDialog() {
@@ -231,6 +279,7 @@ function showEditModelDialog(p) {
   $input("add-model-images").checked = !!p.supports_images;
   $input("add-model-reasoning").checked = !!p.can_reason;
   document.getElementById("add-model-msg").textContent = "";
+  updateProviderKeyHint();
   setAddModelDialogMode(true);
   document.getElementById("agent-add-model-overlay").classList.add("show");
 }
@@ -273,6 +322,10 @@ function renderProviderList() {
             await api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/config/remove", {
               scope: 0, key: "providers." + p.key
             }).catch(function(e) { console.warn("[agent] 同步删除 provider 到服务端失败:", e); });
+            // 顺带清掉「最近使用」里指向该 provider 的条目（失败不影响删除结果）
+            removeRecentModelsByProvider(S.serverInfo.workspace_id, p.key).catch(function(e) {
+              console.warn("[agent] 清理最近使用模型记录失败:", e);
+            });
           }
           // 删的正是当前激活的 provider：立即切回本地模型，避免 active model 悬空
           // 导致 /agent/update 报 "active model provider not configured"、
@@ -316,6 +369,20 @@ export async function addModel() {
   if (!modelId || !baseUrl || !apiKey) {
     addModelMsg(_t("请填写模型ID、API地址和密钥"), true);
     return;
+  }
+
+  // 新增时先查键冲突：providers 是对象，slug 后同名的两个名称会指向同一个键，
+  // 后加的会静默覆盖先加的（agent.rs add_cloud_provider 直接 providers[key] = ...），
+  // 表现为「加完发现没保存成功」。此处拦下并提示改名或先删除已有条目；
+  // 修改模式按原键替换、不会碰其它条目，无需校验。
+  if (editingProviderKey === null) {
+    var derivedKey = slugifyProviderKey(name);
+    var clash = S.providers.find(function(p) { return p && p.key === derivedKey; });
+    if (clash) {
+      addModelMsg(_t("名称与已有模型重复，配置键：") + derivedKey +
+        _t("（同名会被覆盖），请改用其它名称或先删除已有条目"), true);
+      return;
+    }
   }
 
   // 修改模式：按原 key 替换全部参数（key 不变，不产生孤儿条目）
