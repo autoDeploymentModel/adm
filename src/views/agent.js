@@ -6,7 +6,7 @@ import { template } from "./agent/template.js";
 import { S, invoke, listen, store } from "./agent/store.js";
 import { log, setLogEnabled } from "./agent/log.js";
 import { api } from "./agent/api.js";
-import { generateUUID, isFullyAtBottom, autoResize, $input, normalizeReasoningEffort } from "./agent/utils.js";
+import { generateUUID, isFullyAtBottom, autoResize, $input, applyReasoningSetting } from "./agent/utils.js";
 import { updateStatusBar, updateContextUsage, updateSendButton, exitManualScrollMode, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showInfo, showConfirm, showCopyPasteMenu, updateScrollBottomBtn, reportError, showInitProgress, hideInitProgress } from "./agent/ui.js";
 import { loadConversations, selectConversation, newConversation, clearAllConversations, toggleOutlinePanel, setOutlinePanelOpen } from "./agent/session.js";
 import { syncWorkingIndicator, onAreaScroll, scrollChatToBottom, beginSelectGuard, endSelectGuard, resetSelectGuard } from "./agent/render.js";
@@ -502,7 +502,7 @@ function bindEvents() {
   }
 
   // 设置项即时生效：任一字段变更立即应用并持久化（无保存/取消按钮）
-  ["settings-debug-logging", "settings-thinking-enabled", "settings-reasoning-effort", "settings-temperature", "settings-vision-model"].forEach(function(id) {
+  ["settings-debug-logging", "settings-reasoning-effort", "settings-temperature", "settings-vision-model"].forEach(function(id) {
     $input(id).addEventListener("change", applySettings);
   });
 
@@ -517,9 +517,11 @@ function bindEvents() {
 
   // 从所有设置弹窗字段读取并保存（即时生效，弹窗保持打开）
   async function applySettings() {
-    S.settings.agent_thinking_enabled = $input("settings-thinking-enabled").checked;
-    S.settings.agent_reasoning_effort = normalizeReasoningEffort($input("settings-reasoning-effort").value);
-    $input("settings-reasoning-effort").disabled = !S.settings.agent_thinking_enabled;
+    // 思考开关与推理强度已合并为单个下拉：选「关闭」只翻 thinking_enabled，
+    // 档位本身保留，切回具体强度时恢复用户原来的选择。
+    var reasoning = applyReasoningSetting($input("settings-reasoning-effort").value, S.settings.agent_reasoning_effort);
+    S.settings.agent_thinking_enabled = reasoning.enabled;
+    S.settings.agent_reasoning_effort = reasoning.effort;
     var tempVal = $input("settings-temperature").value;
     S.settings.agent_temperature = tempVal ? parseFloat(tempVal) : null;
     S.settings.agent_vision_model = $input("settings-vision-model").value || "admAgent/admImage-model";
@@ -546,32 +548,6 @@ function bindEvents() {
       await switchModel(selectedKey, displayName, resolved.context_window || 0);
     }
   }
-
-  // 思考开关与决策模式的联动：决策模式必须关闭思考（要求正文末尾即结果 JSON）；
-  // 从决策模式切回普通对话时自动重新开启思考（用户的推理强度不受影响，仍沿用设置里的档位）。
-  // 同模式内切换会话/工作区（text → text / 决策 → 决策）不强行改写用户自己的开关。
-  var lastDecisionMode = null;
-  var onDecisionModeChanged = function(e) {
-    var detail = /** @type {any} */ (e).detail;
-    var mode = detail && detail.mode;
-    if (!mode) return;
-    var thinkingBox = $input("settings-thinking-enabled");
-    var reasoningSelect = $input("settings-reasoning-effort");
-    var previous = lastDecisionMode;
-    lastDecisionMode = mode;
-    var current = thinkingBox.checked;
-    var desired = mode === "text" ? (previous !== null && previous !== "text" ? true : current) : false;
-    if (current === desired) return;
-    thinkingBox.checked = desired;
-    reasoningSelect.disabled = !desired;
-    applySettings().catch(function(err) {
-      reportError(err, { prefix: _t("应用思考设置失败: ") });
-    });
-  };
-  document.addEventListener("agent-decision-mode-changed", onDecisionModeChanged);
-  S.unlisteners.push(function() {
-    document.removeEventListener("agent-decision-mode-changed", onDecisionModeChanged);
-  });
 
   // 云端模型管理
   document.getElementById("agent-add-cloud-btn").addEventListener("click", showAddModelDialog);

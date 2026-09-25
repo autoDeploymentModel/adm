@@ -12,6 +12,30 @@ export function normalizeReasoningEffort(v) {
   return v === "low" || v === "medium" || v === "high" ? v : "medium";
 }
 
+// 推理强度下拉的「关闭」档：思考开关与推理强度合并成单个控件后，用它表示不启用模型思考
+var REASONING_OFF = "off";
+
+/**
+ * 设置状态 → 下拉选中值：thinking_enabled=false 即「关闭」；其余归一化为 low/medium/high
+ * （历史配置里的 "" 与 "auto" 一并回落到 medium）。
+ * @param {boolean|undefined} enabled @param {string|undefined|null} effort @returns {string}
+ */
+export function reasoningSettingValue(enabled, effort) {
+  return enabled === false ? REASONING_OFF : normalizeReasoningEffort(effort);
+}
+
+/**
+ * 下拉选中值 → 设置状态：选「关闭」只翻 thinking_enabled 并保留原档位，
+ * 这样从「关闭」切回来能恢复用户原来的强度。
+ */
+/** @param {string} value @param {string|undefined|null} currentEffort @returns {{enabled: boolean, effort: string}} */
+export function applyReasoningSetting(value, currentEffort) {
+  if (value === REASONING_OFF) {
+    return { enabled: false, effort: normalizeReasoningEffort(currentEffort) };
+  }
+  return { enabled: true, effort: normalizeReasoningEffort(value) };
+}
+
 export function getRequestReasoningEffort(enabled, effort) {
   return enabled === false ? "none" : normalizeReasoningEffort(effort);
 }

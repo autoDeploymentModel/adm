@@ -2031,7 +2031,7 @@ export const template = `
             </div>
           </div>
           <div class="toolbar-decision-selector">
-            <button class="model-current toolbar-decision-mode-btn" id="agent-decision-mode-btn" title="${_t("选择普通对话或 Choice / Bool / Score 决策输出模式；选择决策模式会自动关闭思考")}" aria-pressed="false" disabled>
+            <button class="model-current toolbar-decision-mode-btn" id="agent-decision-mode-btn" title="${_t("选择普通对话或 Choice / Bool / Score 决策输出模式；决策轮由服务端关闭推理，不改变你设置的推理强度")}" aria-pressed="false" disabled>
               <span class="decision-mode-icon">◇</span>
               <span id="agent-decision-mode-name">${_t("普通对话")}</span>
               <span class="dropdown-arrow">▾</span>
@@ -2128,23 +2128,15 @@ export const template = `
       <div class="param-group">
         <div class="param-group-title">${_t("模型配置")}</div>
         <div class="param-row">
-          <div class="param-label">${_t("思考模式")}</div>
-          <div class="param-input">
-            <div class="checkbox-wrap">
-              <input type="checkbox" id="settings-thinking-enabled">
-              <span>${_t("启用模型思考")}</span>
-            </div>
-            <div class="param-desc">${_t("关闭后向支持该参数的模型发送 reasoning_effort: none")}</div>
-          </div>
-        </div>
-        <div class="param-row">
           <div class="param-label">${_t("推理强度")}</div>
           <div class="param-input">
             <select class="settings-select" id="settings-reasoning-effort">
+              <option value="off">${_t("关闭推理")}</option>
               <option value="low">low</option>
               <option value="medium" selected>medium</option>
               <option value="high">high</option>
             </select>
+            <div class="param-desc">${_t("选「关闭」不启用模型思考（向支持该参数的模型发送 reasoning_effort: none）")}</div>
           </div>
         </div>
         <div class="param-row">

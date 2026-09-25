@@ -20,6 +20,7 @@ export var ERROR_NOT_FOUND = "not_found";    // 资源不存在
 export var ERROR_CONTEXT_OVERFLOW = "context_overflow"; // 上下文超出模型支持的长度
 export var ERROR_CANCEL = "cancel";          // 已取消
 export var ERROR_STEP_CAP = "step_cap";      // 步数触顶（模型仍在干活但本轮预算耗尽，非故障）
+export var ERROR_THINKING_UNSUPPORTED = "thinking_unsupported"; // 模型不支持关闭思考（需用户切回思考档）
 export var ERROR_UNKNOWN = "unknown";        // 其它
 
 /**
@@ -112,6 +113,11 @@ var CANCEL_RE = /canceled|cancelled|已取消/i;
 // 步数触顶哨兵：服务端 errStepCap 文案固定含 "max_steps_reached"（有单测锁定），
 // 是前后端契约，改服务端文案必须保留该 token。
 var STEP_CAP_RE = /max_steps_reached/i;
+// 思考参数不支持哨兵：服务端在 provider 拒绝 reasoning_effort=none 与
+// thinking.disabled 两种写法时返回该 token（internal/llm/client.go 的
+// "thinking mode unsupported" 分支，有单测锁定）。必须早于网络类匹配：被包裹的
+// provider 原文含 "Upstream request failed"，否则会被误判成连接失败。
+var THINKING_UNSUPPORTED_RE = /thinking_mode_unsupported/i;
 
 /**
  * 错误分类：优先按 ProviderError.type 精确分类（最稳），未命中再走关键词正则兜底。
@@ -126,6 +132,7 @@ export function classifyError(err) {
   // 2) 兜底：按 message 文本关键词匹配（兼容老错误/无 type 字段的情况）
   var text = getErrorMessage(err);
   if (STEP_CAP_RE.test(text)) return ERROR_STEP_CAP;
+  if (THINKING_UNSUPPORTED_RE.test(text)) return ERROR_THINKING_UNSUPPORTED;
   if (USAGE_LIMIT_RE.test(text)) return ERROR_USAGE_LIMIT;
   if (RATE_LIMIT_RE.test(text)) return ERROR_RATE_LIMIT;
   if (QUOTA_RE.test(text)) return ERROR_QUOTA;
@@ -150,6 +157,7 @@ var FRIENDLY_ZH = {
   context_overflow: "上下文超出模型支持的长度，任务中断",
   cancel: "操作已取消",
   step_cap: "本轮已达步数上限，任务暂停",
+  thinking_unsupported: "本模型不支持关闭思考，请切回思考模式",
   unknown: "操作失败，任务中断",
 };
 var FRIENDLY_EN = {
@@ -162,6 +170,7 @@ var FRIENDLY_EN = {
   context_overflow: "Context length exceeded. Task interrupted.",
   cancel: "Operation canceled.",
   step_cap: "Step limit reached. Task paused.",
+  thinking_unsupported: "This model cannot disable reasoning. Please switch reasoning back on.",
   unknown: "Operation failed. Task interrupted.",
 };
 

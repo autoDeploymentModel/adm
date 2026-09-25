@@ -1098,7 +1098,7 @@ DeepSeek 非思考模式支持以下两种等价写法，admAgent 会兼容并�
 { "thinking": { "type": "disabled" } }
 ```
 
-桌面端只负责把选定的写法写进模型配置（关闭思考时默认写 `reasoning_effort: "none"`），**回退不发生在桌面端**：admAgent 调用上游 LLM 时，若上游明确返回 `400`（包括只给 `invalid_request_error / invalid request` 的通用参数错误），且不属于上下文超限、配额、内容安全、鉴权等其它错误，admAgent 会自动用另一种写法重试一次，并按 `base URL + model` 在进程内存中记住成功的那一种；网络错误、超时、`5xx` 不会触发该回退。两种写法都被拒绝时返回 `400`（`thinking mode unsupported`），错误文本同时给出两次失败原因摘要。
+桌面端只负责把选定的写法写进模型配置（关闭思考时默认写 `reasoning_effort: "none"`），**回退不发生在桌面端**：admAgent 调用上游 LLM 时，若上游明确返回 `400`（包括只给 `invalid_request_error / invalid request` 的通用参数错误），且不属于上下文超限、配额、内容安全、鉴权等其它错误，admAgent 会自动用另一种写法重试一次，并按 `base URL + model` 在进程内存中记住成功的那一种；网络错误、超时、`5xx` 不会触发该回退。两种写法都被拒绝时返回 `400`（`thinking mode unsupported`），错误文本以 **`thinking_mode_unsupported`** 开头并附两次失败原因摘要——这是前后端契约 token（`internal/llm/client_test.go` 有单测锁定）：桌面端据此分类并提示「本模型不支持关闭思考，请切回思考模式」，同时中断本轮。admAgent **不会**为此静默去掉参数继续跑，也**不会**改写用户设置的推理档位（该模型只能显式切回思考档）。
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|

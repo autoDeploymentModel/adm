@@ -726,7 +726,7 @@ const EN = {
   "决策·选项选择": "Decision · choice",
   "决策·布尔判断": "Decision · bool",
   "决策·评分": "Decision · score",
-  "选择普通对话或 Choice / Bool / Score 决策输出模式；选择决策模式会自动关闭思考": "Choose normal chat or Choice / Bool / Score decision output; decision modes turn reasoning off automatically",
+  "选择普通对话或 Choice / Bool / Score 决策输出模式；决策轮由服务端关闭推理，不改变你设置的推理强度": "Choose normal chat or Choice / Bool / Score decision output; decision turns disable reasoning server-side without touching your reasoning strength",
   "决策建议": "Recommendation",
   "成立": "True",
   "不成立": "False",
@@ -740,10 +740,9 @@ const EN = {
   "决策输出暂不支持 PDF 分批处理，请切换为普通对话后重试": "Decision output does not support batched PDFs yet; switch to normal chat and retry",
   "决策结果 (原始 JSON)": "Decision result (raw JSON)",
   "模型未返回有效的 Choice / Bool / Score 决策结果，请重试或切换普通对话": "The model returned no valid Choice / Bool / Score decision result; retry or switch to normal chat",
-  // 思考开关
-  "启用模型思考": "Enable model reasoning",
-  "关闭后向支持该参数的模型发送 reasoning_effort: none": "When off, sends reasoning_effort: none to models that support it",
-  "应用思考设置失败: ": "Failed to apply reasoning settings: ",
+  // 推理强度（含「关闭」档）
+  "关闭推理": "Off",
+  "选「关闭」不启用模型思考（向支持该参数的模型发送 reasoning_effort: none）": "Pick Off to disable model reasoning (sends reasoning_effort: none to models that support it)",
 };
 
 let lang = "zh";

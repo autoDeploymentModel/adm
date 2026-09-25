@@ -2,7 +2,7 @@
 import { t as _t } from "../../i18n.js";
 import { S, invoke } from "./store.js";
 import { api } from "./api.js";
-import { parseContextSize, escapeHtml, $input, normalizeReasoningEffort } from "./utils.js";
+import { parseContextSize, escapeHtml, $input, normalizeReasoningEffort, reasoningSettingValue } from "./utils.js";
 import { showConfirm, reportError } from "./ui.js";
 import { updateWorkspaceSelector } from "./workspace.js";
 import { updateModelDropdown, switchModel, refreshServerProviders } from "./model.js";
@@ -74,16 +74,14 @@ export function initProjectMemoryUI() {
 }
 
 export function updateSettingsUI() {
-  var thinkingEnabled = $input("settings-thinking-enabled");
   var reasoningSelect = $input("settings-reasoning-effort");
   var tempInput = $input("settings-temperature");
 
   // 调试模式（持久化到 config.json 的 debug_logging，由后端开关控制）
   $input("settings-debug-logging").checked = !!S.settings.debug_logging;
 
-  thinkingEnabled.checked = S.settings.agent_thinking_enabled !== false;
-  reasoningSelect.value = normalizeReasoningEffort(S.settings.agent_reasoning_effort);
-  reasoningSelect.disabled = !thinkingEnabled.checked;
+  // 推理强度（含「关闭」= 不启用模型思考，与旧版独立的思考开关同义）
+  reasoningSelect.value = reasoningSettingValue(S.settings.agent_thinking_enabled, S.settings.agent_reasoning_effort);
 
   // 温度
   tempInput.value = S.settings.agent_temperature || "";

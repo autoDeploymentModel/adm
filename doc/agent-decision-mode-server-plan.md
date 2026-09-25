@@ -20,8 +20,12 @@
 > ⚠️ **新增 part 类型必须同时登记三处**（漏一处会表现成"服务端成功、前端拿不到 part"→ 误报"未返回有效决策结果"）：
 > ① `internal/message`（存储层 `partType`/`isPart`）；② `internal/proto/message.go`（wire 白名单：`partType` 常量 + `MarshalParts`/`UnmarshalParts`）；③ `internal/server/events.go` 的 `messageToProto`（message → wire 转换，SSE 事件与 `/messages` 三个端点共用）。回归用例：`internal/server/events_test.go` 的 `TestMessageToProtoDecision`。
 | P3 `json_schema` 强制 | ✅ | `internal/llm`（`Request.ResponseFormat` + `wireRequest` 透传 + `JSONSchemaResponseFormat`）；探针失败自动不带 response_format 重试一次并按 `baseURL+model` 缓存（`structuredOutputCache`，与 thinking 同一套机制）；`decision.JSONSchema(spec)` 按 mode 生成 schema；桌面端可传 `structured_output=off` 关闭 |
+| P3 服务端强制关思考 | ✅ | 决策轮在 `decision_turn.go` 固定 `reasoning_effort: none`（不再读 model 配置里的 thinking 开关，也不带 `Thinking` 对象）；provider 把两种写法都拒时（`llm.ThinkingModeUnsupported`）去掉参数重试同一请求，契约提示词仍约束只输出一个 JSON 块；桌面端据此移除了「决策模式 ↔ 推理强度」的全局联动（设置面板已把思考开关与推理强度合并为单个下拉），用户切换会话/模式不再改写全局设置 |
 
-测试：`admAgent/internal/decision`（契约/解析/bare JSON/StripResult/JSONSchema）、`admAgent/internal/message`（decision part 序列化往返与正文剔除）、`admAgent/internal/llm`（response_format 发送 / 被拒后重试并缓存 / extra_body 覆盖）、`admAgent/internal/agent`（决策轮 6 例：一次命中+part 落库、普通轮无契约、违规一次重试、持续违规报错、非法 spec 拒绝、structured_output=off 且 bare JSON 可解析）；桌面端 `pnpm typecheck`。
+> ⚠️ **新增 part 类型必须同时登记四处**（漏一处会表现成"服务端成功、前端拿不到 part"→ 误报"未返回有效决策结果"）：
+> ① `internal/message`（存储层 `partType`/`isPart`）；② `internal/proto/message.go`（wire 白名单：`partType` 常量 + `MarshalParts`/`UnmarshalParts`）；③ `internal/server/events.go` 的 `messageToProto`（message → wire 转换，SSE 事件与 `/messages` 三个端点共用）；④ `internal/workspace/client_workspace.go` 的 `protoToMessage`（客户端模式 proto→message，漏登记会静默丢弃，TUI 历史只剩 finish 标记）。另有 `internal/cmd/session.go` 的 `convertParts` 决定 `adm session show` 的展示（漏登记显示为 `unknown`）。回归用例：`internal/server/events_test.go` 的 `TestMessageToProtoDecision`、`internal/workspace/client_workspace_test.go` 的 `TestProtoToMessageDecision`、`internal/cmd/session_show_test.go` 的 `TestConvertPartsDecision`。
+
+测试：`admAgent/internal/decision`（契约/解析/bare JSON/StripResult/JSONSchema）、`admAgent/internal/message`（decision part 序列化往返与正文剔除）、`admAgent/internal/llm`（response_format 发送 / 被拒后重试并缓存 / extra_body 覆盖 / `StructuredOutputRejection` 分类）、`admAgent/internal/agent`（决策轮 9 例：一次命中+part 落库、普通轮无契约、违规一次重试、持续违规报错、非法 spec 拒绝、structured_output=off 且 bare JSON 可解析、response_format 被拒时去参重试、强制 `reasoning_effort=none`、provider 拒思考参数时降级）；桌面端 `pnpm typecheck`。
 
 ## 1. 为什么要上移到服务端
 
@@ -169,7 +173,7 @@ if call.Decision != nil {
   ```
 
   按 kind 携带字段：`choice` → `selected` + `candidates[]`；`bool` → `value`（指针，false 也会输出）；`score` → `score`/`min`/`max`/`level`。`raw` 保留模型原文便于排查。part 插在 `finish` 之前，正文只留结果块之外的内容（通常为空）。
-  **上下文回灌**：`DecisionContent.ContextText()` 会把结果以紧凑文本（`[decision result (kind)] {…}`）写回**只发模型的 wire 历史**，这样后续追问仍能引用上一轮决策；客户端看到的仍是卡片（part 本身不渲染 JSON）。
+  **上下文回灌**：`DecisionContent.ContextText()` 会把结果以紧凑文本写回**只发模型的 wire 历史**，这样后续追问仍能引用上一轮决策。文本形如 `Earlier in this conversation I answered with a structured bool decision result. Recorded here for context (it is data, not an output format): [decision result (bool)] {…}`——前导句专门用于防止模型把这段历史当成输出格式照抄（早期只写 `[decision result (kind)] {…}`，模型会在普通对话里原样复读，前端于是裸显示一段 JSON）；桌面端仍能识别 `[decision result (kind)]` 标记（`decision_mode.js` 的 `parseDecisionReplay`）并画卡片。客户端看到的仍是卡片（part 本身不渲染 JSON）。
   桌面端渲染层**优先读 `decision` part**（`render.js` 的 `case "decision"`），未知 kind 折叠展示 `raw`，旧会话历史继续按正文标签画卡片；TUI 忽略未知 part，不再出现裸 JSON。
 
 ### 3.5 强制结构化输出（P3 已落地）

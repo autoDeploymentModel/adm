@@ -5,7 +5,7 @@ import { renderMarkdown, formatTime, splitSystemInfo, isFullyAtBottom } from "./
 import { updateScrollBottomBtn, reportError } from "./ui.js";
 import { scheduleMessageOutline } from "./session.js";
 import { log } from "./log.js";
-import { appendDecisionCard, appendDecisionResult, decisionFromPart, getActiveDecisionMode, hasDecisionSyntax, parseDecisionResult, stripDecisionControlText, stripDecisionRequestText } from "./decision_mode.js";
+import { appendDecisionCard, appendDecisionResult, buildDecisionRawBlock, decisionFromPart, decisionReplayFromText, getActiveDecisionMode, hasDecisionSyntax, parseDecisionReplay, parseDecisionResult, stripDecisionControlText, stripDecisionRequestText } from "./decision_mode.js";
 
 // ===== 渲染调度（rAF 合并）=====
 // SSE 流式 message updated 每个 delta 都会到达；逐个同步渲染时单帧内可能渲染多次。
@@ -158,10 +158,10 @@ function unavailableToolCallIds(parts) {
 // 走 buildPartElement 的"完成后折叠"逻辑；否则折叠不会发生（早返回短路了）
 function partSig(part) {
   var d = (part && part.data) || {};
-  // 决策结果可能来自正文标签（旧协议）或专用 decision part（P2）：两者都要
-  // 参与签名，否则卡片内容变化时不会触发重渲染。
+  // 决策结果可能是：专用 decision part、正文标签（旧协议）、服务端重放标记（模型照抄）：
+  // 都要参与签名，否则卡片内容变化时不会触发重渲染。
   var decision = part && part.type === "decision" ? JSON.stringify(d)
-    : (d.text && d.text.indexOf("<adm_decision_result") >= 0 ? JSON.stringify(parseDecisionResult(d.text)) : "");
+    : (d.text && hasDecisionSyntax(d.text) ? JSON.stringify(textDecisionResult(d.text)) : "");
   return (part.type || "?") + ":" +
     ((d.text || "").length + (d.thinking || "").length + (d.input || "").length +
      String(d.content || d.data || "").length + (d.output || "").length + (d.url || "").length) +
@@ -746,9 +746,7 @@ function buildMessageNode(msg, key, callResultMap, allowDecision, decisionCardKe
       if (!decisionCardHere || !parseDecisionResult(msg.content)) return null;
       appendDecisionResult(div, msg.content);
     } else {
-      var streamingText = allowDecision ? stripDecisionControlText(msg.content) : stripDecisionRequestText(msg.content);
-      if (streamingText) div.innerHTML = renderMarkdown(streamingText);
-      if (allowDecision) appendDecisionResult(div, msg.content);
+      renderTextBody(div, msg.content, role, allowDecision);
     }
   } else if (msg.parts && Array.isArray(msg.parts) && msg.parts.length > 0) {
     renderMessageParts(div, msg.parts, role, key, div, callResultMap, allowDecision, decisionCardKey);
@@ -758,9 +756,7 @@ function buildMessageNode(msg, key, callResultMap, allowDecision, decisionCardKe
       if (!decisionCardHere || !parseDecisionResult(msg.content)) return null;
       appendDecisionResult(div, msg.content);
     } else {
-      var legacyText = allowDecision ? stripDecisionControlText(msg.content) : stripDecisionRequestText(msg.content);
-      if (legacyText) div.innerHTML = renderMarkdown(legacyText);
-      if (allowDecision) appendDecisionResult(div, msg.content);
+      renderTextBody(div, msg.content, role, allowDecision);
     }
   } else {
     return null; // 无内容则跳过
@@ -954,6 +950,37 @@ function buildSystemInfoEl(info, partKey) {
   return details;
 }
 
+// 助手正文里的决策结果（协议标签 / 服务端重放标记）
+function textDecisionResult(text) {
+  return parseDecisionResult(text) || parseDecisionReplay(text);
+}
+
+// 正文形态的决策结果：标签命中时直接画卡片；重放标记命中时用 replay 拆出标记前后的文字。
+// role 为 user 时不参与（用户消息不会携带结果）。
+function textDecisionState(text, role) {
+  if (!text || role === "user") return { decision: null, replay: null };
+  return { decision: parseDecisionResult(text), replay: decisionReplayFromText(text) };
+}
+
+// 重放标记的结果不合契约时折叠展示原始 JSON（而不是把 JSON 铺在气泡里）
+function appendDecisionReplay(container, replay) {
+  if (replay.decision) appendDecisionCard(container, replay.decision);
+  else if (replay.raw) container.appendChild(buildDecisionRawBlock(replay.raw));
+}
+
+// 把一段正文渲染进容器：决策结果画卡片（重放标记只去掉标记与 JSON，前后文字保留），
+// 其余文字照常按 markdown 渲染。流式消息（msg.content）与文本 part 共用。
+function renderTextBody(container, text, role, allowDecision) {
+  var st = textDecisionState(text, role);
+  var body = st.replay ? (st.replay.before + st.replay.after)
+    : (allowDecision ? stripDecisionControlText(text) : stripDecisionRequestText(text));
+  if (st.decision) body = "";
+  if (body) container.innerHTML = renderMarkdown(body);
+  if (st.decision) appendDecisionCard(container, st.decision);
+  else if (st.replay) appendDecisionReplay(container, st.replay);
+  return container;
+}
+
 // 构建单个 part 的根元素（供全量渲染与就地更新时局部重建共用）
 // msgEl 仅 reasoning 使用：在 msg 元素上挂 _admDetailsState[partKey] 保存用户手动 toggle 的选择，
 // 流式期间频繁重建时也能保留用户偏好（不展开 / 不折叠）
@@ -969,42 +996,29 @@ function buildPartElement(part, partIdx, role, msgKey, msgEl, thinkingOpen, resu
       decisionWrap.className = "msg-decision";
       if (appendDecisionCard(decisionWrap, decisionFromPart(partData))) return decisionWrap;
       // 未知/未来类型：折叠展示原始 JSON，避免内容静默消失
-      var unknown = document.createElement("details");
-      unknown.className = "msg-decision-raw";
-      var unknownSummary = document.createElement("summary");
-      unknownSummary.textContent = "🔧 " + _t("决策结果 (原始 JSON)");
-      unknownSummary.style.cssText = "cursor:pointer;font-size:12px;color:var(--c-text-3);";
-      var unknownBody = document.createElement("pre");
-      unknownBody.style.cssText = "white-space:pre-wrap;font-size:12px;color:var(--c-text-2);margin:6px 0 0;";
-      unknownBody.textContent = partData.raw || JSON.stringify(partData, null, 2);
-      unknown.appendChild(unknownSummary);
-      unknown.appendChild(unknownBody);
-      decisionWrap.appendChild(unknown);
+      decisionWrap.appendChild(buildDecisionRawBlock(partData.raw || JSON.stringify(partData, null, 2)));
       return decisionWrap;
 
     case "text":
       var textDiv = document.createElement("div");
       textDiv.className = "msg-text";
       var rawText = partData.text || "";
-      var decisionResult = role === "user" ? null : parseDecisionResult(rawText);
-      var displayText = allowDecision ? stripDecisionControlText(rawText) : stripDecisionRequestText(rawText);
-      // 决策模式：带决策结果的正文只呈现结果卡片，模型的解释性文字不再显示
-      if (decisionResult) displayText = "";
       if (role === "user") {
         // 服务端在用户消息末尾注入 <system_info> 附件读取引导：不直接展示原始标签文本，
         // 折叠为「📎 附件: 文件名」的可展开块（展开可见完整引导，便于核对附件处理方式）。
-        var info = splitSystemInfo(displayText);
+        var userText = allowDecision ? stripDecisionControlText(rawText) : stripDecisionRequestText(rawText);
+        var info = splitSystemInfo(userText);
         if (info) {
           var mdDiv = document.createElement("div");
           mdDiv.innerHTML = renderMarkdown(info.text || "");
           textDiv.appendChild(mdDiv);
           textDiv.appendChild(buildSystemInfoEl(info, partKey + ":sys"));
           if (allowDecision) appendDecisionResult(textDiv, rawText);
+          /** @type {any} */ (textDiv)._admMdText = rawText;
           return textDiv;
         }
       }
-      if (displayText) textDiv.innerHTML = renderMarkdown(displayText);
-      if (allowDecision) appendDecisionResult(textDiv, rawText);
+      renderTextBody(textDiv, rawText, role, allowDecision);
       /** @type {any} */ (textDiv)._admMdText = rawText;
       return textDiv;
 

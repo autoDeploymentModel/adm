@@ -1336,27 +1336,15 @@ async fn send_wx_text(rt: &Arc<IlinkRuntime>, wx_user: &str, text: &str) {
 
 // ===== section 7: 消息转换工具 =====
 
-/// 流程调试日志：与 agent.rs 的 debug_logging 开关共用，release 也可用。
-fn flow_log(app: &tauri::AppHandle, stage: &str, detail: &str) {
+/// 微信 Bot 流程调试日志：并入统一调试日志 adm_api_debug.log（不再单独写
+// ilink_flow_debug.log），行首 `ilink:` 前缀便于按类型过滤。开关复用 debug_logging。
+fn flow_log(_app: &tauri::AppHandle, stage: &str, detail: &str) {
     if !agent::is_debug_logging_enabled() {
         return;
     }
     eprintln!("[ilink][flow] {} | {}", stage, detail);
-    if let Ok(dir) = config::get_data_dir(Some(app)) {
-        use std::io::Write;
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        let flat: String = detail.replace('\n', " ↵ ").chars().take(1500).collect();
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(dir.join("ilink_flow_debug.log"))
-        {
-            let _ = writeln!(f, "{} [{}] {}", ts, stage, flat);
-        }
-    }
+    let flat: String = detail.replace('\n', " ↵ ").chars().take(1500).collect();
+    agent::api_debug_log(|| format!("ilink: [{}] {}", stage, flat));
 }
 
 /// Markdown 降级为微信可读纯文本：去代码围栏、标题转【】、去加粗星号
