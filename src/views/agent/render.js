@@ -5,7 +5,7 @@ import { renderMarkdown, formatTime, splitSystemInfo, isFullyAtBottom } from "./
 import { updateScrollBottomBtn, reportError } from "./ui.js";
 import { scheduleMessageOutline } from "./session.js";
 import { log } from "./log.js";
-import { appendDecisionCard, appendDecisionResult, buildDecisionRawBlock, decisionFromPart, decisionReplayFromText, getActiveDecisionMode, hasDecisionSyntax, parseDecisionReplay, parseDecisionResult, stripDecisionControlText, stripDecisionRequestText } from "./decision_mode.js";
+import { appendDecisionCard, appendDecisionResult, buildDecisionRawBlock, decisionFromPart, decisionReplayFromText, getActiveDecisionMode, hasDecisionSyntax, parseDecisionResult, stripDecisionControlText, stripDecisionRequestText } from "./decision_mode.js";
 
 // ===== 渲染调度（rAF 合并）=====
 // SSE 流式 message updated 每个 delta 都会到达；逐个同步渲染时单帧内可能渲染多次。
@@ -158,8 +158,8 @@ function unavailableToolCallIds(parts) {
 // 走 buildPartElement 的"完成后折叠"逻辑；否则折叠不会发生（早返回短路了）
 function partSig(part) {
   var d = (part && part.data) || {};
-  // 决策结果可能是：专用 decision part、正文标签（旧协议）、服务端重放标记（模型照抄）：
-  // 都要参与签名，否则卡片内容变化时不会触发重渲染。
+  // 决策结果可能是：专用 decision part、正文标签（旧协议）；都要参与签名，
+  // 否则卡片内容变化时不会触发重渲染。
   var decision = part && part.type === "decision" ? JSON.stringify(d)
     : (d.text && hasDecisionSyntax(d.text) ? JSON.stringify(textDecisionResult(d.text)) : "");
   return (part.type || "?") + ":" +
@@ -974,34 +974,36 @@ function buildSystemInfoEl(info, partKey) {
   return details;
 }
 
-// 助手正文里的决策结果（协议标签 / 服务端重放标记）
+// 助手正文里的决策结果（仅协议标签；旧版重放标记只做清理，不再当决策结果）
 function textDecisionResult(text) {
-  return parseDecisionResult(text) || parseDecisionReplay(text);
+  return parseDecisionResult(text);
 }
 
-// 正文形态的决策结果：标签命中时直接画卡片；重放标记命中时用 replay 拆出标记前后的文字。
-// role 为 user 时不参与（用户消息不会携带结果）。
+// 正文形态的决策结果：标签命中时直接画卡片。role 为 user 时不参与（用户消息不会携带结果）。
 function textDecisionState(text, role) {
   if (!text || role === "user") return { decision: null, replay: null };
   return { decision: parseDecisionResult(text), replay: decisionReplayFromText(text) };
 }
 
-// 重放标记的结果不合契约时折叠展示原始 JSON（而不是把 JSON 铺在气泡里）
-function appendDecisionReplay(container, replay) {
-  if (replay.decision) appendDecisionCard(container, replay.decision);
-  else if (replay.raw) container.appendChild(buildDecisionRawBlock(replay.raw));
+// 旧版服务端重放标记（模型照抄进正文的 [decision result (kind)] {…}）：只清理，
+// 保留前后正文。它不代表本轮是决策轮，因此不画卡片。模型可能复读多次，故循环剥离。
+function stripLegacyDecisionReplay(replay) {
+  var text = replay.before + replay.after;
+  for (var next = decisionReplayFromText(text); next; next = decisionReplayFromText(text)) {
+    text = next.before + next.after;
+  }
+  return text.replace(/\n{3,}/g, "\n\n").trim();
 }
 
-// 把一段正文渲染进容器：决策结果画卡片（重放标记只去掉标记与 JSON，前后文字保留），
-// 其余文字照常按 markdown 渲染。流式消息（msg.content）与文本 part 共用。
+// 把一段正文渲染进容器：决策结果画卡片；旧版重放标记（模型照抄的痕迹）只去掉标记与 JSON、
+// 保留前后文字。其余文字照常按 markdown 渲染。流式消息（msg.content）与文本 part 共用。
 function renderTextBody(container, text, role, allowDecision) {
   var st = textDecisionState(text, role);
-  var body = st.replay ? (st.replay.before + st.replay.after)
+  var body = st.replay ? stripLegacyDecisionReplay(st.replay)
     : (allowDecision ? stripDecisionControlText(text) : stripDecisionRequestText(text));
   if (st.decision) body = "";
   if (body) container.innerHTML = renderMarkdown(body);
   if (st.decision) appendDecisionCard(container, st.decision);
-  else if (st.replay) appendDecisionReplay(container, st.replay);
   return container;
 }
 

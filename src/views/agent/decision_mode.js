@@ -5,9 +5,11 @@ var STORAGE_KEY = "adm_agent_decision_modes_v1";
 var memoryModes = null;
 var REQUEST_RE = /<adm_decision_request>\s*([\s\S]*?)\s*<\/adm_decision_request>/i;
 var RESULT_RE = /<adm_decision_result>\s*([\s\S]*?)\s*<\/adm_decision_result>/i;
-// 服务端把决策结果重放进模型上下文时的标记（admAgent internal/message/content.go 的
-// ContextText）。它本是给模型看的历史数据，但模型会把它当成输出格式照抄进正文，
-// 于是普通对话里会出现一段裸 JSON；因此正文里的这种标记也按决策结果渲染卡片。
+// 早期服务端把决策结果重放进模型上下文时用的标记（admAgent
+// internal/message/content.go 的 ContextText 旧格式）。它本只给模型看，但模型
+// 会把它当成输出格式照抄进正文，于是普通对话里出现裸 JSON / 决策标签。
+// ContextText 现已改成不含 JSON 的自然语言脚注，不再产出该标记；这里保留解析
+// 只为清理**已落库**的旧消息——遇到就静默剥掉，绝不再画成决策卡片。
 var CONTEXT_RESULT_RE = /\[decision result \((choice|bool|score|decision)\)\]/i;
 var CONTRACT_RE = /(?:<adm_decision_contract>\s*)?\[ADM Decision Output Contract\][\s\S]*?(?:<\/adm_decision_contract>|(?=\n<system_info>)|$)/i;
 // label 与模板下拉项文案保持一致（同一功能两处显示同一名称，便于 _t 复用）
@@ -232,9 +234,9 @@ function extractJsonObject(text, start) {
   return "";
 }
 
-// 正文里的服务端重放标记：拆出标记前后的文字、JSON 原文与归一化结果。
-// JSON 不合契约（缺字段/类型不对）时 decision 为 null，但仍给出 raw，供调用方折叠展示，
-// 避免模型照抄的那段 JSON 直接铺在气泡里。
+// 正文里的旧版服务端重放标记：拆出标记前后的文字与 JSON 原文。
+// 只用于把模型照抄的痕迹从气泡里清掉——decision 字段已废弃（服务端不再产出该
+// 标记，且正文里的回灌痕迹不代表本轮是决策轮，画卡片会让普通对话冒出决策标签）。
 export function decisionReplayFromText(text) {
   if (!text) return null;
   var match = text.match(CONTEXT_RESULT_RE);
@@ -243,36 +245,14 @@ export function decisionReplayFromText(text) {
   var json = start < 0 ? "" : extractJsonObject(text, start);
   var end = json ? start + json.length : match.index + match[0].length;
   return {
-    decision: parseReplayJson(match[1].toLowerCase(), json),
     raw: json,
     before: text.slice(0, match.index),
     after: text.slice(end),
   };
 }
 
-// 重放标记里的 JSON：模型照抄时可能没有 type，用标记里的 kind 兜底
-function parseReplayJson(kind, json) {
-  if (!json || kind === "decision") return null;
-  var parsed;
-  try {
-    parsed = JSON.parse(json);
-  } catch (_) {
-    return null;
-  }
-  if (!parsed || typeof parsed !== "object") return null;
-  if (!parsed.type) parsed.type = kind;
-  return normalizeDecision(parsed);
-}
-
-// 重放标记对应的归一化结果（无法解析出有效结果时返回 null）
-export function parseDecisionReplay(text) {
-  var replay = decisionReplayFromText(text);
-  return replay ? replay.decision : null;
-}
-
 export function hasDecisionSyntax(text) {
-  return Boolean(text && (/<adm_decision_request>/i.test(text) || /<adm_decision_result>/i.test(text) ||
-    CONTEXT_RESULT_RE.test(text)));
+  return Boolean(text && (/<adm_decision_request>/i.test(text) || /<adm_decision_result>/i.test(text)));
 }
 
 function stripDecisionRequestAndContract(text) {
@@ -372,7 +352,7 @@ function buildDecisionCard(decision) {
 }
 
 export function appendDecisionResult(container, text) {
-  var decision = parseDecisionResult(text) || parseDecisionReplay(text);
+  var decision = parseDecisionResult(text);
   if (decision) container.appendChild(buildDecisionCard(decision));
 }
 

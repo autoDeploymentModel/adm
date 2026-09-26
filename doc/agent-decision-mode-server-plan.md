@@ -173,7 +173,7 @@ if call.Decision != nil {
   ```
 
   按 kind 携带字段：`choice` → `selected` + `candidates[]`；`bool` → `value`（指针，false 也会输出）；`score` → `score`/`min`/`max`/`level`。`raw` 保留模型原文便于排查。part 插在 `finish` 之前，正文只留结果块之外的内容（通常为空）。
-  **上下文回灌**：`DecisionContent.ContextText()` 会把结果以紧凑文本写回**只发模型的 wire 历史**，这样后续追问仍能引用上一轮决策。文本形如 `Earlier in this conversation I answered with a structured bool decision result. Recorded here for context (it is data, not an output format): [decision result (bool)] {…}`——前导句专门用于防止模型把这段历史当成输出格式照抄（早期只写 `[decision result (kind)] {…}`，模型会在普通对话里原样复读，前端于是裸显示一段 JSON）；桌面端仍能识别 `[decision result (kind)]` 标记（`decision_mode.js` 的 `parseDecisionReplay`）并画卡片。客户端看到的仍是卡片（part 本身不渲染 JSON）。
+  **上下文回灌**：`DecisionContent.ContextText()` 会把结果写回**只发模型的 wire 历史**，这样后续追问仍能引用上一轮决策——这一步不可省，P2 起正文已被剥空、`decision` part 对模型不可见。但形态必须是**纯散文**，例如 `Note on my earlier reply: I answered a yes/no question with yes. My reasoning at the time: … If the user follows up on that, keep answering consistently with it.`：模型会模仿它在历史里读到的形状，所以带 JSON、带 `[decision result (kind)]` 标记、甚至加"这是数据不是输出格式"的免责句，都会被弱模型原样复读进之后的普通对话正文（前端表现为决策模式切回普通后仍冒出决策标签 / 裸 JSON）。`reason` 截断到 200 字符防长历史膨胀，**绝不回退打印 `raw`**。桌面端只画 `decision` part 与 `<adm_decision_result>` 协议标签；旧版标记仅由 `decision_mode.js` 的 `decisionReplayFromText` 做一次性清理（剥掉标记与 JSON、保留前后正文），不再渲染成卡片。客户端看到的仍是卡片（part 本身不渲染 JSON）。
   桌面端渲染层**优先读 `decision` part**（`render.js` 的 `case "decision"`），未知 kind 折叠展示 `raw`，旧会话历史继续按正文标签画卡片；TUI 忽略未知 part，不再出现裸 JSON。
 
 ### 3.5 强制结构化输出（P3 已落地）
