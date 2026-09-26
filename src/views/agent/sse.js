@@ -3,7 +3,7 @@ import { t as _t } from "../../i18n.js";
 import { S, invoke, listen, store } from "./store.js";
 import { api } from "./api.js";
 import { getErrorMessage, classifyError, friendlyError, ERROR_STEP_CAP, ERROR_CANCEL } from "./error.js";
-import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showInfo, reportError, updateContextUsage } from "./ui.js";
+import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showInfo, showNotice, reportError, updateContextUsage } from "./ui.js";
 import { renderMessages, renderTodos, scheduleRenderMessages } from "./render.js";
 import { loadConversations, refreshMessages, renderConversationList, selectConversation, syncWxFollowSession } from "./session.js";
 import { handlePermissionRequest, resetPermissionState } from "./permission.js";
@@ -471,10 +471,11 @@ function onRunCompleteSSEEvent(ev, ctx) {
     appendErrorBubble(actualData.error, { prefix: _t("本轮对话中断: "), hint: ctxHint });
     updateStatusBar("error", null, S.contextUsage.used);
   } else if (action.kind === "empty_output") {
-    // 服务端标记：本轮正常结束但没有任何实际输出（正文/工具调用全无，
-    // 典型为模型把输出全部消耗在 reasoning 上）→ 明确提示而非静默消失
+    // 服务端标记：本轮正常结束但没有任何实际输出（正文/工具调用全无）→ 明确提示而非静默消失。
+    // 两种成因给出不同指引，见 emptyOutputHint。keep=true：提示含操作指引，3 秒自动消失读不完
+    // （切换会话/工作区时由 clearErrorNotices 统一清理）
     console.warn("[agent] run_complete empty_output:", JSON.stringify(actualData));
-    showWarning(_t("模型未产生有效输出（输出全部消耗在思考中），本轮已结束"));
+    showNotice(emptyOutputHint(), "warn", true);
     updateStatusBar("error", null, S.contextUsage.used);
   } else if (action.status === "ready") {
     // 排队接管时仍有运行在队列中，状态栏保持运行中，不切回就绪；
@@ -500,6 +501,26 @@ function onRunCompleteSSEEvent(ev, ctx) {
     if (action.kind === "ok") verifyDecisionRun(completedDecisionSession, completedDecisionMode);
     else refreshMessages();
   }
+}
+
+// 本地模型上下文窗口低于该值时，empty_output 大概率是"请求装不下"而非"思考吃光输出"：
+// 服务端对 ≤64K 的小窗口用 62% 阈值（admAgent agent.go contextLimit），超出即不发请求、
+// 交给摘要压缩；历史很短时压缩无可压缩，重排 4 次后直接结束本轮且不产生 assistant 消息
+// → run_complete.empty_output。此时给出"调大上下文"的可操作指引，避免原有文案误导。
+var EMPTY_OUTPUT_MIN_CTX = 60000;
+
+// empty_output 的可操作提示（两种成因给不同指引，本地小上下文优先判定）
+function emptyOutputHint() {
+  var max = S.contextUsage.max || 0;
+  var providerKey = S.settings.agent_default_provider || "local";
+  var isLocal = providerKey === "local" || providerKey.indexOf("local:") === 0;
+  // 服务端实际模型为 localModel 也按本地处理（重启后 admAgent.json 恢复 local 的兜底）
+  if (S.agentInfo && S.agentInfo.model && S.agentInfo.model.id === "localModel") isLocal = true;
+  if (isLocal && max > 0 && max < EMPTY_OUTPUT_MIN_CTX) {
+    return _t("模型未产生有效输出，本轮已结束：当前本地模型上下文只有 ") + max +
+      _t("，超过约 62% 就会被拦下（请求根本没发出去）。请到「设置 → 模型启动参数」把上下文大小（-c）调到 60K 以上，重启模型后重试");
+  }
+  return _t("模型未产生有效输出，本轮已结束：输出可能全部消耗在思考中。请到「设置 → 模型启动参数」把思考模式（--reasoning）设为 off，或新建会话后重试");
 }
 
 // run_complete 的收尾决策表（纯函数，便于单独验证各组合）
