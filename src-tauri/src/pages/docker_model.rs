@@ -583,9 +583,10 @@ fn install_desktop(path: &Path) -> Result<(), AppError> {
             return Ok(());
         }
         bail!(
-            "Docker Desktop 安装失败（exit={}）：{}",
+            "Docker Desktop 安装失败（exit={}）：{}。请手动安装：{}",
             out2.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&out2.stderr).trim()
+            String::from_utf8_lossy(&out2.stderr).trim(),
+            DOCKER_DESKTOP_HOME
         );
     }
     #[cfg(target_os = "macos")]
@@ -595,12 +596,16 @@ fn install_desktop(path: &Path) -> Result<(), AppError> {
             .arg(path)
             .output()?;
         if !out.status.success() {
-            bail!("挂载 Docker.dmg 失败: {}", String::from_utf8_lossy(&out.stderr).trim());
+            bail!(
+                "挂载 Docker.dmg 失败: {}。请手动安装：{}",
+                String::from_utf8_lossy(&out.stderr).trim(),
+                DOCKER_DESKTOP_HOME
+            );
         }
         let src = PathBuf::from("/Volumes/Docker/Docker.app");
         if !src.exists() {
             let _ = create_hidden_command("hdiutil").args(["detach", "/Volumes/Docker"]).output();
-            bail!("Docker.dmg 中未找到 Docker.app");
+            bail!("Docker.dmg 中未找到 Docker.app。请手动安装：{}", DOCKER_DESKTOP_HOME);
         }
         let cp = create_hidden_command("cp")
             .args(["-Rf"])
@@ -610,8 +615,9 @@ fn install_desktop(path: &Path) -> Result<(), AppError> {
         let _ = create_hidden_command("hdiutil").args(["detach", "/Volumes/Docker"]).output();
         if !cp.status.success() {
             bail!(
-                "拷贝 Docker.app 到 /Applications 失败（需要管理员权限）: {}",
-                String::from_utf8_lossy(&cp.stderr).trim()
+                "拷贝 Docker.app 到 /Applications 失败（需要管理员权限）: {}。请手动安装：{}",
+                String::from_utf8_lossy(&cp.stderr).trim(),
+                DOCKER_DESKTOP_HOME
             );
         }
         Ok(())

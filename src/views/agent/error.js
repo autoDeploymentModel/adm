@@ -21,6 +21,7 @@ export var ERROR_CONTEXT_OVERFLOW = "context_overflow"; // 上下文超出模型
 export var ERROR_CANCEL = "cancel";          // 已取消
 export var ERROR_STEP_CAP = "step_cap";      // 步数触顶（模型仍在干活但本轮预算耗尽，非故障）
 export var ERROR_THINKING_UNSUPPORTED = "thinking_unsupported"; // 模型不支持关闭思考（需用户切回思考档）
+export var ERROR_DOCKER_INSTALL = "docker_install"; // Docker Desktop 自动安装失败（引导用户手动安装）
 export var ERROR_UNKNOWN = "unknown";        // 其它
 
 /**
@@ -118,6 +119,12 @@ var STEP_CAP_RE = /max_steps_reached/i;
 // "thinking mode unsupported" 分支，有单测锁定）。必须早于网络类匹配：被包裹的
 // provider 原文含 "Upstream request failed"，否则会被误判成连接失败。
 var THINKING_UNSUPPORTED_RE = /thinking_mode_unsupported/i;
+// Docker 安装阶段失败哨兵：安装器退出、dmg 挂载/拷贝失败、平台不支持自动安装等，
+// 统一引导用户手动安装（友好文案含 DOCKER_DESKTOP_HOME 链接）。
+// 注意用「手动安装 docker」「自动安装 docker」带空格的写法，避免命中 start_docker_model 的
+// 「未检测到 Docker，请先点击「下载」自动安装（或手动安装：URL）」——URL 里的
+// docker-desktop 会让 "自动安装.*docker" 误匹配。
+var DOCKER_INSTALL_RE = /docker desktop 安装失败|docker\.dmg|docker\.app|手动安装 docker|自动安装 docker/i;
 
 /**
  * 错误分类：优先按 ProviderError.type 精确分类（最稳），未命中再走关键词正则兜底。
@@ -133,6 +140,7 @@ export function classifyError(err) {
   var text = getErrorMessage(err);
   if (STEP_CAP_RE.test(text)) return ERROR_STEP_CAP;
   if (THINKING_UNSUPPORTED_RE.test(text)) return ERROR_THINKING_UNSUPPORTED;
+  if (DOCKER_INSTALL_RE.test(text)) return ERROR_DOCKER_INSTALL;
   if (USAGE_LIMIT_RE.test(text)) return ERROR_USAGE_LIMIT;
   if (RATE_LIMIT_RE.test(text)) return ERROR_RATE_LIMIT;
   if (QUOTA_RE.test(text)) return ERROR_QUOTA;
@@ -158,6 +166,7 @@ var FRIENDLY_ZH = {
   cancel: "操作已取消",
   step_cap: "本轮已达步数上限，任务暂停",
   thinking_unsupported: "本模型不支持关闭思考，请切回思考模式",
+  docker_install: "Docker 自动安装失败，请手动安装后重试：https://www.docker.com/products/docker-desktop/",
   unknown: "操作失败，任务中断",
 };
 var FRIENDLY_EN = {
@@ -171,6 +180,7 @@ var FRIENDLY_EN = {
   cancel: "Operation canceled.",
   step_cap: "Step limit reached. Task paused.",
   thinking_unsupported: "This model cannot disable reasoning. Please switch reasoning back on.",
+  docker_install: "Automatic Docker installation failed. Please install Docker Desktop manually and retry: https://www.docker.com/products/docker-desktop/",
   unknown: "Operation failed. Task interrupted.",
 };
 
