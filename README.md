@@ -21,7 +21,7 @@
 - **问题反馈**：[GitHub Issues](https://github.com/autoDeploymentModel/adm/issues)
 - **讨论交流**：欢迎扫码添加微信交流
 
-<img src="src-tauri/wx.png" alt="微信" width="240" />
+<img src="https://raw.githubusercontent.com/autoDeploymentModel/.github/main/profile/wx.png" alt="微信" width="240" />
 
 ---
 
