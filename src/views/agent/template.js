@@ -1061,6 +1061,11 @@ export const template = `
   .model-dropdown.show { display: block; }
   .model-dropdown::-webkit-scrollbar { width: 6px; }
   .model-dropdown::-webkit-scrollbar-thumb { background: var(--c-border); border-radius: 3px; }
+  /* 模型下拉宽度自适应最长模型名（技能/决策下拉保持固定宽度，内容更复杂） */
+  #agent-model-dropdown {
+    width: max-content;
+    max-width: min(60vw, 460px);
+  }
 
   .model-item {
     padding: 8px 12px;
@@ -1077,8 +1082,21 @@ export const template = `
     border-top: 1px solid var(--c-border);
     color: var(--c-accent);
   }
-  .model-item-name { flex: 1; }
-  .model-item-ctx { font-size: 11px; color: var(--c-text-4); }
+  /* 名称不换行：由下拉宽度自适应；超过 max-width 才省略号截断 */
+  .model-item-name {
+    flex: 0 1 auto;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .model-item-ctx {
+    font-size: 11px;
+    color: var(--c-text-4);
+    white-space: nowrap;
+    margin-left: auto;
+    padding-left: 12px;
+  }
 
   /* 技能选择器（与模型选择器同款按钮/下拉，但顶部带刷新+空态/标题） */
   .toolbar-skill-selector { position: relative; }
