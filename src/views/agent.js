@@ -920,6 +920,9 @@ function startStallWatchdog() {
     var now = Date.now();
     var drift = now - last - 1000;
     last = now;
+    // 机器休眠 / 系统时钟跳变后定时器会补发一次，漂移可达数小时（实测 7.7 小时）。
+    // 那不是主线程阻塞，记成停顿纯属误报，只会淹没真正有价值的秒级记录。
+    if (drift > 60000) return;
     if (drift > 2000) {
       log.warn("PERF", "主线程停顿 " + Math.round(drift) + "ms（无此记录但界面无响应 = WebView2 输入卡死）");
     }
