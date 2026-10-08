@@ -166,7 +166,9 @@ fn detect_hardware_for_llamacpp() -> HardwareDetectResult {
         "linux".to_string()
     };
 
+    #[allow(unused_mut)]
     let mut gpu_vendor = None;
+    #[allow(unused_mut)]
     let mut gpu_name = None;
     #[allow(unused_mut)]
     let mut nvidia_series = None;

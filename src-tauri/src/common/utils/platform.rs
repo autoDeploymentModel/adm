@@ -128,7 +128,8 @@ pub fn assign_child_to_kill_job(_pid: u32) {}
 
 pub fn get_gpu_info() -> (u64, u64, bool) {
     let mut total_vram: u64 = 0;
-    let used_vram: u64 = 0;
+    #[allow(unused_mut)]
+    let mut used_vram: u64 = 0;
     let mut has_gpu = false;
 
     #[cfg(target_os = "windows")]
