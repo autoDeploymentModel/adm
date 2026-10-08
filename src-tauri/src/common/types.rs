@@ -168,6 +168,8 @@ pub struct UpdateInfo {
     pub windows: Option<PlatformUpdate>,
     #[serde(rename = "mac")]
     pub mac_os: Option<PlatformUpdate>,
+    /// update.json 的 `linux` 字段（AppImage / deb 的下载地址，缺失则该平台不提示下载）
+    pub linux: Option<PlatformUpdate>,
 }
 
 #[derive(Serialize, Clone)]

@@ -527,6 +527,10 @@
 
         if (result.has_update) {
           pendingLlamacppResult = result;
+          // 平台未提供安装包地址（update.json 无对应平台字段）时不渲染会点空的下载按钮
+          const downloadBtn = result.download_url
+            ? `<button class="update-btn-primary" onclick="openUrl('${escHtml(result.download_url)}')">${t("下载更新")}</button>`
+            : "";
           const html = `
             <div class="update-icon">📥</div>
             <div class="update-title">${t("发现新版本")}</div>
@@ -536,7 +540,7 @@
               <div class="info-item"><div class="info-label">${t("最新版本")}</div><div class="info-value">v${escHtml(result.remote_version)}</div></div>
             </div>
             <div class="update-buttons">
-              <button class="update-btn-primary" onclick="openUrl('${escHtml(result.download_url)}')">${t("下载更新")}</button>
+              ${downloadBtn}
               <button class="update-btn-secondary" onclick="onSystemUpdateDismiss()">${t("稍后再说")}</button>
             </div>`;
           showUpdateDialog(html);
@@ -650,10 +654,13 @@
       const downloadUrl = result.llamacpp_download_url;
 
       if (!downloadUrl) {
+        // 拿不到下载地址时必须解除「必须安装」状态，否则弹窗关不掉、应用卡在首屏。
+        // 走到这里只剩两种情况：未检测到支持的显卡，或该平台尚未适配 llamacpp 构建
+        llamacppIsMandatory = false;
         showUpdateDialog(`
           <div class="update-icon">⚠️</div>
           <div class="update-title">${t("无法获取下载地址")}</div>
-          <div class="update-desc">${t("未检测到支持的 NVIDIA/AMD/Intel 显卡，无法下载对应版本的 llamacpp。")}</div>
+          <div class="update-desc">${t("当前系统未获取到可用的 llama.cpp 下载地址：可能未检测到支持的 NVIDIA/AMD/Intel 显卡，或本平台暂未适配（可继续使用远程模型）。")}</div>
           <div class="update-buttons" style="margin-top:16px;"><button class="update-btn-secondary" onclick="hideUpdateDialog()">${t("关闭")}</button></div>`);
         return;
       }
@@ -665,6 +672,18 @@
         buttonsHtml = `<div class="update-buttons" style="margin-top:16px;"><button class="update-btn-primary" id="llamacpp-start-btn" onclick="doLlamacppDownload()">${t("开始下载")}</button><button class="update-btn-secondary" onclick="hideUpdateDialog()">${t("稍后再说")}</button></div>`;
       }
 
+      // 运行库提示（Linux：缺 libvulkan1 / 显卡 Vulkan 驱动时只能 CPU 推理）。
+      // 检测失败或该平台无需提示时返回 null，不阻断下载
+      let runtimeWarning = "";
+      try {
+        runtimeWarning = (await invoke("check_llamacpp_runtime")) || "";
+      } catch (e) {
+        console.warn("[index] llama.cpp 运行库检测失败:", e);
+      }
+      const warningHtml = runtimeWarning
+        ? `<div class="update-desc" style="color:#d98a00;margin-top:10px;">⚠️ ${escHtml(runtimeWarning)}</div>`
+        : "";
+
       const html = `
         <div class="update-icon">🔧</div>
         <div class="update-title">${isNotInstalled ? t("需要安装 LLamaCPP") : t("LLamaCPP 需要更新")}</div>
@@ -673,6 +692,7 @@
           <div class="info-item"><div class="info-label">${t("当前版本")}</div><div class="info-value">${localVer}</div></div>
           <div class="info-item"><div class="info-label">${t("最新版本")}</div><div class="info-value">${remoteVer}</div></div>
         </div>
+        ${warningHtml}
         <div class="llamacpp-progress-bar"><div class="llamacpp-progress-fill" id="llamacpp-progress-fill" style="width: 0%"></div></div>
         <div class="llamacpp-status-text" id="llamacpp-status-text">${t("准备下载...")}</div>
         ${buttonsHtml}`;

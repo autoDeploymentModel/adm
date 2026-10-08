@@ -61,6 +61,92 @@ pub fn check_vc_redist_installed(app_local_dir: Option<&std::path::Path>) -> boo
         .all(|dll| dirs.iter().any(|dir| dir.join(dll).is_file()))
 }
 
+/// Linux：加载器能否找到 libvulkan.so.1。优先问 ldconfig（与进程 dlopen 的实际搜索一致），
+/// ldconfig 不可用的精简环境再退回常见库目录探测。GUI 启动时 PATH 常缺 /sbin，故先试绝对路径。
+#[cfg(target_os = "linux")]
+fn vulkan_loader_present() -> bool {
+    for ldconfig in ["/sbin/ldconfig", "/usr/sbin/ldconfig", "ldconfig"] {
+        if let Ok(out) = std::process::Command::new(ldconfig).arg("-p").output() {
+            if out.status.success() {
+                return String::from_utf8_lossy(&out.stdout).contains("libvulkan.so.1");
+            }
+        }
+    }
+    const CANDIDATES: [&str; 5] = [
+        "/usr/lib/x86_64-linux-gnu/libvulkan.so.1",
+        "/usr/lib/aarch64-linux-gnu/libvulkan.so.1",
+        "/usr/lib64/libvulkan.so.1",
+        "/usr/lib/libvulkan.so.1",
+        "/usr/local/lib/libvulkan.so.1",
+    ];
+    CANDIDATES.iter().any(|p| std::path::Path::new(p).exists())
+}
+
+/// 是否装了显卡 Vulkan 驱动（ICD json）。只看 loader 不够：只有运行库没有驱动时
+/// llama.cpp 依然枚举不到设备，必须一并检查。
+#[cfg(target_os = "linux")]
+fn vulkan_icd_present() -> bool {
+    // VK_ICD_FILENAMES / VK_DRIVER_FILES 指向的驱动目录不受标准目录限制，显式设置时视为已配置
+    if [
+        std::env::var("VK_ICD_FILENAMES"),
+        std::env::var("VK_DRIVER_FILES"),
+    ]
+    .iter()
+    .any(|v| v.as_deref().map(|s| !s.trim().is_empty()).unwrap_or(false))
+    {
+        return true;
+    }
+    let mut dirs = vec![
+        std::path::PathBuf::from("/usr/share/vulkan/icd.d"),
+        std::path::PathBuf::from("/usr/local/share/vulkan/icd.d"),
+        std::path::PathBuf::from("/etc/vulkan/icd.d"),
+    ];
+    if let Ok(home) = std::env::var("HOME") {
+        dirs.push(std::path::PathBuf::from(home).join(".local/share/vulkan/icd.d"));
+    }
+    dirs.iter().any(|dir| {
+        std::fs::read_dir(dir)
+            .map(|entries| {
+                entries.flatten().any(|e| {
+                    e.path().extension().and_then(|ext| ext.to_str()) == Some("json")
+                })
+            })
+            .unwrap_or(false)
+    })
+}
+
+/// llama.cpp 运行库预检（linux 侧对应 Windows 的 check_vc_redist_installed）。
+/// 返回 Some(原因) = 需要提示用户，None = 无需提示。
+///
+/// 与 Windows 的 VC++ 预检不同，这里**只提示不阻断**：Vulkan 缺失只影响 GPU 加速，
+/// llama.cpp 仍可用 CPU 推理；但 Linux 只分发 Vulkan 构建（见 get_llamacpp_download_url），
+/// 所以用户必须知道「下的这个包在本机跑不了 GPU」，否则只能从 llama-server 原始 stderr 里猜。
+pub fn llamacpp_runtime_warning() -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        if !vulkan_loader_present() {
+            return Some(
+                "未检测到 Vulkan 运行库（libvulkan.so.1）：Linux 版 llama.cpp 只有 Vulkan 构建，\
+                 缺它只能用 CPU 推理。请安装 libvulkan1（Debian/Ubuntu）或 vulkan-loader（Fedora/Arch）"
+                    .to_string(),
+            );
+        }
+        if !vulkan_icd_present() {
+            return Some(
+                "已装 Vulkan 运行库，但未找到显卡 Vulkan 驱动（/usr/share/vulkan/icd.d 下无 ICD）：\
+                 只能用 CPU 推理。请安装显卡厂商的 Vulkan 驱动（NVIDIA 为 nvidia 驱动自带的 libGLX_nvidia，\
+                 AMD/Intel 为 mesa-vulkan-drivers）"
+                    .to_string(),
+            );
+        }
+        None
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
 /// llama-server.exe 实际所在目录（应用级 DLL 的搜索位置）；未安装时退回 llamacpp 根目录。
 /// 压缩包可能把二进制解压进子目录，只有取到 exe 所在目录才能与加载器搜索位置对齐。
 #[cfg(target_os = "windows")]
@@ -172,6 +258,11 @@ fn get_llamacpp_download_url(hardware: &HardwareDetectResult) -> Result<String, 
     match hardware.os.as_str() {
         "macos" => {
             Ok("https://adm.tuduoduo.top/llamacpp/macos.tar.gz".to_string())
+        }
+        "linux" => {
+            // Linux 只提供 Vulkan 构建：一张包同时覆盖 NVIDIA / AMD / Intel
+            // （CUDA 构建需另配 CUDA 运行库，暂不单独分发）
+            Ok("https://adm.tuduoduo.top/llamacpp/ubuntu-vulkan.tar.gz".to_string())
         }
         "windows" => {
             match hardware.gpu_vendor.as_deref() {
@@ -322,7 +413,14 @@ pub async fn check_update(app: tauri::AppHandle) -> Result<UpdateCheckResult, Ap
         changelog_url = update_info.mac_os.as_ref().map(|p| p.content.clone());
     }
 
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(target_os = "linux")]
+    {
+        // update.json 未提供 linux 字段时退化为「只提示版本、不显示下载按钮」（前端已处理空地址）
+        download_url = update_info.linux.as_ref().map(|p| p.app_url.clone());
+        changelog_url = update_info.linux.as_ref().map(|p| p.content.clone());
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
         download_url = None;
         changelog_url = None;
@@ -403,6 +501,13 @@ pub fn check_vc_redist(app: tauri::AppHandle) -> bool {
         let _ = app;
         true
     }
+}
+
+/// 独立的 llama.cpp 运行库提示（linux：Vulkan 运行库/驱动；其它平台恒为 None）。
+/// 同样不走网络，装 llamacpp 的弹窗在开始下载前调用它，把「本机跑不了 GPU」提前讲清楚。
+#[tauri::command]
+pub fn check_llamacpp_runtime() -> Option<String> {
+    llamacpp_runtime_warning()
 }
 
 #[tauri::command]

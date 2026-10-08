@@ -36,6 +36,10 @@ function platformSpec(triple) {
   if (triple === "aarch64-apple-darwin") {
     return { pattern: /^admAgent_(.+)_Darwin_arm64\.tar\.gz$/, binName: "admAgent", ext: "" };
   }
+  // Linux 目前只发布 x86_64 包（adm-binaries 无 aarch64）
+  if (triple === "x86_64-unknown-linux-gnu") {
+    return { pattern: /^admAgent_(.+)_Linux_x86_64\.tar\.gz$/, binName: "admAgent", ext: "" };
+  }
   return null;
 }
 

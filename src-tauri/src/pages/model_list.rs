@@ -645,6 +645,29 @@ pub async fn start_model(
             ).ok();
         }
     }
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(llamacpp_dir) = config::get_llamacpp_dir(Some(&app)) {
+            // Linux 的动态库搜索路径不含可执行文件所在目录（与 macOS 同理），
+            // 用户手动放进 llamacpp 目录的 llama.cpp 构建需要显式 LD_LIBRARY_PATH
+            // 才能找到同目录的 libllama.so / libggml*.so
+            cmd.env("LD_LIBRARY_PATH", llamacpp_dir.to_string_lossy().to_string());
+            cmd.current_dir(&llamacpp_dir);
+        }
+        // 缺 Vulkan 运行库/驱动只影响 GPU 加速（仍可 CPU 推理），不阻断启动；
+        // 但没有这行提示，用户只能从 llama-server 的原始 stderr 里猜为什么没用上显卡
+        if let Some(warning) = crate::pages::index::llamacpp_runtime_warning() {
+            app.emit(
+                "model-log",
+                serde_json::json!({
+                    "model_id": &model_id,
+                    "line": format!("[WARN] {}", warning),
+                    "source": "stderr",
+                }),
+            )
+            .ok();
+        }
+    }
 
     app.emit(
         "model-log",

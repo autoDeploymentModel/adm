@@ -103,6 +103,12 @@ pub async fn get_llamacpp_version(app: tauri::AppHandle) -> Result<String, AppEr
             cmd.env("DYLD_LIBRARY_PATH", llamacpp_dir.to_string_lossy().to_string());
         }
     }
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(llamacpp_dir) = config::get_llamacpp_dir(Some(&app)) {
+            cmd.env("LD_LIBRARY_PATH", llamacpp_dir.to_string_lossy().to_string());
+        }
+    }
 
     // 5 秒超时：超过通常意味着 AV/EDR 拦截或子进程挂在 stdin 上等异常。
     // .output() 是阻塞调用，用 spawn_blocking 移到专用线程，避免阻塞 tokio runtime；

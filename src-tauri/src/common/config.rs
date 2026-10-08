@@ -19,7 +19,9 @@ pub fn get_exe_dir() -> Result<PathBuf, AppError> {
 }
 
 pub fn get_data_dir(app: Option<&tauri::AppHandle>) -> Result<PathBuf, AppError> {
-    #[cfg(target_os = "macos")]
+    // macOS / Linux：配置、模型、日志都写用户数据目录。Linux 不能写可执行文件目录——
+    // deb 装到 /usr/bin、AppImage 是只读挂载点，写进去必然失败
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     if let Some(app_handle) = app {
         if let Ok(app_data_dir) = app_handle.path().app_data_dir() {
             std::fs::create_dir_all(&app_data_dir).ok();
@@ -31,7 +33,8 @@ pub fn get_data_dir(app: Option<&tauri::AppHandle>) -> Result<PathBuf, AppError>
 }
 
 pub fn get_base_dir(app: Option<&tauri::AppHandle>) -> Result<PathBuf, AppError> {
-    #[cfg(target_os = "macos")]
+    // 同上：Linux 与 macOS 统一用用户数据目录（llamacpp / models 都建在这里）
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         if let Some(app_handle) = app {
             if let Ok(app_data_dir) = app_handle.path().app_data_dir() {

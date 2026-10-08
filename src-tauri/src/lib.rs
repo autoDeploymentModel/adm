@@ -91,7 +91,10 @@ pub fn run() {
             let quit_item = MenuItem::with_id(app, "quit", "退出 ADM", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
 
-            TrayIconBuilder::with_id("main-tray")
+            // 托盘创建失败不阻断启动：Linux 上缺少 libayatana-appindicator3 或桌面无
+            // StatusNotifier 宿主时创建会失败，若直接 `?` 冒泡，应用在精简桌面环境里根本起不来。
+            // 结果记入 AppState，关闭窗口的行为随之降级为直接退出（见 on_window_event）
+            let tray_result = TrayIconBuilder::with_id("main-tray")
                 .icon(app.default_window_icon().unwrap().clone())
                 .tooltip("ADM")
                 .menu(&menu)
@@ -133,7 +136,19 @@ pub fn run() {
                         }
                     }
                 })
-                .build(app)?;
+                .build(app);
+            // 托盘是「退出」的唯一入口（托盘菜单的 quit 是全项目唯一调用 app.exit 的地方），
+            // 创建失败必须让关闭窗口的行为退化为直接退出，否则进程会留在后台且界面里无法退出
+            let tray_ok = match tray_result {
+                Ok(_) => true,
+                Err(e) => {
+                    eprintln!("[tray] 创建系统托盘失败（关闭窗口将直接退出）: {}", e);
+                    false
+                }
+            };
+            app.state::<AppState>()
+                .tray_available
+                .store(tray_ok, std::sync::atomic::Ordering::Relaxed);
 
             // iLink 微信 Bot：已绑定且启用时自动恢复桥接（内部等待 admAgent 就绪）
             ilink::auto_start(app.handle().clone());
@@ -154,10 +169,21 @@ pub fn run() {
                 }
                 #[cfg(not(target_os = "macos"))]
                 {
-                    // Windows/Linux：拦截关闭，隐藏到系统托盘（模型继续运行）
-                    api.prevent_close();
-                    let _ = window.hide();
-                    let _ = window.set_skip_taskbar(true);
+                    // Windows/Linux：托盘可用时拦截关闭、隐藏到托盘（模型继续运行）；
+                    // 托盘不可用时隐藏等于把应用藏进后台且无处退出，只能走正常退出流程
+                    let tray_ok = window
+                        .app_handle()
+                        .state::<AppState>()
+                        .tray_available
+                        .load(std::sync::atomic::Ordering::Relaxed);
+                    if tray_ok {
+                        api.prevent_close();
+                        let _ = window.hide();
+                        let _ = window.set_skip_taskbar(true);
+                    } else {
+                        cleanup_processes(window.app_handle());
+                        window.app_handle().exit(0);
+                    }
                 }
             }
         })
@@ -166,6 +192,7 @@ pub fn run() {
             index::get_system_info,
             index::check_update,
             index::check_vc_redist,
+            index::check_llamacpp_runtime,
             index::download_and_extract_llamacpp,
             index::reinstall_llamacpp,
             // model_list.rs

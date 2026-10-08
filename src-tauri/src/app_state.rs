@@ -64,6 +64,10 @@ pub struct AppState {
     /// 用户主动停止 llama-server 的意图：stop_model 在 kill 前置位、start_model 复位。
     /// 启动监控线程据此区分「用户点关闭」与「llama-server 启动异常退出」，后者发 model-error 提示
     pub model_stop_intent: AtomicBool,
+    /// 系统托盘是否创建成功。托盘菜单是「退出」的唯一入口，因此关闭窗口前必须判断：
+    /// 托盘不可用（Linux 缺 libayatana-appindicator3 / 桌面无 StatusNotifier 宿主）时
+    /// 只能直接退出，隐藏窗口会让进程留在后台且界面里再也无法退出
+    pub tray_available: AtomicBool,
 }
 
 impl AppState {
@@ -90,6 +94,7 @@ impl AppState {
             model_supports_reasoning: Mutex::new(false),
             model_generation: Mutex::new(0),
             model_stop_intent: AtomicBool::new(false),
+            tray_available: AtomicBool::new(false),
         }
     }
 

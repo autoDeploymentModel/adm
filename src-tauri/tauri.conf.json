@@ -49,6 +49,15 @@
       "exceptionDomain": "",
       "entitlements": "entitlements.plist",
       "signingIdentity": null
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0 | libgtk-3-0t64",
+          "libayatana-appindicator3-1"
+        ]
+      }
     }
   }
 }

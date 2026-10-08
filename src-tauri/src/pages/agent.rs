@@ -61,15 +61,16 @@ fn save_agent_workdir(app: &tauri::AppHandle, workdir: &str) -> Result<(), AppEr
 /// admAgent 存放目录（安装包内置 sidecar，不再运行时下载）：
 /// - Windows：软件所在根目录（NSIS 把 sidecar 装在 ADM.exe 旁）
 /// - macOS：ADM.app/Contents/MacOS（Tauri externalBin 打包位置，即主程序所在目录）
+/// - Linux：与主程序同目录（deb 为 /usr/bin；AppImage 为挂载点内的 usr/bin，externalBin 同样放在此）
 #[allow(unused_variables)]
 fn adm_agent_target_dir(app: &tauri::AppHandle) -> Result<PathBuf, AppError> {
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     {
         config::get_exe_dir()
     }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
-        bail!("不支持的操作系统，当前仅支持 Windows / macOS")
+        bail!("不支持的操作系统，当前仅支持 Windows / macOS / Linux")
     }
 }
 
