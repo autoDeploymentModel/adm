@@ -1669,7 +1669,7 @@ pub struct AdmAgentInfo {
 // ===== Tauri Command =====
 
 /// 返回当前操作系统标识：windows / macos / linux 等
-/// 用于进入 Agent 页前做平台判断（仅 Windows 支持）
+/// 用于进入 Agent 页前做平台判断（Windows / macOS / Linux 均支持）
 #[tauri::command]
 pub fn get_platform_os() -> String {
     std::env::consts::OS.to_string()
@@ -2070,18 +2070,19 @@ pub async fn start_agent_server(
     let workdir = load_agent_workdir(&app);
 
     // 子进程工作目录：Windows 用二进制所在目录（exe 根目录，可写）；
-    // macOS 二进制在只读性质的 ADM.app/Contents/MacOS 内，改用 app_data_dir，
-    // 避免任何潜在的「在 bundle 内写文件」行为（配置在 ~/.config/admAgent、工作区靠 --cwd，均不依赖 cwd）。
+    // macOS/Linux 二进制落在只读位置（ADM.app/Contents/MacOS、deb 的 /usr/bin、
+    // AppImage 的只读挂载点），改用 app_data_dir，避免任何潜在的「在 bundle 内写文件」
+    // 行为（配置在 ~/.config/admAgent、工作区靠 --cwd，均不依赖 cwd）。
     // 该目录同时作为「未配置工作目录」时创建 workspace 的默认路径：必须与子进程实际
     // 工作目录一致，否则模型读写文件的目录（workspace path）与用户认知分叉。
     let process_cwd = {
-        #[cfg(target_os = "macos")]
+        #[cfg(not(target_os = "windows"))]
         {
             config::get_data_dir(Some(&app))
                 .map(|d| d.to_string_lossy().to_string())
                 .unwrap_or_else(|_| ".".to_string())
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
         {
             agent_path
                 .parent()

@@ -776,7 +776,7 @@
     async function goAgent() {
       try {
         const osName = String(await invoke("get_platform_os")).toLowerCase();
-        const supported = osName === "windows" || osName === "macos";
+        const supported = osName === "windows" || osName === "macos" || osName === "linux";
         if (!supported) { showComingSoon(); return; }
         if (osName === "macos") {
           const arch = String(await invoke("get_platform_arch")).toLowerCase();
