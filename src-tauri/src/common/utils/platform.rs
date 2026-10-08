@@ -477,6 +477,8 @@ fn parse_mac_vram(s: &str) -> Option<u64> {
 /// 虚拟/远程显示设备识别（向日葵 OrayIdDDriver、微软基础适配器、Hyper-V、VMware、VBox、
 /// 间接显示驱动等）：这些设备没有真实显存，混入下拉列表/自动选卡会造成误导。
 /// 注意 OrayIdDDriver 小写为 orayidddriver（三个 d），iddriver 关键字匹配不上，需单独列 oray。
+/// 仅 Windows 枚举路径（CIM 输出含基本显示适配器等）会用到，其它平台保留会触发 dead_code 告警。
+#[cfg(target_os = "windows")]
 pub fn is_virtual_display_device(name: &str) -> bool {
     let lower = name.to_lowercase();
     lower.contains("microsoft basic")
