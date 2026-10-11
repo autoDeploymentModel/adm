@@ -821,46 +821,104 @@ fn restore_agent_config_from_backup(app: &tauri::AppHandle) -> Result<(), AppErr
     Ok(())
 }
 
+/// 取当前激活 workspace id；无激活 tab（或为空）时返回 None。
+fn active_workspace_id(app: &tauri::AppHandle) -> Option<String> {
+    let state = app.state::<AppState>();
+    let active = state.active_workspace_id.lock().map(|g| g.clone()).unwrap_or(None);
+    active.filter(|id| !id.is_empty())
+}
+
+/// 构建指向 admAgent server 默认传输（Unix socket / named pipe）的短连接超时 client。
+fn agent_local_client() -> Option<agent_http::AgentHttpClient> {
+    build_client(&AgentTransport::default_host(), Duration::from_secs(3)).ok()
+}
+
+/// POST /config/set 写一个无害标量，触发服务端写盘并从磁盘全量重载配置
+/// （服务端只在启动时读配置，SetConfigField 是唯一的热重载入口）。
+/// `tag` 只用于日志前缀（`Config` / `Tools` / `SyncCaps`）。失败仅记日志并返回 false。
+async fn post_config_reload(
+    client: &agent_http::AgentHttpClient,
+    workspace_id: &str,
+    tag: &str,
+) -> bool {
+    let set_body = serde_json::json!({ "scope": 0, "key": "providers.local.name", "value": "Local" });
+    match tokio::time::timeout(
+        Duration::from_secs(10),
+        agent_http::send(client, "POST", &format!("/v1/workspaces/{}/config/set", workspace_id), Some(set_body)),
+    )
+    .await
+    {
+        Ok(Ok((st, _))) if (200..300).contains(&st) => {
+            api_debug_log(|| format!("{}: /config/set 热重载完成", tag));
+            true
+        }
+        Ok(Ok((st, _))) => {
+            api_debug_log(|| format!("{} ! /config/set HTTP {}", tag, st));
+            false
+        }
+        Ok(Err(e)) => {
+            api_debug_log(|| format!("{} ! /config/set 失败: {}", tag, e));
+            false
+        }
+        Err(_) => {
+            api_debug_log(|| format!("{} ! /config/set 超时", tag));
+            false
+        }
+    }
+}
+
+/// POST /agent/update 重建 coordinator 内的 agent（工具集与模型配置随之刷新）。
+/// 配置重载本身只换配置对象，工具集是 buildTools 时构建的，因此需要它新设置才即时生效；
+/// agent 未 init 时报错属正常（init 时自然读到新配置）。失败仅记日志并返回 false。
+async fn post_agent_update(
+    client: &agent_http::AgentHttpClient,
+    workspace_id: &str,
+    tag: &str,
+) -> bool {
+    let update_url = format!("/v1/workspaces/{}/agent/update", workspace_id);
+    match tokio::time::timeout(
+        Duration::from_secs(10),
+        agent_http::send(client, "POST", &update_url, Some(serde_json::json!({}))),
+    )
+    .await
+    {
+        Ok(Ok((st, _))) if (200..300).contains(&st) => {
+            api_debug_log(|| format!("{}: /agent/update 完成", tag));
+            true
+        }
+        Ok(Ok((st, _))) => {
+            api_debug_log(|| format!("{} ! /agent/update HTTP {}", tag, st));
+            false
+        }
+        Ok(Err(e)) => {
+            api_debug_log(|| format!("{} ! /agent/update 失败: {}", tag, e));
+            false
+        }
+        Err(_) => {
+            api_debug_log(|| format!("{} ! /agent/update 超时", tag));
+            false
+        }
+    }
+}
+
 /// 请求 admAgent server 从磁盘全量重载配置（POST /config/set 写一个无害标量触发）。
 /// 服务未运行 / 无活跃工作区时静默跳过 —— 下次启动会自然读到新配置。
 /// 失败仅记日志：重载不生效只是沿用旧配置，不影响主流程。
 fn request_server_config_reload(app: &tauri::AppHandle) {
-    let ws = {
-        let state = app.state::<AppState>();
-        let active = state.active_workspace_id.lock().map(|g| g.clone()).unwrap_or(None);
-        match active {
-            Some(ws_id) if !ws_id.is_empty() => ws_id,
-            _ => {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let ws = match active_workspace_id(&app) {
+            Some(ws) => ws,
+            None => {
                 api_debug_log(|| "Config: 无活跃工作区，跳过服务端配置重载".to_string());
                 return;
             }
-        }
-    };
-    let client = match build_client(&AgentTransport::default_host(), Duration::from_secs(3)) {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-    tauri::async_runtime::spawn(async move {
-        let set_body = serde_json::json!({ "scope": 0, "key": "providers.local.name", "value": "Local" });
-        match tokio::time::timeout(
-            Duration::from_secs(10),
-            agent_http::send(&client, "POST", &format!("/v1/workspaces/{}/config/set", ws), Some(set_body)),
-        )
-        .await
-        {
-            Ok(Ok((st, _))) if (200..300).contains(&st) => {
-                api_debug_log(|| "Config: /config/set 热重载完成".to_string());
-            }
-            Ok(Ok((st, _))) => {
-                api_debug_log(|| format!("Config ! /config/set HTTP {}", st));
-            }
-            Ok(Err(e)) => {
-                api_debug_log(|| format!("Config ! /config/set 失败: {}", e));
-            }
-            Err(_) => {
-                api_debug_log(|| "Config ! /config/set 超时".to_string());
-            }
-        }
+        };
+        let client = match agent_local_client() {
+            Some(c) => c,
+            None => return,
+        };
+        post_config_reload(&client, &ws, "Config").await;
     });
 }
 
@@ -883,47 +941,18 @@ pub fn sync_local_model_capabilities(app: tauri::AppHandle) {
             eprintln!("[admAgent] 同步本地模型能力：写 admAgent.json 失败: {}", e);
             return;
         }
-        let ws = {
-            let state = app.state::<AppState>();
-            let active = state.active_workspace_id.lock().map(|g| g.clone()).unwrap_or(None);
-            match active {
-                Some(ws_id) if !ws_id.is_empty() => ws_id,
-                _ => return, // 无激活 workspace
-            }
+        let ws = match active_workspace_id(&app) {
+            Some(ws) => ws,
+            None => return, // 无激活 workspace
         };
-        let client = match build_client(&AgentTransport::default_host(), Duration::from_secs(3)) {
-            Ok(c) => c,
-            Err(_) => return,
+        let client = match agent_local_client() {
+            Some(c) => c,
+            None => return,
         };
-        // 写无害标量触发服务端重载（合并进刚更新的 admAgent.json）
-        let set_body = serde_json::json!({ "scope": 0, "key": "providers.local.name", "value": "Local" });
-        match tokio::time::timeout(
-            Duration::from_secs(10),
-            agent_http::send(&client, "POST", &format!("/v1/workspaces/{}/config/set", ws), Some(set_body)),
-        ).await {
-            Ok(Ok((st, _))) if (200..300).contains(&st) => {}
-            Ok(Ok((st, _))) => {
-                eprintln!("[admAgent] 同步本地模型能力：/config/set HTTP {}", st);
-                return;
-            }
-            Ok(Err(e)) => {
-                eprintln!("[admAgent] 同步本地模型能力：/config/set 失败: {}", e);
-                return;
-            }
-            Err(_) => {
-                eprintln!("[admAgent] 同步本地模型能力：/config/set 超时");
-                return;
-            }
-        }
-        // 重建 agent 使新 ModelInfo 生效；agent 未 init 时此接口报错属正常（init 时自然用新配置）
-        let update_url = format!("/v1/workspaces/{}/agent/update", ws);
-        match tokio::time::timeout(
-            Duration::from_secs(10),
-            agent_http::send(&client, "POST", &update_url, Some(serde_json::json!({}))),
-        ).await {
-            Ok(Ok((st, _))) => eprintln!("[admAgent] 同步本地模型能力：/agent/update HTTP {}", st),
-            Ok(Err(e)) => eprintln!("[admAgent] 同步本地模型能力：/agent/update 失败: {}", e),
-            Err(_) => eprintln!("[admAgent] 同步本地模型能力：/agent/update 超时"),
+        // 写无害标量触发服务端重载（合并进刚更新的 admAgent.json），再重建 agent 使
+        // 新 ModelInfo 生效；agent 未 init 时 /agent/update 报错属正常
+        if post_config_reload(&client, &ws, "SyncCaps").await {
+            post_agent_update(&client, &ws, "SyncCaps").await;
         }
     });
 }
@@ -1058,6 +1087,71 @@ fn write_agent_proxy(proxy: &crate::common::types::AgentProxyConfig) -> Result<b
             return Ok(false);
         }
         config["agent_proxy"] = target;
+        Ok(true)
+    })
+}
+
+/// 把「开启所有工具调用」写入 admAgent.json 的 options.bash_allow_all 并触发服务端热重载。
+///
+/// 开启后 admAgent 内置的 bash 命令黑名单失效（sudo / apt / systemctl / curl 等提权、包管理、
+/// 网络与系统管理命令可被 Agent 直接调用）。写入流程：写文件 → POST /config/set 触发服务端
+/// 从磁盘全量重载 → POST /agent/update 重建工具集（配置重载本身不重建工具，只重载配置对象）。
+/// 失败静默：写不进去等同于维持现有的受限行为，不影响主流程。
+pub fn sync_agent_allow_all_tools(app: &tauri::AppHandle, enabled: bool) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let changed = {
+            api_debug_log(|| format!("Tools: 同步开启所有工具调用 enabled={}", enabled));
+            write_agent_allow_all_tools(enabled)
+        };
+        let changed = match changed {
+            Ok(c) => c,
+            Err(e) => {
+                api_debug_log(|| format!("Tools ! 写 admAgent.json 失败: {}", e));
+                return;
+            }
+        };
+        if !changed {
+            api_debug_log(|| "Tools: 配置未变化，跳过重载".to_string());
+            return;
+        }
+        let ws = match active_workspace_id(&app) {
+            Some(ws) => ws,
+            None => {
+                api_debug_log(|| "Tools: 无活跃工作区，跳过服务端重载".to_string());
+                return;
+            }
+        };
+        let client = match agent_local_client() {
+            Some(c) => c,
+            None => return,
+        };
+        api_debug_log(|| "Tools: admAgent.json 已更新，触发服务端热重载".to_string());
+        if post_config_reload(&client, &ws, "Tools").await {
+            post_agent_update(&client, &ws, "Tools").await;
+        }
+    });
+}
+
+/// 把 options.bash_allow_all 写入 admAgent.json（只补丁该字段，不动其它选项）。
+/// 返回是否真的发生了变更（供调用方决定是否触发服务端重载）。
+fn write_agent_allow_all_tools(enabled: bool) -> Result<bool, AppError> {
+    update_adm_agent_config(move |config| {
+        let root = config
+            .as_object_mut()
+            .ok_or_else(|| AppError::msg("admAgent.json 结构异常：根节点不是对象"))?;
+        let options = root
+            .entry("options")
+            .or_insert_with(|| serde_json::json!({}));
+        if !options.is_object() {
+            return Err(AppError::msg("admAgent.json 结构异常：options 不是对象"));
+        }
+        let options = options.as_object_mut().unwrap();
+        let target = serde_json::json!(enabled);
+        if options.get("bash_allow_all") == Some(&target) {
+            return Ok(false);
+        }
+        options.insert("bash_allow_all".to_string(), target);
         Ok(true)
     })
 }

@@ -2140,6 +2140,16 @@ export const template = `
             <div class="param-desc">${_t("开启后在 app 数据目录写入 adm_api_debug.log（记录与 admAgent 的关键 API/事件交互，含你发送的消息正文，供排查对话中断）；关闭或重启软件会自动清空日志")}</div>
           </div>
         </div>
+        <div class="param-row">
+          <div class="param-label">${_t("开启所有工具调用")}</div>
+          <div class="param-input">
+            <div class="checkbox-wrap">
+              <input type="checkbox" id="settings-allow-all-tools">
+              <span>${_t("取消内置命令黑名单")}</span>
+            </div>
+            <div class="param-desc">${_t("开启后 admAgent 不再拦截 sudo / apt / systemctl / curl 等提权、包管理与系统管理命令（Linux 上装依赖、改系统服务需要它）。由 admAgent 的 options.bash_allow_all 生效，需使用支持该配置的 admAgent 版本；请仅在你信任本机与当前项目时打开")}</div>
+          </div>
+        </div>
       </div>
 
       <!-- 模型配置 -->

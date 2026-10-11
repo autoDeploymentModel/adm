@@ -80,6 +80,9 @@ export function updateSettingsUI() {
   // 调试模式（持久化到 config.json 的 debug_logging，由后端开关控制）
   $input("settings-debug-logging").checked = !!S.settings.debug_logging;
 
+  // 开启所有工具调用（关闭 admAgent 内置 bash 命令黑名单）
+  $input("settings-allow-all-tools").checked = !!S.settings.agent_allow_all_tools;
+
   // 推理强度（含「关闭」= 不启用模型思考，与旧版独立的思考开关同义）
   reasoningSelect.value = reasoningSettingValue(S.settings.agent_thinking_enabled, S.settings.agent_reasoning_effort);
 
@@ -171,6 +174,7 @@ export async function saveSettings() {
     s.agent_temperature = S.settings.agent_temperature || null;
     s.debug_logging = S.settings.debug_logging || false;
     s.agent_vision_model = S.settings.agent_vision_model || "admAgent/admImage-model";
+    s.agent_allow_all_tools = S.settings.agent_allow_all_tools === true;
     await invoke("save_settings", { settings: s });
     updateWorkspaceSelector();
   } catch (e) {

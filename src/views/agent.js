@@ -502,7 +502,7 @@ function bindEvents() {
   }
 
   // 设置项即时生效：任一字段变更立即应用并持久化（无保存/取消按钮）
-  ["settings-debug-logging", "settings-reasoning-effort", "settings-temperature", "settings-vision-model"].forEach(function(id) {
+  ["settings-debug-logging", "settings-reasoning-effort", "settings-temperature", "settings-vision-model", "settings-allow-all-tools"].forEach(function(id) {
     $input(id).addEventListener("change", applySettings);
   });
 
@@ -525,6 +525,8 @@ function bindEvents() {
     var tempVal = $input("settings-temperature").value;
     S.settings.agent_temperature = tempVal ? parseFloat(tempVal) : null;
     S.settings.agent_vision_model = $input("settings-vision-model").value || "admAgent/admImage-model";
+    // 开启所有工具调用：关闭 admAgent 内置 bash 命令黑名单（写入 admAgent.json 的 options.bash_allow_all）
+    S.settings.agent_allow_all_tools = $input("settings-allow-all-tools").checked;
     // 调试模式：先同步后端开关（实时生效 + 开启时首次截断日志），再随 settings 持久化。
     // 后端切换失败（如日志文件创建失败）时必须回滚状态，否则会把 debug_logging=true
     // 写盘，造成“勾选着、配置为开、实际没记录”的假开启态（且跨重启延续）。

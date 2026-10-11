@@ -139,6 +139,10 @@ pub agent_vision_model: String,
 /// HTTP 代理配置（同步写入 admAgent.json 顶层 agent_proxy，供 admAgent 读取并应用到 LLM 客户端和 HTTP 工具）
 #[serde(default)]
 pub agent_proxy: AgentProxyConfig,
+/// 开启所有工具调用：关闭 admAgent 内置的 bash 命令黑名单（sudo / apt / systemctl 等提权、
+/// 包管理与系统管理命令变为可调用），同步写入 admAgent.json 的 options.bash_allow_all
+#[serde(default)]
+pub agent_allow_all_tools: bool,
 }
 
 /// 代理配置（仅 admAgent 使用，桌面端业务请求不走代理）

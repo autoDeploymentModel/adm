@@ -36,6 +36,9 @@ pub async fn save_settings(app: tauri::AppHandle, settings: Settings) -> Result<
     // 同步「代理配置」到 admAgent.json 顶层 agent_proxy，失败静默
     crate::pages::agent::sync_agent_proxy(&app, &settings.agent_proxy);
 
+    // 同步「开启所有工具调用」到 admAgent.json 的 options.bash_allow_all，失败静默
+    crate::pages::agent::sync_agent_allow_all_tools(&app, settings.agent_allow_all_tools);
+
     dbg_log!("[DEBUG] Config saved successfully to: {:?}", config_path);
     Ok(())
 }
