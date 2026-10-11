@@ -1069,9 +1069,12 @@ pub async fn get_model_status(state: tauri::State<'_, AppState>) -> Result<Model
     let port = *state.running_port.lock().map_err(|e| e.to_string())?;
 
     let running = if let Some(pid) = pid {
+        // 只刷目标进程：这里是新建的 System（无缓存），refresh_all() 每次都要重新枚举
+        // 全部进程并开句柄（本机 317 进程实测 ~280ms），而模型页每次加载都会调用本命令。
+        let sys_pid = sysinfo::Pid::from_u32(pid);
         let mut sys = sysinfo::System::new();
-        sys.refresh_all();
-        sys.process(sysinfo::Pid::from_u32(pid)).is_some()
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[sys_pid]), true);
+        sys.process(sys_pid).is_some()
     } else {
         false
     };

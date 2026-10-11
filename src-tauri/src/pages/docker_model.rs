@@ -90,8 +90,23 @@ fn cli_candidates() -> Vec<PathBuf> {
     v
 }
 
-/// 解析可用的 docker CLI：先 PATH，再常见安装位置
+/// 解析可用的 docker CLI：先 PATH，再常见安装位置。
+/// 命中后缓存到进程结束（解析本身要 spawn `docker --version`，一次模型页加载会用到
+/// 4~5 次，不缓存等于每次多花一份 CLI 启动开销）。
+/// **未命中不缓存**：Docker Desktop 可能是本次运行中才装好的，缓存 None 会让它一直探测不到。
 pub fn docker_cli() -> Option<PathBuf> {
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<PathBuf> = OnceLock::new();
+
+    if let Some(p) = CACHE.get() {
+        return Some(p.clone());
+    }
+    let resolved = resolve_docker_cli()?;
+    let _ = CACHE.set(resolved.clone());
+    Some(resolved)
+}
+
+fn resolve_docker_cli() -> Option<PathBuf> {
     if let Ok(out) = create_hidden_command("docker").arg("--version").output() {
         if out.status.success() {
             return Some(PathBuf::from("docker"));

@@ -777,6 +777,8 @@ function isClickThrough() {
 
 function renderModelTable() {
   const grid = document.getElementById("model-grid");
+  // 视图已卸载（本页异步加载链尚未结束）：只更新 store，等下次挂载时再渲染
+  if (!grid) return;
   const filteredList = getFilteredModelList();
   const st = S();
 
@@ -1381,78 +1383,106 @@ case "model-started": {
   }
 }
 
+// 并行加载的薄封装：单个命令失败只影响自身数据，不阻断其余内容的渲染
+async function call(name, args) {
+  try {
+    return { ok: true, value: await invoke()(name, args) };
+  } catch (e) {
+    return { ok: false, error: e };
+  }
+}
+
+// 系统信息由壳层（index.html）统一探测并通过 window.__adm_systemInfoPromise 暴露：
+// 两边各自 invoke 会因 AppState.sys 的互斥锁排队，且重复跑一遍 hwinfo 探测。
+// 壳层 Promise 不可用时（理论上不会发生）才自行兜底一次。
+async function loadSystemInfo(st) {
+  if (st.systemInfo) return;
+  try {
+    st.systemInfo = window.__adm_systemInfoPromise
+      ? await window.__adm_systemInfoPromise
+      : await invoke()("get_system_info");
+  } catch (e) {
+    console.error("获取系统信息失败:", e);
+  }
+}
+
 async function init() {
   console.log("[model_list] init() 开始");
   const st = S();
-  if (!st.systemInfo) {
-    try {
-      st.systemInfo = await invoke()("get_system_info");
-      try {
-        const gpuInfo = await invoke()("plugin:hwinfo|get_gpu_info");
-        // hwinfo 插件只报单张卡显存，可能低于后端逐卡枚举结果，仅在未枚举到显卡时兜底
-        if (gpuInfo && gpuInfo.vramMb && !(st.systemInfo.gpus && st.systemInfo.gpus.length > 0)) {
-          st.systemInfo.total_vram = gpuInfo.vramMb * 1024 * 1024;
-          st.systemInfo.has_gpu = true;
-        }
-      } catch (_) {}
-      try {
-        const ramInfo = await invoke()("plugin:hwinfo|get_ram_info");
-        if (ramInfo && ramInfo.sizeMb) {
-          st.systemInfo.total_ram = ramInfo.sizeMb * 1024 * 1024;
-        }
-      } catch (_) {}
-    } catch (e) {
-      console.error("获取系统信息失败:", e);
-    }
-  }
 
-  try { st.localModels = await invoke()("scan_local_models"); } catch (e) { console.error("扫描本地模型失败:", e); }
+  await loadSystemInfo(st);
 
-  try {
-    const parts = await invoke()("scan_part_files");
+  // 首屏数据并行拉取：原先逐个 await 串行，总耗时等于各命令耗时之和
+  const [localRes, partRes, dlRes, phaseRes, statusRes, listRes] = await Promise.all([
+    call("scan_local_models"),
+    call("scan_part_files"),
+    call("get_downloading_models"),
+    call("get_downloading_phases"),
+    call("get_model_status"),
+    call("fetch_model_list"),
+  ]);
+
+  if (localRes.ok) st.localModels = localRes.value;
+  else console.error("扫描本地模型失败:", localRes.error);
+
+  if (partRes.ok) {
     st.partFiles = {};
-    for (const p of parts) st.partFiles[p.model_id] = p.existing_size;
-  } catch (e) { console.error("扫描未完成下载失败:", e); }
+    for (const p of partRes.value) st.partFiles[p.model_id] = p.existing_size;
+  } else console.error("扫描未完成下载失败:", partRes.error);
 
-  try { st.downloadingModels = await invoke()("get_downloading_models"); } catch (e) { console.error("获取正在下载的模型失败:", e); }
+  if (dlRes.ok) st.downloadingModels = dlRes.value;
+  else console.error("获取正在下载的模型失败:", dlRes.error);
 
-  try {
-    const phases = await invoke()("get_downloading_phases");
-    for (const [modelId, phase] of Object.entries(phases)) {
+  if (phaseRes.ok) {
+    for (const [modelId, phase] of Object.entries(phaseRes.value)) {
       if (phase === "mmproj") st.downloadingMmproj[modelId] = true;
     }
-  } catch (e) { console.error("获取下载阶段信息失败:", e); }
+  } else console.error("获取下载阶段信息失败:", phaseRes.error);
 
-  try {
-    const status = await invoke()("get_model_status");
-if (status.running) {
-  st.runningModelId = status.model_id;
-  st.runningModelPort = status.port;
-} else if (st.runningModelId) {
-  // 后端已无运行中的模型（如图片生成容器被外部停止）：清掉前端残留状态
-  st.runningModelId = null;
-  st.runningModelPort = null;
-}
-  } catch (e) { console.error("获取模型状态失败:", e); }
+  if (statusRes.ok) {
+    const status = statusRes.value;
+    if (status.running) {
+      st.runningModelId = status.model_id;
+      st.runningModelPort = status.port;
+    } else if (st.runningModelId) {
+      // 后端已无运行中的模型（如图片生成容器被外部停止）：清掉前端残留状态
+      st.runningModelId = null;
+      st.runningModelPort = null;
+    }
+  } else console.error("获取模型状态失败:", statusRes.error);
 
-  try {
-    st.modelList = await invoke()("fetch_model_list");
-  } catch (e) {
-    showToast(friendlyError(e, { prefix: "获取模型列表失败: " }));
-  }
-
-  // 图片生成模型（docker）：运行要求（平台/显卡）+ 进行中的任务 + 本地是否已有镜像
-  try { await refreshDockerEnv(); } catch (e) { console.warn("[model_list] 检查 Docker 环境失败:", e); }
-  try {
-    const tasks = await invoke()("get_docker_tasks");
-    getDockerState().dockerTasks = tasks || {};
-  } catch (e) { console.warn("[model_list] 获取 docker 任务失败:", e); }
-  try { await refreshDockerImages(); } catch (e) { console.warn("[model_list] 查询本地镜像失败:", e); }
-  try { await refreshDockerRunning(); } catch (e) { console.warn("[model_list] 同步容器状态失败:", e); }
+  if (listRes.ok) st.modelList = listRes.value;
+  else showToast(friendlyError(listRes.error, { prefix: "获取模型列表失败: " }));
 
   initModelTabs();
   renderModelTable();
   console.log("[model_list] init() 完成, 模型数量:", st.modelList.length);
+
+  // 图片生成模型（docker）：运行要求（平台/显卡）+ 进行中的任务 + 本地是否已有镜像。
+  // 每个探测都要 spawn docker CLI 子进程（本机实测 ~1.5s，引擎启动/停止期间更慢），
+  // 放在首屏渲染之后补，避免拖住整个列表的展示。
+  await refreshDockerState();
+  renderModelTable();
+}
+
+async function refreshDockerState() {
+  const st = getDockerState();
+  // 列表里没有图片生成模型（docker）时整体跳过：这些探测都要 spawn docker CLI 子进程，
+  // 没有对应用户可见状态，纯属浪费
+  if (!(st.modelList || []).some(isDockerModel)) {
+    st.dockerEnv = null;
+    return;
+  }
+  // 三项互不依赖，并发探测（各自内部已吞掉异常），总耗时取最慢的一项
+  await Promise.all([
+    refreshDockerEnv(),
+    refreshDockerImages(),
+    refreshDockerRunning(),
+    // 进行中的任务状态：纯内存读取，与上面并发
+    invoke()("get_docker_tasks")
+      .then(function(tasks) { st.dockerTasks = tasks || {}; })
+      .catch(function(e) { console.warn("[model_list] 获取 docker 任务失败:", e); }),
+  ]);
 }
 
 function setupListeners() {
@@ -1478,6 +1508,8 @@ export default {
     }
     // 列表数据异步加载，先同步 TAB 高亮，避免加载期间三个 TAB 均无选中态
     syncModelTabUI();
+    // 上次的数据还在（切回本页）：先把卡片画出来，不必空等一轮 IPC 才有内容
+    if ((S().modelList || []).length > 0) renderModelTable();
 
     // 禁用页面右键（屏蔽浏览器默认菜单，删除弹窗在根容器内一并覆盖）
     var listRoot = document.getElementById("model-list-root");
