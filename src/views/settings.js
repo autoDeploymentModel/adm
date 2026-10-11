@@ -272,6 +272,10 @@ const template = `
               <div class="param-desc">${_t("控制模型是否输出思考/推理内容；关闭后可加快响应速度")}</div>
             </div>
           </div>
+          <div class="param-row">
+            <div class="param-label">${_t("采样温度")}<div class="param-key">--temp, --temperature</div></div>
+            <div class="param-input"><input type="number" id="temperature" step="0.05" min="0" max="2" placeholder="${_t("留空为默认 (0.80)")}"><div class="param-desc">${_t("取值范围 0 ~ 2，越低输出越稳定、越高越随机；留空不传参，使用 llama-server 默认值")}</div></div>
+          </div>
         </div>
 
         <div class="param-group">
@@ -334,7 +338,7 @@ const template = `
 
         <div class="param-row" style="margin-top:16px;">
           <div class="param-label"></div>
-          <div class="param-input"><span style="font-size:12px;color:var(--c-text-3);">${_t("其余启动参数（GPU 层数自动、线程、采样、KV 缓存、推理等）已固定为 llama-server 默认值，如需调整请直接修改 doc/llamacpp.txt 列出的参数。")}</span></div>
+          <div class="param-input"><span style="font-size:12px;color:var(--c-text-3);">${_t("其余启动参数（GPU 层数自动、线程、KV 缓存、推理等）已固定为 llama-server 默认值，如需调整请直接修改 doc/llamacpp.txt 列出的参数。")}</span></div>
         </div>
 
         <button class="btn-reset" id="reset-btn">${_t("恢复默认")}</button>
@@ -569,7 +573,33 @@ function getParamsFromForm() {
     device: readListField("device", RE_DEVICE_LIST, "设备列表"),
     exclude_integrated: document.getElementById("exclude_integrated").checked,
     reasoning: (document.getElementById("reasoning") || {}).value || "auto",
+    temperature: readTemperatureField(),
   };
+}
+
+// 最近一次落库的采样温度（null = 未设置）
+let lastSavedTemperature = null;
+
+// 采样温度：留空不传参（使用 llama-server 默认值），非法/越界值不写入配置并提示
+function readTemperatureField() {
+  const el = document.getElementById("temperature");
+  if (!el) return null;
+  const raw = el.value.trim();
+  // number 输入框内容非法（如 "0.8e"）时 value 为空串，与"用户主动清空"语义不同：
+  // 此时回退到上次保存的值，避免只是改了别的参数触发自动保存就把已保存的 --temp 抹掉
+  if (!raw && el.validity && el.validity.badInput) {
+    showToast(_t("采样温度需为 0 ~ 2 之间的数值，已忽略"), true);
+    el.value = lastSavedTemperature === null ? "" : lastSavedTemperature;
+    return lastSavedTemperature;
+  }
+  if (!raw) return null;
+  const v = parseFloat(raw);
+  if (!Number.isFinite(v) || v < 0 || v > 2) {
+    showToast(_t("采样温度需为 0 ~ 2 之间的数值，已忽略"), true);
+    el.value = "";
+    return null;
+  }
+  return v;
 }
 
 function fillFormFromParams(params) {
@@ -590,6 +620,9 @@ function fillFormFromParams(params) {
   document.getElementById("exclude_integrated").checked = p.exclude_integrated === true;
   const reaEl = document.getElementById("reasoning");
   if (reaEl) reaEl.value = p.reasoning || "auto";
+  const tempEl = document.getElementById("temperature");
+  if (tempEl) tempEl.value = (p.temperature === null || p.temperature === undefined) ? "" : p.temperature;
+  lastSavedTemperature = typeof p.temperature === "number" ? p.temperature : null;
 }
 
 async function saveParams() {
@@ -600,6 +633,7 @@ async function saveParams() {
     let s = await invoke()("load_settings");
     s.launch_params = params;
     await invoke()("save_settings", { settings: s });
+    lastSavedTemperature = params.temperature;
     console.log("[settings] 保存成功");
     showToast(_t("设置已保存，重启模型后生效"));
   } catch (e) {
@@ -616,7 +650,7 @@ function resetParams() {
 function autoSave() { saveParams(); }
 
 function setupAutoSave() {
-  ["ctx_size", "reasoning", "port", "host", "multi_gpu", "split_mode", "tensor_split", "main_gpu", "device", "exclude_integrated"].forEach(function (id) {
+  ["ctx_size", "reasoning", "temperature", "port", "host", "multi_gpu", "split_mode", "tensor_split", "main_gpu", "device", "exclude_integrated"].forEach(function (id) {
     var el = document.getElementById(id);
     if (el) el.addEventListener("change", autoSave);
   });

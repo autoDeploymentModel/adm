@@ -489,6 +489,25 @@ pub async fn start_model(
         }
     }
 
+    // 采样温度（--temp）：留空不传参，使用 llama-server 默认值（0.80）。
+    // 下界 0 是 llama-server 的约束，上界 2 是界面与这里的取值约定（文档未规定上界），
+    // 越界或非法值一律丢弃并写日志，不改动已保存的配置
+    if let Some(temp) = params.temperature {
+        if temp.is_finite() && (0.0..=2.0).contains(&temp) {
+            args.extend(["--temp".to_string(), temp.to_string()]);
+        } else {
+            app.emit(
+                "model-log",
+                serde_json::json!({
+                    "model_id": &model_id,
+                    "line": format!("[WARN] --temp 取值 {} 超出范围（0 ~ 2），已忽略该参数", temp),
+                    "source": "stderr",
+                }),
+            )
+            .ok();
+        }
+    }
+
     // 显卡放置策略：
     // --device 优先取用户显式填写；留空且勾选「排除集成显卡」且机器确有集显+独显时自动填独显列表
     // （Vulkan 等后端默认会把层分给核显，导致推理变慢甚至显存不足），单卡模式下同样生效。

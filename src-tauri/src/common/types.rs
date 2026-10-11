@@ -67,6 +67,9 @@ pub struct LaunchParams {
     /// 思考/推理模式（--reasoning）：on / off / auto（默认 auto，不传参）
     #[serde(default)]
     pub reasoning: Option<String>,
+    /// 采样温度（--temp），留空则不传参使用 llama-server 默认值（0.80）
+    #[serde(default)]
+    pub temperature: Option<f32>,
 }
 
 
