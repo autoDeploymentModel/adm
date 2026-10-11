@@ -132,8 +132,8 @@ pub debug_logging: bool,
 /// 界面语言（"zh" 中文 / "en" English，空或未知回退中文）
 #[serde(default)]
 pub language: String,
-/// Agent 多模态模型（图片识别）："provider/model" 复合键，如 "admAgent/admImage-model"（默认）。
-/// 空或缺失 = 内置 admImage-model；同步写入 admAgent.json 顶层 agent_vision_model 供 vision 子命令读取
+/// Agent 多模态模型（图片识别）："provider/model" 复合键，如 "admAgent/adm-models"（默认）。
+/// 空或缺失 = 内置 adm-models；同步写入 admAgent.json 顶层 agent_vision_model 供 vision 子命令读取
 #[serde(default)]
 pub agent_vision_model: String,
 /// HTTP 代理配置（同步写入 admAgent.json 顶层 agent_proxy，供 admAgent 读取并应用到 LLM 客户端和 HTTP 工具）

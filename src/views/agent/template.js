@@ -2177,7 +2177,7 @@ export const template = `
           <div class="param-label">${_t("多模态模型")}</div>
           <div class="param-input">
             <select class="settings-select" id="settings-vision-model"></select>
-            <div class="param-desc">${_t("用于识别会话中的图片；默认为内置 admImage-model（自动轮询可用图片后端）")}</div>
+            <div class="param-desc">${_t("用于识别会话中的图片；默认为内置 adm-models（自动轮询可用图片后端）")}</div>
           </div>
         </div>
       </div>

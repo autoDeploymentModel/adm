@@ -959,14 +959,14 @@ pub fn sync_local_model_capabilities(app: tauri::AppHandle) {
 
 /// 把「多模态模型（图片识别）」选择同步到 admAgent.json 顶层 agent_vision_model 并触发服务端重载。
 ///
-/// 值格式为 "provider/model" 复合键（如 "admAgent/admImage-model"）；空值或缺省回退内置
-/// admAgent/admImage-model。写入 Windows 的 %LOCALAPPDATA%\admAgent\admAgent.json
+/// 值格式为 "provider/model" 复合键（如 "admAgent/adm-models"）；空值或缺省回退内置
+/// admAgent/adm-models。写入 Windows 的 %LOCALAPPDATA%\admAgent\admAgent.json
 /// （与云端 provider 同一文件；其它平台仍为 ~/.config/admAgent/admAgent.json），
 /// vision 子命令启动时 config.Load 读取该字段。server 运行时通过写无害标量触发 SetConfigFields
 /// 的全量重载（从磁盘重读所有配置路径并合并，任意顶层字段随之生效——已验证 reloadFromDiskLocked
 /// 会重读 GlobalConfig，不限于 providers 分支）。
 ///
-/// 失败静默：vision 缺省回退内置 admImage-model，不影响主流程。
+/// 失败静默：vision 缺省回退内置 adm-models，不影响主流程。
 pub fn sync_agent_vision_model(app: &tauri::AppHandle, value: &str) {
     let value = value.to_string();
     let app = app.clone();
@@ -989,13 +989,25 @@ pub fn sync_agent_vision_model(app: &tauri::AppHandle, value: &str) {
     });
 }
 
-/// 把 agent_vision_model 写入 admAgent.json 顶层（缺省回退内置 admImage-model）。
+/// 内置多模态模型：admAgent 的图片后端池向外部只暴露一个显示模型（服务端 DisplayModelName）。
+const BUILTIN_VISION_PROVIDER: &str = "admAgent";
+const BUILTIN_VISION_MODEL: &str = "adm-models";
+/// 旧版内置模型名：admAgent provider 由后端池统一服务，两个名字等价，写入时归一化。
+const LEGACY_BUILTIN_VISION_MODEL: &str = "admImage-model";
+
+/// 把 agent_vision_model 写入 admAgent.json 顶层（缺省回退内置 adm-models）。
 /// 校验目标模型在 providers 中声明 supports_images=true，否则回退内置。
 /// 返回是否真的发生了变更（供调用方决定是否触发服务端重载）。
 fn write_agent_vision_model(value: &str) -> Result<bool, AppError> {
     let (provider, model) = match value.split_once('/') {
         Some((p, m)) if !p.is_empty() && !m.is_empty() => (p.to_string(), m.to_string()),
-        _ => ("admAgent".to_string(), "admImage-model".to_string()),
+        _ => (BUILTIN_VISION_PROVIDER.to_string(), BUILTIN_VISION_MODEL.to_string()),
+    };
+    // 旧版内置名归一化，避免旧配置继续以 admImage-model 落盘
+    let model = if provider == BUILTIN_VISION_PROVIDER && model == LEGACY_BUILTIN_VISION_MODEL {
+        BUILTIN_VISION_MODEL.to_string()
+    } else {
+        model
     };
 
     update_adm_agent_config(move |config| {
@@ -1003,7 +1015,7 @@ fn write_agent_vision_model(value: &str) -> Result<bool, AppError> {
         let (final_provider, final_model) = if model_supports_images_in_config(&*config, &provider, &model) {
             (provider.clone(), model.clone())
         } else {
-            ("admAgent".to_string(), "admImage-model".to_string())
+            (BUILTIN_VISION_PROVIDER.to_string(), BUILTIN_VISION_MODEL.to_string())
         };
 
         let final_target = serde_json::json!({ "provider": final_provider, "model": final_model });
@@ -1016,11 +1028,11 @@ fn write_agent_vision_model(value: &str) -> Result<bool, AppError> {
 }
 
 /// 检查指定 provider/model 是否在 admAgent.json 的 providers 中声明 supports_images=true。
-/// admAgent 是内置 provider（含 admImage-model），不在 providers 键中，需特殊处理。
+/// admAgent 是内置 provider（模型 adm-models，旧名 admImage-model），不在 providers 键中，需特殊处理。
 fn model_supports_images_in_config(config: &serde_json::Value, provider: &str, model: &str) -> bool {
-    // admAgent 是内置 provider，其模型（如 admImage-model）支持图片
-    if provider == "admAgent" {
-        return model == "admImage-model";
+    // admAgent 是内置 provider，其模型（adm-models，旧名 admImage-model）支持图片
+    if provider == BUILTIN_VISION_PROVIDER {
+        return model == BUILTIN_VISION_MODEL || model == LEGACY_BUILTIN_VISION_MODEL;
     }
     if let Some(providers) = config.get("providers").and_then(|p| p.as_object()) {
         for (key, pc) in providers {
@@ -3883,8 +3895,8 @@ mod adm_agent_config_tests {
     fn assert_builtin_vision(v: &serde_json::Value) {
         assert_eq!(
             v,
-            &serde_json::json!({ "provider": "admAgent", "model": "admImage-model" }),
-            "应回退为内置 admAgent/admImage-model"
+            &serde_json::json!({ "provider": "admAgent", "model": "adm-models" }),
+            "应回退为内置 admAgent/adm-models"
         );
     }
 
@@ -3903,17 +3915,31 @@ mod adm_agent_config_tests {
         );
     }
 
-    /// 内置 admAgent 特判：admImage-model 永远有效。
+    /// 内置 admAgent 特判：adm-models 永远有效。
     #[test]
-    fn vision_model_builtin_admimage_kept() {
+    fn vision_model_builtin_kept() {
         let t = temp_config_dir("vision_builtin");
+        let path = t.dir.join("admAgent.json");
+        std::fs::write(&path, VISION_SAMPLE).expect("写入样本配置");
+
+        assert!(write_agent_vision_model("admAgent/adm-models").expect("写入应成功"));
+        assert_eq!(
+            read_vision_model(&path),
+            serde_json::json!({ "provider": "admAgent", "model": "adm-models" })
+        );
+    }
+
+    /// 旧版内置名 admImage-model：归一化为 adm-models 后写入。
+    #[test]
+    fn vision_model_legacy_builtin_normalized() {
+        let t = temp_config_dir("vision_builtin_legacy");
         let path = t.dir.join("admAgent.json");
         std::fs::write(&path, VISION_SAMPLE).expect("写入样本配置");
 
         assert!(write_agent_vision_model("admAgent/admImage-model").expect("写入应成功"));
         assert_eq!(
             read_vision_model(&path),
-            serde_json::json!({ "provider": "admAgent", "model": "admImage-model" })
+            serde_json::json!({ "provider": "admAgent", "model": "adm-models" })
         );
     }
 

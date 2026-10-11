@@ -16,7 +16,7 @@ import { syncModeToServer } from "./agent/permission.js";
 import { loadTools, activateToolsTab } from "./agent/tools.js";
 import { switchModel, refreshServerProviders, resolveAgentModel, updateModelDropdown, updateModelBtn, refreshAgentInfo } from "./agent/model.js";
 import { enableAutoCompact, updateWorkspaceSelector, toggleWorkDirDropdown, closeWorkDirDropdown, validateWorkDirs } from "./agent/workspace.js";
-import { showSettings, hideSettings, updateSettingsUI, saveSettings, showAddModelDialog, hideAddModelDialog, addModel, initProjectMemoryUI, renderVisionModelSelect, updateProviderKeyHint } from "./agent/settings_dialog.js";
+import { showSettings, hideSettings, updateSettingsUI, saveSettings, showAddModelDialog, hideAddModelDialog, addModel, initProjectMemoryUI, renderVisionModelSelect, updateProviderKeyHint, BUILTIN_VISION_KEY } from "./agent/settings_dialog.js";
 import { addPendingFiles, parseUriListPaths, addPastedPaths, looksLikeFilePath } from "./agent/attach.js";
 import { bindSkillSelectorEvents, initSkillSelector, clearAttachedSkillsAfterSend } from "./agent/skill_selector.js";
 import { bindCompactBtnEvents } from "./agent/compact.js";
@@ -524,7 +524,7 @@ function bindEvents() {
     S.settings.agent_reasoning_effort = reasoning.effort;
     var tempVal = $input("settings-temperature").value;
     S.settings.agent_temperature = tempVal ? parseFloat(tempVal) : null;
-    S.settings.agent_vision_model = $input("settings-vision-model").value || "admAgent/admImage-model";
+    S.settings.agent_vision_model = $input("settings-vision-model").value || BUILTIN_VISION_KEY;
     // 开启所有工具调用：关闭 admAgent 内置 bash 命令黑名单（写入 admAgent.json 的 options.bash_allow_all）
     S.settings.agent_allow_all_tools = $input("settings-allow-all-tools").checked;
     // 调试模式：先同步后端开关（实时生效 + 开启时首次截断日志），再随 settings 持久化。

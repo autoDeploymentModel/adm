@@ -8,6 +8,15 @@ import { updateWorkspaceSelector } from "./workspace.js";
 import { updateModelDropdown, switchModel, refreshServerProviders } from "./model.js";
 import { refreshProjectMemory, openMemoryEditor, closeMemoryEditor, submitMemoryEditor, deleteMemoryEntry } from "./memory.js";
 
+// 内置多模态模型（图片识别）在服务端的显示名：admAgent 的图片后端池只暴露 adm-models。
+// 旧版本使用 admImage-model（服务端两者等价），这里统一归一化，避免下拉出现重复项。
+export const BUILTIN_VISION_KEY = "admAgent/adm-models";
+const LEGACY_BUILTIN_VISION_KEY = "admAgent/admImage-model";
+
+function normalizeVisionKey(value) {
+  return value === LEGACY_BUILTIN_VISION_KEY ? BUILTIN_VISION_KEY : value;
+}
+
 // ===== 设置弹窗 =====
 export function showSettings() {
   updateSettingsUI();
@@ -89,10 +98,14 @@ export function updateSettingsUI() {
   // 温度
   tempInput.value = S.settings.agent_temperature || "";
 
-  // 多模态模型（图片识别）：默认内置 admImage-model，自动轮询远程图片后端
-  // 迁移：仅在服务端快照就绪时校验当前值并重置为内置默认值；快照未就绪时保留原值，
-  // 交给下方 renderVisionModelSelect 的保留逻辑兜底（避免离线时把 local/localModel
-  // 等有效配置误重置 —— S.providers 来自 list_cloud_providers，不含 local 条目）
+  // 多模态模型（图片识别）：默认内置 adm-models，自动轮询远程图片后端
+  // 迁移：旧版内置名 admImage-model 归一化为 adm-models；仅在服务端快照就绪时校验当前值并
+  // 重置为内置默认值，快照未就绪时保留原值，交给下方 renderVisionModelSelect 的保留逻辑
+  // 兜底（避免离线时把 local/localModel 等有效配置误重置 —— S.providers 来自
+  // list_cloud_providers，不含 local 条目）
+  if (S.settings.agent_vision_model) {
+    S.settings.agent_vision_model = normalizeVisionKey(S.settings.agent_vision_model);
+  }
   if (S.serverProvidersLoaded && S.settings.agent_vision_model) {
     var visionValid = S.serverProviders.some(function(sp) {
       return Array.isArray(sp.models) && sp.models.some(function(m) {
@@ -100,7 +113,7 @@ export function updateSettingsUI() {
       });
     });
     if (!visionValid) {
-      S.settings.agent_vision_model = "admAgent/admImage-model";
+      S.settings.agent_vision_model = BUILTIN_VISION_KEY;
     }
   }
   renderVisionModelSelect();
@@ -109,22 +122,25 @@ export function updateSettingsUI() {
   renderProviderList();
 }
 
-// 渲染「多模态模型」下拉：固定首项内置 admImage-model（默认）+ 所有 supports_images=true
+// 渲染「多模态模型」下拉：固定首项内置 adm-models（默认）+ 所有 supports_images=true
 // 的已配置模型（云端 provider + 本地多模态，复用服务端 /providers 快照；离线回退磁盘列表）
 export function renderVisionModelSelect() {
   var sel = $input("settings-vision-model");
   if (!sel) return;
-  var current = S.settings.agent_vision_model || "admAgent/admImage-model";
+  var current = normalizeVisionKey(S.settings.agent_vision_model || BUILTIN_VISION_KEY);
   sel.innerHTML = "";
   var first = document.createElement("option");
-  first.value = "admAgent/admImage-model";
-  first.textContent = _t("admImage-model（内置 · 自动轮询）");
+  first.value = BUILTIN_VISION_KEY;
+  first.textContent = _t("adm-models（内置 · 自动轮询）");
   sel.appendChild(first);
-  var seen = { "admAgent/admImage-model": true };
+  var seen = {};
+  seen[BUILTIN_VISION_KEY] = true;
   var entries = [];
   if (S.serverProvidersLoaded) {
     S.serverProviders.forEach(function(sp) {
       if (!sp || !Array.isArray(sp.models)) return;
+      // 内置 admAgent provider 已由首项覆盖，不再按服务端模型名重复列出
+      if (sp.id === "admAgent") return;
       sp.models.forEach(function(m) {
         if (!m || m.supports_images !== true) return;
         entries.push({ key: sp.id + "/" + m.id, name: m.name || m.id });
@@ -150,7 +166,7 @@ export function renderVisionModelSelect() {
   });
   if (seen[current]) {
     sel.value = current;
-  } else if (!S.serverProvidersLoaded && current !== "admAgent/admImage-model") {
+  } else if (!S.serverProvidersLoaded && current !== BUILTIN_VISION_KEY) {
     // 快照未就绪时列表可能不完整：保留当前已配置值作为选项，避免保存时被静默重置为默认
     var keep = document.createElement("option");
     keep.value = current;
@@ -158,8 +174,8 @@ export function renderVisionModelSelect() {
     sel.appendChild(keep);
     sel.value = current;
   } else {
-    sel.value = "admAgent/admImage-model";
-    S.settings.agent_vision_model = "admAgent/admImage-model";
+    sel.value = BUILTIN_VISION_KEY;
+    S.settings.agent_vision_model = BUILTIN_VISION_KEY;
   }
 }
 
@@ -173,7 +189,7 @@ export async function saveSettings() {
     s.agent_reasoning_effort = normalizeReasoningEffort(S.settings.agent_reasoning_effort);
     s.agent_temperature = S.settings.agent_temperature || null;
     s.debug_logging = S.settings.debug_logging || false;
-    s.agent_vision_model = S.settings.agent_vision_model || "admAgent/admImage-model";
+    s.agent_vision_model = normalizeVisionKey(S.settings.agent_vision_model) || BUILTIN_VISION_KEY;
     s.agent_allow_all_tools = S.settings.agent_allow_all_tools === true;
     await invoke("save_settings", { settings: s });
     updateWorkspaceSelector();

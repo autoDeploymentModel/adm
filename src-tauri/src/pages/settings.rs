@@ -30,7 +30,7 @@ pub async fn save_settings(app: tauri::AppHandle, settings: Settings) -> Result<
     }
 
     // 同步「多模态模型」到 admAgent.json 顶层 agent_vision_model（vision 子命令读取），
-    // 值变化时触发服务端重载；失败静默（vision 缺省回退内置 admImage-model）
+    // 值变化时触发服务端重载；失败静默（vision 缺省回退内置 adm-models）
     crate::pages::agent::sync_agent_vision_model(&app, &settings.agent_vision_model);
 
     // 同步「代理配置」到 admAgent.json 顶层 agent_proxy，失败静默
