@@ -11,7 +11,7 @@ import { updateStatusBar, updateContextUsage, updateSendButton, exitManualScroll
 import { loadConversations, selectConversation, newConversation, clearAllConversations, toggleOutlinePanel, setOutlinePanelOpen } from "./agent/session.js";
 import { syncWorkingIndicator, onAreaScroll, scrollChatToBottom, beginSelectGuard, endSelectGuard, resetSelectGuard } from "./agent/render.js";
 import { sendMessage, cancelCurrentRun, sendMessageWithFiles } from "./agent/send.js";
-import { setupSSEListener, cancelScheduledLoadTools, cancelRunCompleteFallback } from "./agent/sse.js";
+import { setupSSEListener, cancelScheduledLoadTools, cancelRunCompleteFallback, cancelDiscardFallback } from "./agent/sse.js";
 import { syncModeToServer } from "./agent/permission.js";
 import { loadTools, activateToolsTab } from "./agent/tools.js";
 import { switchModel, refreshServerProviders, resolveAgentModel, updateModelDropdown, updateModelBtn, refreshAgentInfo } from "./agent/model.js";
@@ -1001,6 +1001,8 @@ export default {
     cancelScheduledLoadTools();
     // 解除 run_complete 丢失兜底定时器
     cancelRunCompleteFallback();
+    // 取消延迟中的思考丢弃兜底提示
+    cancelDiscardFallback();
     // 清除重连定时器
     if (S.sseReconnectTimer) { clearTimeout(S.sseReconnectTimer); S.sseReconnectTimer = null; }
     // 注意：这里不调 agent_unsubscribe_events。它是异步 fire-and-forget，快速切回时可能在新页面

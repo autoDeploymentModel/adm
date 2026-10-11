@@ -584,6 +584,20 @@ function onConfigChangedSSEEvent() {
   // 配置变更，刷新 Agent 信息
 }
 
+// 服务端「丢弃半成品并重试」的通知 token（admAgent agent_loop_llm.go 的 notifyDiscard）：
+// 与 message deleted 事件属于同一次丢弃（token 先发出，但两者走不同 broker，到达顺序不保证），
+// 按 token 出本地化文案，并以此抑制下方按消息内容猜测的兜底提示，避免双提示。
+// 取值须与 admAgent 的 discardReasoning* / discardStreamInterrupted 常量保持一致。
+var DISCARD_NOTICE_TEXT = {
+  discard_reasoning_overrun: "模型思考量超出本轮上限，已丢弃该段思考并重新生成",
+  discard_reasoning_timeout: "模型思考超过 300 秒仍无输出，已丢弃该段思考并重新生成",
+  discard_stream_interrupted: "生成流被中断，已丢弃该段内容并重试",
+};
+// 最近一次收到服务端丢弃 token 通知的时刻（用于抑制内容兜底提示）
+var lastDiscardNoticeAt = 0;
+// 内容兜底提示的延迟句柄（等 token 通知先到）
+var discardFallbackTimer = null;
+
 function onAgentEventSSEEvent(ev) {
   var actualData = ev.actualData;
   // Agent 事件（错误/响应/摘要/思考中）：error 可能是字符串或对象，统一展示并留完整日志便于排查
@@ -603,7 +617,16 @@ function onAgentEventSSEEvent(ev) {
     // 模型长时间思考仍未产出可见内容：仅提示当前正在查看的会话，避免其它会话打扰
     if (!actualData.session_id || actualData.session_id === S.currentConvId) {
       log.debug("SSE", "agent_event thinking: " + actualData.progress);
-      showInfo(actualData.progress);
+      var discardText = Object.prototype.hasOwnProperty.call(DISCARD_NOTICE_TEXT, actualData.progress)
+        ? DISCARD_NOTICE_TEXT[actualData.progress]
+        : "";
+      if (discardText) {
+        // 服务端明确告知了丢弃原因（推理超量/思考超时/流式中断），文案比内容兜底更准确
+        lastDiscardNoticeAt = Date.now();
+        showInfo(_t(discardText));
+      } else {
+        showInfo(actualData.progress);
+      }
     }
   }
 }
@@ -646,10 +669,54 @@ var sseEventHandlers = new Map([
 function handleMessageSSEEvent(action, msgData) {
   // 统计本轮工具调用（增量按消息 id + parts 数去重），供假完成检测与续跑进度判定使用
   if (action !== "deleted") collectRunStats(msgData);
+  else notifyDiscardedThinking(msgData);
   // 数据更新统一由 store.handleSSEEvent 完成（created → upsertCreatedMessage，
   // updated → updateMessage，deleted → deleteMessage，含临时气泡清理），此处只做 UI 刷新。
   // 流式期间每个 delta 都会走到这里：用 rAF 合并调度，单帧最多渲染一次
   scheduleRenderMessages();
+}
+
+// 思考气泡被服务端丢弃时补一条提示（旧版服务端兜底：新服务端会先发 DISCARD_NOTICE_TEXT
+// 里的 token，由 onAgentEventSSEEvent 给出精确原因并抑制本提示）。
+// 服务端在「推理超量」（reasoningOverrunThreshold 按推理强度取 16384/32768/65536 字符）
+// 或「流式思考满 300 秒仍无正文/工具调用」时会中止当前 step、删掉那条只含思考的
+// assistant 消息（message.Delete → 本条 deleted 事件）并带 nudge 重试，见 admAgent
+// agent_loop_llm.go 的 errOutputDegraded 分支。前端此前只让思考气泡凭空消失，用户看到的
+// 是「思考很久 → 突然清屏 → 又继续思考」却没有任何说明，这里补上原因。
+// 只认「纯思考气泡」：带正文/工具调用的删除与空消息删除（上下文溢出、无 step 结果、
+// 决策轮失败）都不提示，避免把正常收尾清理误报成异常。
+function notifyDiscardedThinking(msgData) {
+  if (!msgData || msgData.role !== "assistant") return;
+  var parts = Array.isArray(msgData.parts) ? msgData.parts : [];
+  var hasThinking = false;
+  var hasVisible = false;
+  for (var i = 0; i < parts.length; i++) {
+    var p = parts[i];
+    if (!p || !p.data) continue;
+    if (p.type === "reasoning") hasThinking = hasThinking || !!p.data.thinking;
+    else if (p.type === "text" || p.type === "tool_call" || p.type === "shell_command") hasVisible = true;
+  }
+  if (!hasThinking || hasVisible) return;
+  // 延迟 500ms 再提示：服务端 token 通知与 message deleted 走不同 broker，到达顺序不保证，
+  // 先让精确的 token 文案落位（旧版服务端没有该事件时本条才会真正显示）。
+  var fallbackSessionId = msgData.session_id || "";
+  if (discardFallbackTimer) clearTimeout(discardFallbackTimer);
+  discardFallbackTimer = setTimeout(function() {
+    discardFallbackTimer = null;
+    if (Date.now() - lastDiscardNoticeAt < 2000) return;
+    // 期间已切走会话时不再补弹（clearErrorNotices 只清已有节点，晚到的提示会落到新会话）
+    if (fallbackSessionId && S.currentConvId !== fallbackSessionId) return;
+    log.debug("SSE", "思考气泡被丢弃（服务端未给 token，按内容兜底），提示用户 id=" + (msgData.id || ""));
+    showInfo(_t("模型思考过长（超时或超量），已丢弃该段思考并重新生成"));
+  }, 500);
+}
+
+// 取消延迟中的兜底提示（切走 agent 视图时调用，与 cancelRunCompleteFallback 同职责）
+export function cancelDiscardFallback() {
+  if (discardFallbackTimer) {
+    clearTimeout(discardFallbackTimer);
+    discardFallbackTimer = null;
+  }
 }
 
 // ===== 本轮运行统计（续跑进度判定） =====
