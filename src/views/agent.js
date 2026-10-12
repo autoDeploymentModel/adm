@@ -8,7 +8,7 @@ import { log, setLogEnabled } from "./agent/log.js";
 import { api } from "./agent/api.js";
 import { generateUUID, isFullyAtBottom, autoResize, $input, applyReasoningSetting } from "./agent/utils.js";
 import { updateStatusBar, updateContextUsage, updateSendButton, exitManualScrollMode, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showInfo, showConfirm, showCopyPasteMenu, updateScrollBottomBtn, reportError, showInitProgress, hideInitProgress } from "./agent/ui.js";
-import { loadConversations, selectConversation, newConversation, clearAllConversations, toggleOutlinePanel, setOutlinePanelOpen } from "./agent/session.js";
+import { loadConversations, selectConversation, newConversation, clearAllConversations, toggleOutlinePanel, setOutlinePanelOpen, renderConversationList } from "./agent/session.js";
 import { syncWorkingIndicator, onAreaScroll, scrollChatToBottom, beginSelectGuard, endSelectGuard, resetSelectGuard } from "./agent/render.js";
 import { sendMessage, cancelCurrentRun, sendMessageWithFiles } from "./agent/send.js";
 import { setupSSEListener, cancelScheduledLoadTools, cancelRunCompleteFallback, cancelDiscardFallback } from "./agent/sse.js";
@@ -305,9 +305,21 @@ async function reconcileSendingState() {
   if (!S.isSending) return;
   var run = S.activeRun;
   if (!run) {
-    store.cancelRun(store.activeWsId);
+    // 本会话只有排队轮次（消息已发出、服务端尚未开始执行）：登记必须保留，
+    // 等本会话的消息事件到达时由 promoteQueuedRun 接管，不能在此抹掉
+    if (S.currentConvId && store.isQueued(store.activeWsId, S.currentConvId)) {
+      updateSendButton();
+      renderConversationList();
+      return;
+    }
+    // 当前会话没有活动运行：可能是「本会话已结束、同工作区其它会话还在跑」，
+    // 或残留的运行登记已无对应会话。只清本会话（无会话可定位时才整体清理），
+    // 避免把并行运行的其它会话一起抹掉。
+    if (S.currentConvId) store.cancelRun(store.activeWsId, S.currentConvId);
+    else store.cancelRun(store.activeWsId);
     updateSendButton();
-    updateStatusBar("ready", null, S.contextUsage.used);
+    renderConversationList();
+    if (!S.isSending) updateStatusBar("ready", null, S.contextUsage.used);
     return;
   }
 
@@ -321,17 +333,21 @@ async function reconcileSendingState() {
     var sess = await api("GET", "/v1/workspaces/" + run.workspaceId + "/sessions/" + run.sessionId);
     busy = !!(sess && sess.is_busy);
   } catch (_) {}
-  if (S.activeRun !== run || !S.isSending) return; // 期间已被 SSE/取消收尾
+  if (S.activeRun !== run) return; // 期间已被 SSE/取消收尾
   console.log("[agent] reconcile 对账: is_busy=" + busy + " lastFinished=" + lastAssistantTurnFinished());
 
   // 仅当服务端确认不忙、且消息区已存在完成的助手轮次时，才认定运行已结束并重置。
   // 启动窗口内（尚无助手输出）即便 is_busy=false 也保留指示器，等待 SSE 流继续。
+  // 只注销当前会话的运行：同工作区并行运行的其它会话不受影响
   if (!busy && lastAssistantTurnFinished()) {
     console.warn("[agent] 挂载对账：运行会话已结束，重置发送态");
-    store.cancelRun(store.activeWsId);
-    clearSendSafetyTimer();
+    store.cancelRun(run.workspaceId, run.sessionId);
+    if (!S.isSending) {
+      clearSendSafetyTimer();
+      updateStatusBar("ready", null, S.contextUsage.used);
+    }
     updateSendButton();
-    updateStatusBar("ready", null, S.contextUsage.used);
+    renderConversationList();
   }
 }
 
@@ -502,7 +518,7 @@ function bindEvents() {
   }
 
   // 设置项即时生效：任一字段变更立即应用并持久化（无保存/取消按钮）
-  ["settings-debug-logging", "settings-reasoning-effort", "settings-temperature", "settings-vision-model", "settings-allow-all-tools"].forEach(function(id) {
+  ["settings-debug-logging", "settings-reasoning-effort", "settings-temperature", "settings-vision-model", "settings-allow-all-tools", "settings-concurrent-sessions"].forEach(function(id) {
     $input(id).addEventListener("change", applySettings);
   });
 
@@ -527,6 +543,8 @@ function bindEvents() {
     S.settings.agent_vision_model = $input("settings-vision-model").value || BUILTIN_VISION_KEY;
     // 开启所有工具调用：关闭 admAgent 内置 bash 命令黑名单（写入 admAgent.json 的 options.bash_allow_all）
     S.settings.agent_allow_all_tools = $input("settings-allow-all-tools").checked;
+    // 同目录多会话并行：纯桌面端发送策略（服务端本就按会话分发），无需同步服务端
+    S.settings.agent_concurrent_sessions = $input("settings-concurrent-sessions").checked;
     // 调试模式：先同步后端开关（实时生效 + 开启时首次截断日志），再随 settings 持久化。
     // 后端切换失败（如日志文件创建失败）时必须回滚状态，否则会把 debug_logging=true
     // 写盘，造成“勾选着、配置为开、实际没记录”的假开启态（且跨重启延续）。
@@ -734,6 +752,18 @@ function bindEvents() {
   // 标题栏操作按钮
   document.getElementById("agent-undo-btn").addEventListener("click", function() {
     if (!S.currentConvId) return;
+    // 服务端 undo 是「整仓库回滚到本轮快照」（git reset --hard + checkout-index + clean），
+    // 不做会话隔离：同工作区有其它会话在运行时会连带回滚它们的改动/提交。
+    // 此处先拦下来（同目录多会话并行下尤其重要），等同工作区空闲后再撤销
+    if (S.activeRun || S.queuedRun) {
+      showWarning(_t("本会话正在运行，请先停止本轮后再撤销"));
+      return;
+    }
+    var concurrentOthers = (S.runs || []).filter(function(r) { return r.sessionId !== S.currentConvId; });
+    if (concurrentOthers.length > 0) {
+      showWarning(_t("同工作区其它会话正在运行，撤销会连带回滚它们的改动，请等其结束后再撤销"));
+      return;
+    }
     showConfirm(_t("确定撤销上一轮对话？此操作会回退上一轮产生的消息与文件修改。"), function() {
       api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent/sessions/" + S.currentConvId + "/undo")
         .then(function() { selectConversation(S.currentConvId); })

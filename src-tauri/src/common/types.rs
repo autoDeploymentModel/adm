@@ -143,6 +143,13 @@ pub agent_proxy: AgentProxyConfig,
 /// 包管理与系统管理命令变为可调用），同步写入 admAgent.json 的 options.bash_allow_all
 #[serde(default)]
 pub agent_allow_all_tools: bool,
+/// 同目录多会话并行：允许同一工作目录内多个会话同时运行（服务端本就按会话分发，
+/// 开启后桌面端不再拦截新会话的发送）。
+/// 注意：默认关闭，且这里必须用 `#[serde(default)]`（= false）与 `Settings::default()`
+/// 保持一致——`load_settings` 在 config.json 缺失时返回 `Settings::default()`，
+/// 若字段默认值与之相反，全新安装下开关的实际状态会与文档/UI 文案矛盾。
+#[serde(default)]
+pub agent_concurrent_sessions: bool,
 }
 
 /// 代理配置（仅 admAgent 使用，桌面端业务请求不走代理）

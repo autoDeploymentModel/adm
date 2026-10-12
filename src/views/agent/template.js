@@ -2150,6 +2150,16 @@ export const template = `
             <div class="param-desc">${_t("开启后 admAgent 不再拦截 sudo / apt / systemctl / curl 等提权、包管理与系统管理命令（Linux 上装依赖、改系统服务需要它）。由 admAgent 的 options.bash_allow_all 生效，需使用支持该配置的 admAgent 版本；请仅在你信任本机与当前项目时打开")}</div>
           </div>
         </div>
+        <div class="param-row">
+          <div class="param-label">${_t("同目录多会话并行")}</div>
+          <div class="param-input">
+            <div class="checkbox-wrap">
+              <input type="checkbox" id="settings-concurrent-sessions">
+              <span>${_t("允许同一工作目录内多个会话同时运行")}</span>
+            </div>
+            <div class="param-desc">${_t("默认关闭。开启后可在同一工作目录内让多个会话并行干活（最多 3 个），适合「一个会话改代码、另一个会话写文档」等互不相干的任务。注意：多个会话同时修改同一文件会相互覆盖，重要改动前建议先确认文件没有被另一个会话占用；关闭时其它会话运行期间将拒绝新会话发送")}</div>
+          </div>
+        </div>
       </div>
 
       <!-- 模型配置 -->

@@ -50,10 +50,21 @@ function getModelReadiness() {
   return null;
 }
 
-// 停止当前会话的运行（独立「停止」按钮调用；发送按钮不再承担取消职责）
+// 同目录多会话并行的并发上限：本地模型共享同一推理实例、云端共享额度，
+// 放开会导致互相拖慢与额度挤兑，故按工作区内「正在运行的会话数」设硬上限
+var MAX_CONCURRENT_RUNS = 3;
+
+// 是否允许同一工作目录内多个会话并行运行（Agent 设置「同目录多会话并行」，默认关）。
+// 关闭时在其它会话运行期间拒绝新会话发送，避免多个会话同时改同一目录下的文件
+function allowConcurrentRuns() {
+  return S.settings.agent_concurrent_sessions === true;
+}
+
+// 停止当前会话的运行（独立「停止」按钮调用；发送按钮不再承担取消职责）。
+// 只停止当前会话：同工作区并行运行的其它会话不受影响。
 export async function cancelCurrentRun() {
   var activeRun = S.activeRun;
-  if (!S.isSending || !activeRun || activeRun.sessionId !== S.currentConvId) return;
+  if (!activeRun || activeRun.sessionId !== S.currentConvId) return;
   try {
     await api("POST", "/v1/workspaces/" + activeRun.workspaceId + "/agent/sessions/" + activeRun.sessionId + "/cancel");
   } catch (e) {
@@ -64,22 +75,15 @@ export async function cancelCurrentRun() {
   // 排队中的折叠消息，不再产生 message-created 去重替换，残留气泡需就地移除
   var foldTemps = S.messages.filter(function(m) { return m._fold; });
   foldTemps.forEach(function(m) { store.deleteMessage(activeRun.workspaceId, m.id); });
-  if (S.queuedRun) {
-    // 取消当前运行后仍有排队运行：由排队运行接管（服务端队列 FIFO，取消后即轮到它）
-    log.debug("SEND", "cancelCurrentRun: 取消当前运行，排队运行接管: " + S.queuedRun.sessionId);
-    store.promoteQueuedRun(activeRun.workspaceId);
-    startSendSafetyTimer();
-    updateSendButton();
-    renderConversationList();
-    // 上面已删除丢弃的折叠临时气泡，必须重渲染消息区，避免残留「插入中」气泡
-    renderMessages();
-    return;
-  }
-  store.cancelRun(activeRun.workspaceId);
+  // 服务端 Cancel 会一并清掉该会话排队中的轮次（admAgent Cancel → clearQueue），
+  // 本地同步注销该会话的运行与排队登记；其它会话的并行运行保持不变
+  store.cancelRun(activeRun.workspaceId, activeRun.sessionId);
   updateSendButton();
-  updateStatusBar("ready", null, S.contextUsage.used);
-  clearSendSafetyTimer();
+  // 其它会话仍在运行时保持工作态，否则切回就绪并停掉安全计时器
+  updateStatusBar(S.isSending ? "busy" : "ready", null, S.contextUsage.used);
+  if (!S.isSending) clearSendSafetyTimer();
   renderMessages();
+  renderConversationList();
 }
 
 /** 发送输入框内容（发送按钮 / Enter 触发） */
@@ -112,11 +116,11 @@ async function sendText(overrideText, filesOverride, expectedTarget) {
     log.debug("SEND", "sendText: 目标会话/工作区已变化，放弃程序化发送");
     return { ok: false, reason: "target_changed" };
   }
-  // 当前会话「排队中」（消息已入队、等待其它会话运行完）→ 点击发送 = 取消排队；
-  // 若运行发生在其它会话（用户已切走），点击发送 = 给当前会话发新消息（服务端排队）
+  // 当前会话「排队中」（本会话已发出的轮次排在自身/前一轮之后）→ 点击发送 = 取消排队；
+  // 若当前会话并未排队，点击发送 = 正常发新消息（同目录多会话并行时直接并行开跑）
   var isCurrentQueued = !!(S.queuedRun && S.queuedRun.sessionId === S.currentConvId);
   if (isCurrentQueued && filesOverride == null) {
-    // 取消排队：清除当前会话已入队、尚未执行的消息；正在执行的其它会话不受影响
+    // 取消排队：清除当前会话已发出、尚未开始执行的轮次；正在执行的运行不受影响
     try {
       await api("POST", "/v1/workspaces/" + S.queuedRun.workspaceId + "/agent/sessions/" + S.queuedRun.sessionId + "/prompts/clear");
     } catch (e) {
@@ -124,10 +128,10 @@ async function sendText(overrideText, filesOverride, expectedTarget) {
       return;
     }
     var cancelWsId = S.queuedRun.workspaceId;
-    store.clearQueuedRun(cancelWsId);
-    // 若无其它运行则整体回到就绪态；若其它会话仍在执行则保持运行态
-    if (!S.activeRun) {
-      store.cancelRun(cancelWsId);
+    var cancelSessionId = S.queuedRun.sessionId;
+    store.clearQueuedRun(cancelWsId, cancelSessionId);
+    // 本工作区已无任何运行在飞时才整体回到就绪态（其它会话可能仍在并行运行）
+    if (!S.isSending) {
       clearSendSafetyTimer();
       updateStatusBar("ready", null, S.contextUsage.used);
     }
@@ -150,8 +154,6 @@ async function sendText(overrideText, filesOverride, expectedTarget) {
   // 决策模式例外：决策轮是服务端的独立单次执行（不能折叠进普通轮），因此
   // 强制走排队路径（带 run_id），会话忙时排队而不是插入。
   var decisionMode = filesOverride != null ? "text" : getActiveDecisionMode();
-  var foldIn = decisionMode === "text" && !!(S.isSending && S.activeRun && S.activeRun.sessionId === S.currentConvId);
-  if (foldIn) log.debug("SEND", "sendMessage: 当前会话运行中 → 折叠插入（无 run_id）");
   if (!S.currentConvId) {
     var input = /** @type {HTMLTextAreaElement} */ (document.getElementById("agent-input"));
     var newConvText = (overrideText != null ? String(overrideText) : (input.value || "")).trim();
@@ -159,6 +161,34 @@ async function sendText(overrideText, filesOverride, expectedTarget) {
     try { await newConversation(); } catch (_) { return; }
     if (!S.currentConvId) return;
   }
+  // 发送前固定运行身份（工作区/会话）：折叠判定、并发闸门、运行登记与停止目标
+  // 全部基于这里的快照——后续模型重载（await reloadAgentConfig）、附件落盘、PDF
+  // 转换期间用户切换会话/工作区，都不得改变本条消息的目标。折叠判定尤其必须与
+  // 目标会话取自同一时刻，否则会对着切换后的新会话发出"折叠插入"（无 run_id、
+  // 也不登记运行 → 界面看不到在跑、也无法停止）
+  var workspaceId = S.serverInfo.workspace_id;
+  var sessionId = S.currentConvId;
+  var foldIn = decisionMode === "text" && !!(S.isSending && S.activeRun && S.activeRun.sessionId === sessionId);
+  if (foldIn) log.debug("SEND", "sendMessage: 当前会话运行中 → 折叠插入（无 run_id）");
+  // 运行归属判定：同会话已在运行 → 本条（决策轮 / 分批发送等不可折叠）按会话 FIFO 排队；
+  // 其它会话在运行 → 同目录多会话并行（受设置开关与并发上限约束）。
+  // 与并发闸门紧邻判定：中间不能插入 await，否则闸门会基于过期状态放行/拒绝
+  var sameSessionRunning = !foldIn && store.hasRun(workspaceId, sessionId);
+  var otherRunning = !foldIn && !sameSessionRunning && store.isBusy(workspaceId);
+  // 并发闸门必须在附件/PDF 转换之前判定：达到上限或关闭并行时应尽早拒绝，
+  // 否则已转换好的 PDF 批次会连同剩余页一起被静默丢弃
+  if (otherRunning) {
+    if (!allowConcurrentRuns()) {
+      showWarning(_t("当前工作区已有其它会话在运行。请等它结束，或到 Agent 设置开启「同目录多会话并行」后重试"));
+      return { ok: false, reason: "concurrency_disabled" };
+    }
+    var runningNow = store.runningCount(workspaceId);
+    if (runningNow >= MAX_CONCURRENT_RUNS) {
+      showWarning(tV("同一工作目录最多同时运行 {n} 个会话（当前 {cur} 个），请等某个会话结束后再发送", { n: MAX_CONCURRENT_RUNS, cur: runningNow }));
+      return { ok: false, reason: "concurrency_limit" };
+    }
+  }
+
   var input = /** @type {HTMLTextAreaElement} */ (document.getElementById("agent-input"));
   var text = (overrideText != null ? String(overrideText) : input.value).trim();
   if (!text && S.pendingFiles.length === 0) return;
@@ -257,18 +287,12 @@ async function sendText(overrideText, filesOverride, expectedTarget) {
     });
   }
 
-  // 在发送前固定运行身份；后续切换会话/工作区不能改变超时检查和停止目标
-  var workspaceId = S.serverInfo.workspace_id;
-  var sessionId = S.currentConvId;
   // 折叠插入不带 run_id：服务端把它折叠进当前轮，不产生独立 run 生命周期
   var runId = foldIn ? null : generateRunId();
-  // 此刻工作区是否已被其它会话占用（本消息将排队等待）——用于发送成功后提示；
-  // 折叠插入复用当前运行的槽位，不进入排队/启动新 run
-  var wasBusyOther = !foldIn && store.isBusy(workspaceId) && S.activeRun && S.activeRun.sessionId !== sessionId;
-  if (wasBusyOther) {
-    store.setQueuedRun(workspaceId, sessionId, runId);
-  } else if (!foldIn) {
-    store.startRun(workspaceId, sessionId, runId);
+  // 运行登记（并发闸门已在附件/PDF 转换前判定，见上方 otherRunning）
+  if (runId) {
+    if (sameSessionRunning) store.setQueuedRun(workspaceId, sessionId, runId);
+    else store.startRun(workspaceId, sessionId, runId);
   }
   updateSendButton();
 
@@ -341,9 +365,12 @@ async function sendText(overrideText, filesOverride, expectedTarget) {
     } else {
       showInfo(_t("消息已发送，将在当前对话的下一步插入并继续处理"));
     }
-    // 排队场景提示：queuedRun 已在发送前设置（供指示器/按钮/列表标识用），此处仅提示与刷新
-    if (wasBusyOther) {
-      showInfo(_t("当前有会话正在运行，消息已排队，将在其完成后自动执行"));
+    // 并行 / 排队提示：登记已在发送前完成（见上方运行登记），此处仅提示并刷新标识
+    if (otherRunning) {
+      showInfo(tV("已在同目录并行运行（本工作区当前 {n} 个会话同时工作）。注意多个会话修改同一文件时可能相互覆盖", { n: store.runningCount(workspaceId) }));
+      renderConversationList();
+    } else if (sameSessionRunning) {
+      showInfo(_t("当前会话正在运行，本条消息已排队，将在本轮结束后自动执行"));
       renderConversationList();
     }
     startSendSafetyTimer();
@@ -361,15 +388,20 @@ async function sendText(overrideText, filesOverride, expectedTarget) {
       store.deleteMessage(workspaceId, tempId);
       renderMessages();
       showError(friendlyError(e, { prefix: "消息发送失败（未影响当前运行）: " }));
-    } else if (wasBusyOther) {
-      store.clearQueuedRun(workspaceId);
+    } else if (sameSessionRunning) {
+      // 排队登记失败：只清本会话的排队标识，本会话的活动运行与其它会话并行运行不受影响
+      store.clearQueuedRun(workspaceId, sessionId);
       updateSendButton();
       renderConversationList();
     } else {
-      store.cancelRun(workspaceId);
+      // 本会话的运行未成功发出：只注销该会话（其它会话可能仍在并行运行）
+      store.cancelRun(workspaceId, sessionId);
       updateSendButton();
-      clearSendSafetyTimer();
-      updateStatusBar("ready", null, S.contextUsage.used);
+      if (!S.isSending) {
+        clearSendSafetyTimer();
+        updateStatusBar("ready", null, S.contextUsage.used);
+      }
+      renderConversationList();
     }
     if (!foldIn) {
       store.appendMessage(workspaceId, { role: "error", content: friendlyError(e, { prefix: "发送失败: " }), type: "error" });

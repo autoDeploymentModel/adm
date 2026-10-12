@@ -92,6 +92,9 @@ export function updateSettingsUI() {
   // 开启所有工具调用（关闭 admAgent 内置 bash 命令黑名单）
   $input("settings-allow-all-tools").checked = !!S.settings.agent_allow_all_tools;
 
+  // 同目录多会话并行（默认关：开启后才允许同一工作目录内多会话并行）
+  $input("settings-concurrent-sessions").checked = S.settings.agent_concurrent_sessions === true;
+
   // 推理强度（含「关闭」= 不启用模型思考，与旧版独立的思考开关同义）
   reasoningSelect.value = reasoningSettingValue(S.settings.agent_thinking_enabled, S.settings.agent_reasoning_effort);
 
@@ -191,6 +194,7 @@ export async function saveSettings() {
     s.debug_logging = S.settings.debug_logging || false;
     s.agent_vision_model = normalizeVisionKey(S.settings.agent_vision_model) || BUILTIN_VISION_KEY;
     s.agent_allow_all_tools = S.settings.agent_allow_all_tools === true;
+    s.agent_concurrent_sessions = S.settings.agent_concurrent_sessions === true;
     await invoke("save_settings", { settings: s });
     updateWorkspaceSelector();
   } catch (e) {

@@ -11,6 +11,11 @@
 // 原地修改会直接抛 TypeError 而非静默污染）。runStats / activeRun / queuedRun
 // 例外：collectRunStats 需要原地累计 runStats，ui.js 用 === 比较 activeRun 的
 // 对象同一性，这三个字段保持内部引用共享，仅 store 内部与 sse.js 可操作。
+//
+// 运行态按会话登记（同目录多会话并行）：runs 为「正在运行的会话」、queued 为
+// 「同一会话已发出但服务端尚未开始执行的轮次」。activeRun / queuedRun 是
+// currentConvId 对应的派生视图（沿用旧语义：都指"当前打开会话的运行"），
+// isSending 表示「本工作区有任一运行在飞」，runs 列表供会话列表/状态栏标识用。
 
 // 临时消息内容匹配工具（utils.js 无任何导入，不存在循环依赖）
 import { stripSystemInfoText, getTextFromParts } from "./utils.js";
@@ -40,11 +45,46 @@ class WorkspaceState {
     this.activeRun = null;
     this.queuedRun = null;
     this.runStats = null;
+    // 运行登记表：runs = 正在运行的会话（sessionId → run）；
+    // queued = 同一会话已发出、服务端按会话 FIFO 排队中的轮次（sessionId → run[]，先进先出）
+    this.runs = new Map();
+    this.queued = new Map();
+    // 每会话的本轮统计（假完成检测/决策轮校验用），S.runStats 暴露当前会话那份
+    this.runStatsBySession = new Map();
     this.contextUsage = { used: 0, max: 0, estimated: false };
     this.agentInfo = null;
   }
 
+  // 派生视图同步：activeRun / queuedRun / runStats / isSending 一律由登记表算出，
+  // 切换会话（currentConvId 变化）与登记/注销运行时都必须调用
+  syncDerived() {
+    this.activeRun = this.currentConvId ? (this.runs.get(this.currentConvId) || null) : null;
+    var q = this.currentConvId ? this.queued.get(this.currentConvId) : null;
+    this.queuedRun = (q && q.length > 0) ? q[0] : null;
+    this.runStats = this.currentConvId ? (this.runStatsBySession.get(this.currentConvId) || null) : null;
+    // 「有运行在飞」含排队轮次：排队消息已发出，界面仍须保持工作态
+    this.isSending = this.runs.size > 0 || this.queued.size > 0;
+  }
+
+  // 全部运行（含排队）的只读列表，供会话列表 / 状态栏标识
+  runsList() {
+    var out = [];
+    this.runs.forEach(function(run) { out.push({ workspaceId: run.workspaceId, sessionId: run.sessionId, runId: run.runId, queued: false }); });
+    this.queued.forEach(function(list) {
+      (list || []).forEach(function(run) { out.push({ workspaceId: run.workspaceId, sessionId: run.sessionId, runId: run.runId, queued: true }); });
+    });
+    return out;
+  }
+
+  // 各会话本轮统计的列表快照（切回工作区时按会话恢复，不能只剩当前会话那份）
+  runStatsList() {
+    var out = [];
+    this.runStatsBySession.forEach(function(stats) { out.push(Object.assign({}, stats)); });
+    return out;
+  }
+
   snapshot() {
+    this.syncDerived();
     return {
       // 只读字段：浅拷贝 + 冻结（外部原地修改会抛 TypeError）
       conversations: _frozen(this.conversations),
@@ -56,6 +96,8 @@ class WorkspaceState {
       activeRun: this.activeRun ? Object.assign({}, this.activeRun) : null,
       queuedRun: this.queuedRun ? Object.assign({}, this.queuedRun) : null,
       runStats: this.runStats ? Object.assign({}, this.runStats) : null,
+      runs: this.runsList(),
+      runStatsAll: this.runStatsList(),
       contextUsage: _frozenObj(this.contextUsage),
       agentInfo: this.agentInfo ? _frozenObj(this.agentInfo) : null,
     };
@@ -73,8 +115,24 @@ class WorkspaceState {
     this.activeRun = snap.activeRun ? Object.assign({}, snap.activeRun) : null;
     this.queuedRun = snap.queuedRun ? Object.assign({}, snap.queuedRun) : null;
     this.runStats = snap.runStats ? Object.assign({}, snap.runStats) : null;
+    // 运行登记表按快照重建（切回工作区后运行仍在服务端继续，登记必须恢复）；
+    // 排队轮次快照按顺序列出，重建时按会话维持原顺序（先进先出）
+    this.runs = new Map();
+    this.queued = new Map();
+    (snap.runs || []).forEach(function(run) {
+      if (!run || !run.sessionId) return;
+      if (!run.queued) { this.runs.set(run.sessionId, Object.assign({}, run)); return; }
+      var list = this.queued.get(run.sessionId) || [];
+      list.push(Object.assign({}, run));
+      this.queued.set(run.sessionId, list);
+    }, this);
+    this.runStatsBySession = new Map();
+    (snap.runStatsAll || []).forEach(function(stats) {
+      if (stats && stats.sessionId) this.runStatsBySession.set(stats.sessionId, Object.assign({}, stats));
+    }, this);
     this.contextUsage = snap.contextUsage ? Object.assign({}, snap.contextUsage) : { used: 0, max: 0, estimated: false };
     this.agentInfo = snap.agentInfo ? Object.assign({}, snap.agentInfo) : null;
+    this.syncDerived();
   }
 }
 
@@ -106,6 +164,8 @@ class Store {
   bindToS() {
     var ws = this.getActiveWs();
     if (!ws) return;
+    // activeRun / queuedRun / runStats 由 currentConvId 派生，切会话后必须重算
+    ws.syncDerived();
     // 只读字段：浅拷贝 + 冻结（外部原地修改会抛 TypeError）
     S.conversations = _frozen(ws.conversations);
     S.currentConvId = ws.currentConvId;
@@ -116,12 +176,21 @@ class Store {
     S.activeRun = ws.activeRun;
     S.queuedRun = ws.queuedRun;
     S.runStats = ws.runStats;
+    S.runs = _frozen(ws.runsList());
     S.contextUsage = _frozenObj(ws.contextUsage);
     S.agentInfo = ws.agentInfo ? _frozenObj(ws.agentInfo) : null;
     S.workspaces = this.workspacesObj;
     S.activeWsId = this.activeWsId;
     if (S.serverInfo) S.serverInfo.workspace_id = this.activeWsId;
     this.syncAgentBusy();
+  }
+
+  // 运行态变更后的统一发布：重算派生视图 + 快照 + 全局忙碌位 + 绑定只读视图
+  _publishRuns(wsId, ws) {
+    ws.syncDerived();
+    this.workspacesObj[wsId] = ws.snapshot();
+    this.syncAgentBusy();
+    if (wsId === this.activeWsId) this.bindToS();
   }
 
   setActive(wsId) {
@@ -283,7 +352,7 @@ class Store {
     if (wsId === this.activeWsId) this.bindToS();
   }
 
-  // ===== 运行状态 =====
+  // ===== 运行状态（按会话登记） =====
   // 同步「agent 是否正在工作」到共享状态，供壳层（index.html）导航拦截使用。
   // 语义：任一 workspace 正在运行即视为工作中——sse.js 对后台 workspace 事件也
   // 会调 completeRun/startRun，若只按单个 ws 判断，后台 run 结束会错误清除
@@ -298,10 +367,13 @@ class Store {
     } catch (_) {}
   }
 
+  // 登记会话运行开始（同目录多会话并行：允许同一工作区多个会话各有一条活动运行）
   startRun(wsId, sessionId, runId) {
     var ws = this.workspaces.get(wsId);
     if (!ws) return;
     _log("debug", "STORE", "startRun ws=" + wsId.slice(0, 8) + " session=" + (sessionId || "").slice(0, 8) + " run=" + runId);
+    ws.queued.delete(sessionId);
+    ws.runs.set(sessionId, { workspaceId: wsId, sessionId: sessionId, runId: runId });
     // 新一轮 run 开始 → 清掉当前会话上一轮的本地错误气泡（_error），让错误信息
     // 只挂在"出错的轮次"，新轮次干净，避免同会话内历史错误持续挂载让人误以为"还在报"。
     // 折叠插入不走 startRun、不进此分支，不影响；多 tab 场景按 _sessionId 限定只清当前会话
@@ -316,70 +388,99 @@ class Store {
     if (removed > 0) {
       _log("debug", "STORE", "startRun 清掉 " + removed + " 条旧错误气泡 session=" + (sessionId || "").slice(0, 8));
     }
-    ws.isSending = true;
-    ws.activeRun = { workspaceId: wsId, sessionId: sessionId, runId: runId };
-    ws.queuedRun = null;
-    this.syncAgentBusy();
-    this.workspacesObj[wsId] = ws.snapshot();
-    if (wsId === this.activeWsId) this.bindToS();
+    // 本轮统计由调用方紧随其后 setRunStats 覆盖，这里先清掉该会话的上一轮
+    ws.runStatsBySession.delete(sessionId);
+    this._publishRuns(wsId, ws);
   }
 
+  // 登记会话排队轮次：同一会话已有活动运行时又发出一条（如决策轮、分批发送），
+  // 消息已发出、服务端按会话 FIFO 排在本轮之后；多条时构成先进先出队列
   setQueuedRun(wsId, sessionId, runId) {
     var ws = this.workspaces.get(wsId);
     if (!ws) return;
-    ws.queuedRun = { workspaceId: wsId, sessionId: sessionId, runId: runId };
-    this.workspacesObj[wsId] = ws.snapshot();
-    if (wsId === this.activeWsId) this.bindToS();
+    var list = ws.queued.get(sessionId) || [];
+    list.push({ workspaceId: wsId, sessionId: sessionId, runId: runId });
+    ws.queued.set(sessionId, list);
+    this._publishRuns(wsId, ws);
   }
 
-  // 排队运行接管：取消当前运行后排队中的运行立即开始
-  promoteQueuedRun(wsId) {
+  // 排队轮次接管：服务端开始了该会话排队的下一轮（开始产出消息/前一轮已收尾）
+  promoteQueuedRun(wsId, sessionId) {
     var ws = this.workspaces.get(wsId);
-    if (!ws || !ws.queuedRun) return;
-    ws.activeRun = ws.queuedRun;
-    ws.queuedRun = null;
-    this.workspacesObj[wsId] = ws.snapshot();
-    if (wsId === this.activeWsId) this.bindToS();
+    if (!ws) return false;
+    var list = ws.queued.get(sessionId);
+    if (!list || list.length === 0) return false;
+    var next = list.shift();
+    if (list.length === 0) ws.queued.delete(sessionId);
+    else ws.queued.set(sessionId, list);
+    ws.runs.set(sessionId, next);
+    this._publishRuns(wsId, ws);
+    return true;
   }
 
-  completeRun(wsId) {
+  // 运行收尾：注销该会话的活动运行；若其排队的下一轮存在则就地接管。
+  // 返回 { tookOver, ignored }：tookOver=true 表示本会话仍有轮次在飞（UI 保持工作态）；
+  // ignored=true 表示该事件是「迟到的旧运行完成」（同会话已开始新一轮，run_id 不匹配），
+  // 未做任何变更——调用方必须跳过界面收尾，否则会把新运行的状态一起清掉。
+  // 只影响传入的会话——同工作区其它会话的并行运行不受影响。
+  completeRun(wsId, sessionId, runId) {
     var ws = this.workspaces.get(wsId);
-    if (!ws) return;
-    if (ws.queuedRun) {
-      _log("debug", "STORE", "completeRun ws=" + wsId.slice(0, 8) + " → 排队运行接管");
-      ws.activeRun = ws.queuedRun;
-      ws.queuedRun = null;
+    if (!ws) return { tookOver: false };
+    var tookOver = false;
+    if (sessionId) {
+      var cur = ws.runs.get(sessionId);
+      if (runId && cur && cur.runId && cur.runId !== runId) {
+        _log("debug", "STORE", "completeRun 忽略迟到事件 session=" + sessionId.slice(0, 8) + " run=" + runId);
+        return { tookOver: false, ignored: true };
+      }
+      ws.runs.delete(sessionId);
+      var qlist = ws.queued.get(sessionId);
+      if (qlist && qlist.length > 0) {
+        _log("debug", "STORE", "completeRun ws=" + wsId.slice(0, 8) + " session=" + sessionId.slice(0, 8) + " → 排队轮次接管");
+        var next = qlist.shift();
+        if (qlist.length === 0) ws.queued.delete(sessionId);
+        else ws.queued.set(sessionId, qlist);
+        ws.runs.set(sessionId, next);
+        tookOver = true;
+      } else {
+        _log("debug", "STORE", "completeRun ws=" + wsId.slice(0, 8) + " session=" + sessionId.slice(0, 8) + " → 该会话收尾");
+        ws.runStatsBySession.delete(sessionId);
+      }
     } else {
-      _log("debug", "STORE", "completeRun ws=" + wsId.slice(0, 8) + " → isSending=false");
-      ws.isSending = false;
-      ws.activeRun = null;
-      // 非接管：清理 runStats。后台 ws 没有 sse.js 清理逻辑，必须在此清理避免残留
-      ws.runStats = null;
+      // 老服务端事件缺 session_id：无法定位会话，整体收尾（与旧版单运行行为一致）
+      _log("warn", "STORE", "completeRun ws=" + wsId.slice(0, 8) + " 缺 session_id → 整体收尾");
+      ws.runs.clear();
+      ws.queued.clear();
+      ws.runStatsBySession.clear();
     }
-    this.syncAgentBusy();
-    this.workspacesObj[wsId] = ws.snapshot();
-    if (wsId === this.activeWsId) this.bindToS();
+    this._publishRuns(wsId, ws);
+    return { tookOver: tookOver };
   }
 
-  cancelRun(wsId) {
+  // 注销运行。传 sessionId = 只清该会话（停止按钮 / 安全超时，不影响并行运行的其它会话）；
+  // 不传 = 清空整个工作区（断线重连、清除全部对话等整体重置场景）
+  cancelRun(wsId, sessionId) {
     var ws = this.workspaces.get(wsId);
     if (!ws) return;
-    _log("warn", "STORE", "cancelRun ws=" + wsId.slice(0, 8));
-    ws.isSending = false;
-    ws.activeRun = null;
-    ws.queuedRun = null;
-    ws.runStats = null;
-    this.syncAgentBusy();
-    this.workspacesObj[wsId] = ws.snapshot();
-    if (wsId === this.activeWsId) this.bindToS();
+    _log("warn", "STORE", "cancelRun ws=" + wsId.slice(0, 8) + (sessionId ? " session=" + sessionId.slice(0, 8) : " (全工作区)"));
+    if (sessionId) {
+      ws.runs.delete(sessionId);
+      ws.queued.delete(sessionId);
+      ws.runStatsBySession.delete(sessionId);
+    } else {
+      ws.runs.clear();
+      ws.queued.clear();
+      ws.runStatsBySession.clear();
+    }
+    this._publishRuns(wsId, ws);
   }
 
-  clearQueuedRun(wsId) {
+  clearQueuedRun(wsId, sessionId) {
     var ws = this.workspaces.get(wsId);
     if (!ws) return;
-    ws.queuedRun = null;
-    this.workspacesObj[wsId] = ws.snapshot();
-    if (wsId === this.activeWsId) this.bindToS();
+    if (sessionId) ws.queued.delete(sessionId);
+    else ws.queued.clear();
+    this._publishRuns(wsId, ws);
   }
 
   isBusy(wsId) {
@@ -387,12 +488,35 @@ class Store {
     return ws ? ws.isSending : false;
   }
 
+  // 该会话是否已有活动运行（同会话再发即为排队/折叠插入）
+  hasRun(wsId, sessionId) {
+    var ws = this.workspaces.get(wsId);
+    return !!(ws && sessionId && ws.runs.has(sessionId));
+  }
+
+  getRun(wsId, sessionId) {
+    var ws = this.workspaces.get(wsId);
+    return (ws && sessionId) ? (ws.runs.get(sessionId) || null) : null;
+  }
+
+  // 正在运行的会话数（并发上限判定；排队轮次不计入）
+  runningCount(wsId) {
+    var ws = this.workspaces.get(wsId);
+    return ws ? ws.runs.size : 0;
+  }
+
+  // isQueued 供渲染/状态判定：该会话是否有排队中的轮次
+  isQueued(wsId, sessionId) {
+    var ws = this.workspaces.get(wsId);
+    var list = (ws && sessionId) ? ws.queued.get(sessionId) : null;
+    return !!(list && list.length > 0);
+  }
+
   setRunStats(wsId, stats) {
     var ws = this.workspaces.get(wsId);
-    if (!ws) return;
-    ws.runStats = stats;
-    this.workspacesObj[wsId] = ws.snapshot();
-    if (wsId === this.activeWsId) this.bindToS();
+    if (!ws || !stats || !stats.sessionId) return;
+    ws.runStatsBySession.set(stats.sessionId, stats);
+    this._publishRuns(wsId, ws);
   }
 
   // ===== Session 事件（后台 workspace 也需要更新状态池） =====
@@ -478,8 +602,9 @@ class Store {
           _log("debug", "STORE", "handleSSEEvent 跳过子 Agent run_complete session=" + rcSession.slice(0, 20) + "...");
           break;
         }
-        this.completeRun(wsId);
-        break;
+        // 只注销该会话的运行：同工作区其它会话的并行运行不受影响（见文件头运行登记说明）。
+        // 传 run_id 以便识别「迟到的旧运行完成事件」，避免误清该会话的新一轮运行
+        return this.completeRun(wsId, rcSession, actualData.run_id || "");
     }
   }
 }
@@ -498,6 +623,8 @@ export const S = {
   activeRun: null,
   queuedRun: null,
   runStats: null,
+  // 本工作区全部运行（含排队轮次）的只读快照：[{workspaceId, sessionId, runId, queued}]
+  runs: Object.freeze([]),
   contextUsage: Object.freeze({ used: 0, max: 0, estimated: false }),
   agentInfo: null,
   // 全局状态（直接读写，不走 workspace 隔离）

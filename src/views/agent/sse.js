@@ -87,11 +87,13 @@ function verifyDecisionRun(sessionId, mode) {
   });
 }
 
-// 只对"当前正在运行的会话"布防，且排除子 Agent（含 $$ 的复合 session_id）事件
+// 只对"当前正在运行的会话"布防，且排除子 Agent（含 $$ 的复合 session_id）事件。
+// 同工作区多会话并行时，其它会话的 agent_finished 不得解除当前会话已布防的兜底，
+// 因此"是否属于当前运行"的判断必须放在 clearRunCompleteFallback 之前。
 function armRunCompleteFallback(wsId, sessionId, runId) {
-  clearRunCompleteFallback();
   if (!sessionId || sessionId.indexOf("$$") !== -1) return;
   if (!S.isSending || !S.activeRun || S.activeRun.sessionId !== sessionId) return;
+  clearRunCompleteFallback();
   runCompleteFallbackTries = 0;
   log.debug("SSE", "run_complete 兜底布防 session=" + sessionId.slice(0, 8));
   scheduleRunCompleteFallbackCheck(wsId, sessionId, runId);
@@ -108,11 +110,10 @@ function scheduleRunCompleteFallbackCheck(wsId, sessionId, runId) {
     }
     runCompleteFallbackTries++;
     try {
-      // 会话不忙且工作区不忙（后者兜底排队场景）才认定为真正结束
+      // 只看本会话是否仍忙：同工作区其它会话的并行运行与本会话的收尾无关，
+      // 不能像旧版那样用工作区级 is_busy 判定（会无限续期）
       var sess = await api("GET", "/v1/workspaces/" + wsId + "/sessions/" + sessionId);
       if (sess && sess.is_busy) { scheduleRunCompleteFallbackCheck(wsId, sessionId, runId); return; }
-      var agentInfo = await api("GET", "/v1/workspaces/" + wsId + "/agent");
-      if (agentInfo && agentInfo.is_busy) { scheduleRunCompleteFallbackCheck(wsId, sessionId, runId); return; }
     } catch (_) {
       // 查询失败不认定为空闲，稍后重试
       scheduleRunCompleteFallbackCheck(wsId, sessionId, runId);
@@ -121,11 +122,12 @@ function scheduleRunCompleteFallbackCheck(wsId, sessionId, runId) {
     if (!S.isSending || !S.activeRun || S.activeRun.sessionId !== sessionId) return;
     log.warn("SSE", "run_complete 未到达且服务端已空闲，兜底收尾 session=" + sessionId + " run=" + (runId || ""));
     var fallbackDecisionMode = S.runStats && S.runStats.sessionId === sessionId ? S.runStats.decisionMode : null;
-    store.completeRun(wsId);
+    store.completeRun(wsId, sessionId);
     // run_complete 丢失的兜底收尾同样要推进 PDF 批次泵（见 pdf_batch.js）
     reconcilePdfBatching();
     updateSendButton();
-    updateStatusBar("ready", null, S.contextUsage.used);
+    // 其它会话可能仍在并行运行，只有全部结束才切回就绪
+    if (!S.isSending) updateStatusBar("ready", null, S.contextUsage.used);
     loadConversations();
     if (S.currentConvId === sessionId) verifyDecisionRun(sessionId, fallbackDecisionMode);
     else refreshMessages();
@@ -194,14 +196,13 @@ function onSSEEventReceived(event) {
   // 非当前 tab 的事件更新对应 workspace 状态池
   // 当前 tab 的事件数据已在 store 更新，下方 handleSSEEvent 只做 UI 副作用
   //
-  // store.handleSSEEvent 可能已执行 queued 接管（completeRun 把 activeRun
-  // 切到排队运行），handleSSEEvent 里的 mismatch 判定和 tookOverQueued 检测
-  // 都需要用 store 处理前的状态，否则会误杀前序运行
-  var prevActiveRun = S.activeRun;
-  var prevQueuedRun = S.queuedRun;
+  // store.handleSSEEvent 会注销/接管运行登记（run_complete → completeRun），
+  // 因此必须在处理前快照状态：UI 收尾判定要用"处理前"的登记，否则会把刚完成的
+  // 运行误判为不存在，或把并行运行的其它会话误判为当前会话
   var prevRunStats = S.runStats;
   var prevCurrentConvId = S.currentConvId;
-  store.handleSSEEvent(eventWsId, payload);
+  var prevRuns = (S.runs || []).slice();
+  var storeRes = store.handleSSEEvent(eventWsId, payload);
 
   // 后台 workspace 运行出错时通知用户（active workspace 的错误由下方 handleSSEEvent 处理）
   if (eventWsId !== S.activeWsId) {
@@ -214,7 +215,12 @@ function onSSEEventReceived(event) {
 
   // 当前 tab 的事件继续走原有 UI 处理逻辑
   if (eventWsId === S.activeWsId) {
-    handleSSEEvent(payload, { prevActiveRun: prevActiveRun, prevQueuedRun: prevQueuedRun, prevRunStats: prevRunStats, prevCurrentConvId: prevCurrentConvId });
+    handleSSEEvent(payload, {
+      prevRunStats: prevRunStats,
+      prevCurrentConvId: prevCurrentConvId,
+      prevRuns: prevRuns,
+      storeRes: storeRes,
+    });
   }
 }
 
@@ -393,11 +399,12 @@ function onMessageSSEEvent(ev) {
   if (S.isSending && S.activeRun && (!actualData.session_id || actualData.session_id === S.activeRun.sessionId)) {
     startSendSafetyTimer();
   }
-  // 排队结束信号：排队中的会话开始产出消息 → 已从「排队中」转入「运行中」，
-  // 清除排队标识并接管 activeRun（前序运行的 run_complete 可能晚到，不能因此误清状态）
+  // 排队结束信号：本会话排队中的轮次开始产出消息 → 已从「排队中」转入「运行中」，
+  // 清除排队标识并接管为本会话的活动运行（前一轮的 run_complete 可能晚到，
+  // 有 run_id 匹配校验兜底，不会因此误清状态）
   if (S.queuedRun && actualData.session_id && actualData.session_id === S.queuedRun.sessionId) {
-    console.log("[agent] 排队会话开始产出，接管运行:", actualData.session_id);
-    store.promoteQueuedRun(S.queuedRun.workspaceId);
+    console.log("[agent] 排队轮次开始产出，接管运行:", actualData.session_id);
+    store.promoteQueuedRun(S.queuedRun.workspaceId, S.queuedRun.sessionId);
     renderConversationList();
   }
   // 未打开任何会话时，后台会话（如微信 Bot）来消息 → 自动打开该会话实时跟踪
@@ -424,24 +431,48 @@ function onSessionSSEEvent(ev, ctx) {
 function onRunCompleteSSEEvent(ev, ctx) {
   var actualData = ev.actualData;
   if (isChildAgentRunComplete(actualData)) return;
-  // 非子 Agent 的 run_complete 到达：解除丢失兜底（下面逻辑照常收尾）。
+  // 本次完成的是哪个会话的运行：store 处理时已注销登记，必须用处理前的快照判定。
+  // 同工作区多会话并行下，这里决定了是「本会话收尾」还是「其它会话收尾」。
+  var completedRun = findCompletedRun(ctx, actualData);
+  var sid = (completedRun && completedRun.sessionId) || actualData.session_id || "";
+  var belongsToCurrent = completedRun
+    ? completedRun.sessionId === S.currentConvId
+    : (!sid || sid === S.currentConvId);
+  // 迟到的旧运行完成事件（同会话已开始新一轮，run_id 不匹配）：store 已拒绝注销，
+  // 此处同样不得收尾界面态，否则会把新运行的状态一起清掉
+  if (ctx.storeRes && ctx.storeRes.ignored) {
+    console.log("[agent] 忽略迟到的 run_complete:", actualData.run_id || sid);
+    return;
+  }
+  // 非子 Agent 的当前会话 run_complete 到达：解除丢失兜底。
   // 注意必须放在 $$ 判断之后：子 Agent 完成事件可能晚于父 agent_finished 到达，
   // 若提前解除，父运行的布防会被误清，本轮完成事件丢失时将失去兜底。
-  clearRunCompleteFallback();
-  if (isStaleRunComplete(actualData, ctx)) return;
-  var tookOverQueued = false;
-  if (ctx.prevQueuedRun) {
-    // store.completeRun 已完成排队接管（activeRun 已切换、queuedRun 已清空），
-    // 此处仅跟踪标志供后续 UI 逻辑使用，不重复 mutate 状态
-    console.log("[agent] 前序运行完成，排队运行接管:", ctx.prevQueuedRun.sessionId);
-    tookOverQueued = true;
-    // 接管后运行即将开始（服务端队列 FIFO），重启安全计时器保护新运行
-    startSendSafetyTimer();
-  } else {
-    // 非接管：状态收尾已在 store.handleSSEEvent → completeRun 完成（isSending/activeRun/runStats），
-    // 此处只处理 UI 副作用
-    clearSendSafetyTimer();
+  if (belongsToCurrent) clearRunCompleteFallback();
+  if (!belongsToCurrent) {
+    // 其它会话（并行运行 / 微信 Bot 会话）完成：只刷新本工作区的列表与运行标识，
+    // 当前会话的运行态/安全计时器/决策轮校验一概不动
+    console.log("[agent] 其它会话运行完成，仅刷新列表: session=" + (sid || "").slice(0, 8));
+    onPdfBatchRunComplete(sid, classifyRunComplete(actualData, false).kind, actualData.run_id || "", false);
+    renderConversationList();
+    loadConversations();
+    updateSendButton();
+    // 本工作区已无任何运行在飞时才切回就绪
+    if (!S.isSending) {
+      clearSendSafetyTimer();
+      updateStatusBar("ready", null, S.contextUsage.used);
+    }
+    maybeReloadPendingModel();
+    return;
   }
+  // 队列接管：store.completeRun 已把该会话排队的下一轮提升为活动运行
+  var tookOverQueued = !!(ctx.storeRes && ctx.storeRes.tookOver);
+  if (tookOverQueued) {
+    console.log("[agent] 本轮完成，同会话排队轮次接管: " + sid);
+  }
+  // 接管后该会话仍在运行（服务端队列 FIFO），重启安全计时器保护新运行；
+  // 非接管：本会话运行已结束，停掉安全计时器（它只服务当前会话的运行）
+  if (tookOverQueued) startSendSafetyTimer();
+  else clearSendSafetyTimer();
   updateSendButton();
   console.log("[agent] run_complete 收尾发送态: run_id=" + (actualData.run_id || "") + " session=" + (actualData.session_id || "") + " error=" + getErrorMessage(actualData.error) + " cancelled=" + !!actualData.cancelled);
   // 本轮运行出错/被取消时明确提示（error 非空表示运行出错），
@@ -452,17 +483,17 @@ function onRunCompleteSSEEvent(ev, ctx) {
   var action = classifyRunComplete(actualData, tookOverQueued);
   // PDF 分批发送：本会话批次运行结束后自动转换并发送下一批
   // （出错/取消/步数触顶/切会话会终止剩余批次，见 pdf_batch.js）
-  onPdfBatchRunComplete(actualData.session_id || "", action.kind, actualData.run_id || "", tookOverQueued);
+  onPdfBatchRunComplete(sid, action.kind, actualData.run_id || "", tookOverQueued);
   if (action.kind === "step_cap") {
     // 步数触顶：模型仍在干活但本轮 256 步预算耗尽，不是故障。弹决策卡让用户查看或手动续跑
-    updateStatusBar("ready", null, S.contextUsage.used);
-    showStepCapDialog(actualData.session_id);
+    setReadyIfIdle();
+    showStepCapDialog(sid);
   } else if (action.kind === "cancelled") {
     // 服务端取消时会把 context.Canceled 错误放进 error 字段（error="context canceled" cancelled=true），
     // 不能当成运行失败：按用户主动取消走「本轮对话已取消」分支，避免误标"中断"
     showError(_t("本轮对话已取消"));
     // 取消后状态栏切回就绪（排队接管时新运行即将开始，保持 busy 由 run_start 接管）
-    if (action.status === "ready") updateStatusBar("ready", null, S.contextUsage.used);
+    if (action.status === "ready") setReadyIfIdle();
   } else if (action.kind === "error") {
     var ctxHint = (S.contextUsage.max > 0 && S.contextUsage.used >= S.contextUsage.max * 0.9)
       ? _t("（上下文已接近上限 ") + S.contextUsage.used + "/" + S.contextUsage.max + _t("，建议新建会话继续）") : "";
@@ -480,27 +511,61 @@ function onRunCompleteSSEEvent(ev, ctx) {
   } else if (action.status === "ready") {
     // 排队接管时仍有运行在队列中，状态栏保持运行中，不切回就绪；
     // empty_output 分支上面已置 error 态（模型未产生有效输出），此处不得覆盖
-    updateStatusBar("ready", null, S.contextUsage.used);
+    setReadyIfIdle();
   }
-  // 若切换模型时会话繁忙导致 /agent/update 未生效，本轮结束后立即重试重载
-  if (S.pendingModelReload) {
-    S.pendingModelReload = false;
-    reloadAgentConfig()
-      .then(function() { refreshAgentInfo(); })
-      .catch(function() { S.pendingModelReload = true; });
-  } else {
-    // 运行完成后刷新 Agent 信息（模型可能已变更）并更新模型按钮显示（带序号防旧响应覆盖）
-    refreshAgentInfo();
-  }
+  maybeReloadPendingModel();
   // 运行完成后刷新会话列表和消息
   loadConversations();
   if (S.currentConvId) {
     var completedStats = ctx.prevRunStats;
-    var completedDecisionSession = actualData.session_id || (completedStats && completedStats.sessionId) || "";
+    var completedDecisionSession = sid || (completedStats && completedStats.sessionId) || "";
     var completedDecisionMode = completedStats && completedStats.sessionId === completedDecisionSession ? completedStats.decisionMode : null;
     if (action.kind === "ok") verifyDecisionRun(completedDecisionSession, completedDecisionMode);
     else refreshMessages();
   }
+}
+
+// 本工作区已无运行在飞时才把状态栏切回就绪：同工作区多会话并行时，
+// 单个会话收尾不代表整个工作区空闲（否则状态栏会误显示就绪）
+function setReadyIfIdle() {
+  if (!S.isSending) updateStatusBar("ready", null, S.contextUsage.used);
+}
+
+// 切换模型时会话繁忙导致 /agent/update 未生效时置位 pendingModelReload：
+// 必须等工作区彻底空闲（并行运行的其它会话也都结束）再重试，否则重载依旧会被拒；
+// 工作区仍忙时保留标志，由后续 run_complete 再次调用本函数处理
+function maybeReloadPendingModel() {
+  if (S.pendingModelReload && !S.isSending) {
+    S.pendingModelReload = false;
+    reloadAgentConfig()
+      .then(function() { refreshAgentInfo(); })
+      .catch(function() { S.pendingModelReload = true; });
+    return;
+  }
+  // 运行完成后刷新 Agent 信息（模型可能已变更）并更新模型按钮显示（带序号防旧响应覆盖）
+  refreshAgentInfo();
+}
+
+// 定位 run_complete 对应的运行登记：ctx.prevRuns 是 store 处理前的本工作区登记快照。
+// 先按 session_id 匹配（服务端始终携带），再按 run_id 兜底（会话删改等异常场景）
+function findCompletedRun(ctx, actualData) {
+  var prev = (ctx && ctx.prevRuns) || [];
+  var sid = actualData.session_id || "";
+  var i;
+  if (sid) {
+    for (i = 0; i < prev.length; i++) {
+      if (prev[i].sessionId === sid && !prev[i].queued) return prev[i];
+    }
+    for (i = 0; i < prev.length; i++) {
+      if (prev[i].sessionId === sid) return prev[i];
+    }
+  }
+  if (actualData.run_id) {
+    for (i = 0; i < prev.length; i++) {
+      if (prev[i].runId === actualData.run_id) return prev[i];
+    }
+  }
+  return null;
 }
 
 // 本地模型上下文窗口低于该值时，empty_output 大概率是"请求装不下"而非"思考吃光输出"：
@@ -551,21 +616,6 @@ function classifyRunComplete(actualData, tookOverQueued) {
 function isChildAgentRunComplete(actualData) {
   if (typeof actualData.session_id === "string" && actualData.session_id.indexOf("$$") !== -1) {
     console.log("[agent] 忽略子 Agent 的 run_complete:", actualData.session_id);
-    return true;
-  }
-  return false;
-}
-
-function isStaleRunComplete(actualData, ctx) {
-  // SSE 是 workspace 级事件流；只让当前运行自己的完成事件收尾发送态，
-  // 避免同 workspace 其它会话/排队任务的 run_complete 提前结束当前运行。
-  // 用 store 处理前的 activeRun 做判定：store.completeRun 可能已把
-  // activeRun 切到排队运行，此时用 S.activeRun 会误判前序运行的完成事件为"非当前运行"
-  var checkRun = ctx.prevActiveRun || S.activeRun;
-  if (!checkRun) return false;
-  if ((actualData.run_id && actualData.run_id !== checkRun.runId) ||
-    (!actualData.run_id && actualData.session_id && actualData.session_id !== checkRun.sessionId)) {
-    console.log("[agent] 忽略非当前运行的 run_complete:", actualData.run_id || actualData.session_id);
     return true;
   }
   return false;

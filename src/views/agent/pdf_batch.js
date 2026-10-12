@@ -9,7 +9,7 @@
 //   因此批大小必须 ≤5（视觉主模型无此限制，按 token 预算取 10）；
 // - 计划状态保存在本模块：出错/取消/切会话/手动停止都会终止剩余批次。
 import { t as _t, tV } from "../../i18n.js";
-import { S } from "./store.js";
+import { S, store } from "./store.js";
 import { api } from "./api.js";
 import { showChoice, showError, showInfo, showNotice, showWarning } from "./ui.js";
 import { friendlyError } from "./error.js";
@@ -281,7 +281,10 @@ export async function reconcilePdfBatching() {
       abort(_t("已切换会话，PDF 剩余批次已停止"));
       return;
     }
-    if (state.expectedRunId && S.isSending && S.activeRun && S.activeRun.runId === state.expectedRunId) return;
+    // 本会话批次的运行仍登记在册（SSE 事件重订后会到达并推进）→ 等待；
+    // 按会话登记判定：同工作区其它会话的并行运行不得误判为本批次仍在跑
+    var batchRun = store.getRun(state.workspaceId, state.sessionId);
+    if (state.expectedRunId && batchRun && batchRun.runId === state.expectedRunId) return;
     if (!state.workspaceId) {
       pumpNext();
       return;
@@ -289,8 +292,6 @@ export async function reconcilePdfBatching() {
     try {
       var sess = await api("GET", "/v1/workspaces/" + state.workspaceId + "/sessions/" + state.sessionId);
       if (sess && sess.is_busy) return;
-      var info = await api("GET", "/v1/workspaces/" + state.workspaceId + "/agent");
-      if (info && info.is_busy) return;
     } catch (e) {
       return; // 查询失败保持现状，等下一次对账或 run_complete
     }

@@ -1,5 +1,5 @@
 // 通用 UI：状态栏 / 上下文用量 / 错误与确认弹窗 / 滚动模式 / 安全超时 / 右键菜单
-import { t as _t } from "../../i18n.js";
+import { t as _t, tV } from "../../i18n.js";
 import { S, store } from "./store.js";
 import { api } from "./api.js";
 import { formatTokens, isMsgAreaAtBottom, isFullyAtBottom } from "./utils.js";
@@ -33,35 +33,30 @@ export function updateScrollBottomBtn(rounds) {
 // ===== isSending 安全超时 =====
 // 计时器仅在收到 message 事件时刷新；本地模型处理大上下文时 prompt 阶段可能
 // 数分钟不产出任何 token（无 message 事件），不能仅凭超时就重置状态，
-// 需先向服务端确认会话是否仍在运行（is_busy），仍忙则续期计时器
+// 需先向服务端确认会话是否仍在运行（is_busy），仍忙则续期计时器。
+// 只跟踪「当前打开会话」的活动运行：同工作区并行运行的其它会话与本次收尾无关，
+// 不能用工作区级 is_busy 判定（否则本会话运行早已结束也会被无限续期）
 export function startSendSafetyTimer() {
   clearSendSafetyTimer();
   var activeRun = S.activeRun;
   if (!activeRun) return;
   S.sendSafetyTimer = setTimeout(async function() {
     // 只允许为同一运行创建的计时器改变状态；旧计时器不得干扰后续运行
-    if (!S.isSending || S.activeRun !== activeRun) return;
+    if (S.activeRun !== activeRun) return;
     try {
       var sess = await api("GET", "/v1/workspaces/" + activeRun.workspaceId + "/sessions/" + activeRun.sessionId);
-      if (S.isSending && S.activeRun === activeRun && sess && sess.is_busy) {
+      if (S.activeRun === activeRun && sess && sess.is_busy) {
         console.log("[agent] 安全超时检查：运行会话仍在执行，续期计时器");
         startSendSafetyTimer();
         return;
       }
-      // 排队场景：activeRun 会话自身不忙（is_busy=false）但工作区其它会话仍在执行，
-      // 本会话的 prompt 正排队等待，不能误判为超时；以工作区级 is_busy 为准续期
-      var agentInfo = await api("GET", "/v1/workspaces/" + activeRun.workspaceId + "/agent");
-      if (S.isSending && S.activeRun === activeRun && agentInfo && agentInfo.is_busy) {
-        console.log("[agent] 安全超时检查：工作区忙碌（本会话 prompt 排队中），续期计时器");
-        startSendSafetyTimer();
-        return;
-      }
     } catch (_) {}
-    if (!S.isSending || S.activeRun !== activeRun) return; // 查询期间可能已正常收尾或开始下一轮
+    if (S.activeRun !== activeRun) return; // 查询期间可能已正常收尾或开始下一轮
     console.warn("[agent] isSending 安全超时 (3min) 且运行会话已不在执行，自动重置");
-    store.cancelRun(store.activeWsId);
+    // 只注销该会话的运行：同工作区其它会话的并行运行不受影响
+    store.cancelRun(activeRun.workspaceId, activeRun.sessionId);
     updateSendButton();
-    updateStatusBar("ready", null, S.contextUsage.used);
+    if (!S.isSending) updateStatusBar("ready", null, S.contextUsage.used);
     showError(_t("运行超时，已自动重置状态"));
   }, 180000);
 }
@@ -160,10 +155,16 @@ export function updateSendButton() {
   } else {
     btn.textContent = _t("📤 发送");
     btn.classList.remove("cancel");
-    btn.title = S.isSending
-      ? _t("当前会话未在运行，消息将发送到当前会话（若工作区忙碌会排队等待）")
-      : "";
-    // 「正在思考」指示器只在 renderMessages 内按 isSending 创建/移除；
+    // 当前会话空闲但同工作区其它会话在跑：按「同目录多会话并行」开关给出不同提示
+    var others = (S.runs || []).filter(function(r) { return r.sessionId !== S.currentConvId && !r.queued; }).length;
+    if (others > 0) {
+      btn.title = S.settings.agent_concurrent_sessions === true
+        ? tV("同工作区另有 {n} 个会话在运行：本条消息将与之并行执行（同目录并行，注意多个会话改同一文件可能相互覆盖）", { n: others })
+        : _t("同工作区另有会话在运行：已关闭「同目录多会话并行」，本条消息会被拒绝，请等其结束后再发送");
+    } else {
+      btn.title = "";
+    }
+    // 「正在思考」指示器只在 renderMessages 内按运行态创建/移除；
     // 超时/取消/断线等路径重置 isSending 后不会触发重渲染，需在此同步移除，
     // 否则出现「指示器还在转但按钮已变回发送」的错位状态
     var indicator = document.getElementById("agent-working-indicator");

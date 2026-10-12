@@ -360,7 +360,9 @@ export function scrollChatToBottom(area) {
   return rounds;
 }
 
-// 「正在思考」指示器同步：运行中确保持久节点存在并置于当前活跃轮（末轮）末尾；结束则移除。
+// 「正在思考」指示器同步：当前打开会话运行中确保持久节点存在并置于当前活跃轮（末轮）末尾；
+// 结束则移除。按「本会话的运行」判定而非工作区级 isSending：同工作区其它会话并行运行时，
+// 当前会话不该显示"正在工作"（否则会出现本会话已结束、指示器仍在转）。
 // area 用于空消息兜底；lastRoundEl 为当前活跃轮（运行中的轮），指示器挂到这里。
 // 独立成函数，供 renderMessages（含空消息分支）与重新挂载对账复用，
 // 避免依赖消息列表是否为空而漏建（切到首页再切回时图标消失的根因）。
@@ -368,7 +370,7 @@ export function syncWorkingIndicator(area, lastRoundEl) {
   area = area || document.getElementById("agent-msg-area");
   if (!area) return;
   var indicator = document.getElementById("agent-working-indicator");
-  if (S.isSending) {
+  if (S.activeRun || S.queuedRun) {
     if (!indicator) {
       indicator = document.createElement("div");
       indicator.className = "msg assistant working-indicator";

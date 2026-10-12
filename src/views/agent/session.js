@@ -122,10 +122,12 @@ export function renderConversationList() {
     if (conv.id != null) item.setAttribute("data-conv-id", String(conv.id));
     var msgCount = conv.message_count || conv.messages || 0;
     var lastTime = conv.updated_at || conv.last_time || "";
-    // 运行/排队标识：以本客户端跟踪的 activeRun / queuedRun 为准（更实时），
+    // 运行/排队标识：以本工作区的运行登记为准（更实时，支持多会话并行），
     // 服务端 is_busy 快照兜底（如微信 Bot 等后台会话的运行）
-    var isActiveRun = !!(S.activeRun && S.activeRun.sessionId === conv.id);
-    var isQueuedRun = !!(S.queuedRun && S.queuedRun.sessionId === conv.id);
+    var activeRunInfo = (S.runs || []).find(function(r) { return r.sessionId === conv.id && !r.queued; });
+    var queuedRunInfo = !activeRunInfo && (S.runs || []).find(function(r) { return r.sessionId === conv.id && r.queued; });
+    var isActiveRun = !!activeRunInfo;
+    var isQueuedRun = !!queuedRunInfo;
     var isBusy = isActiveRun || isQueuedRun || conv.is_busy || conv.busy || false;
 
     var starHtml = isActive ? '<span class="conv-item-star">★</span>' : '';
@@ -230,19 +232,21 @@ async function doClearAllConversations(wsId, ids) {
       store.setCurrentConv(wsId, null);
       store.setMessages(wsId, []);
     }
-    runCleared = !!((wsState.activeRun && deleted[wsState.activeRun.sessionId]) ||
-      (wsState.queuedRun && deleted[wsState.queuedRun.sessionId]));
+    // 被删会话内的 run 服务端已取消，本地按会话注销其登记（其它并行会话不受影响）
+    var deletedIds = Object.keys(deleted);
+    runCleared = deletedIds.some(function(id) { return store.hasRun(wsId, id) || store.isQueued(wsId, id); });
     if (runCleared) {
-      store.cancelRun(wsId);
+      deletedIds.forEach(function(id) { store.cancelRun(wsId, id); });
       // 安全计时器只服务当前激活工作区的运行，清空其它工作区时不得误清
-      if (wsId === S.activeWsId) clearSendSafetyTimer();
+      if (wsId === S.activeWsId && !S.isSending) clearSendSafetyTimer();
     }
   }
 
   // 仅当仍停留在该工作区时更新界面
   if (S.serverInfo && S.serverInfo.workspace_id === wsId) {
     renderConversationList();
-    if (runCleared) updateStatusBar("ready", null, S.contextUsage.used);
+    // 本工作区已无运行在飞才切回就绪（同工作区其它会话可能仍在并行运行）
+    if (runCleared && !S.isSending) updateStatusBar("ready", null, S.contextUsage.used);
     if (!S.currentConvId) {
       resetPermissionState();
       syncWxFollowSession();
@@ -637,23 +641,29 @@ export async function selectConversation(convId) {
   // 切换后同步按钮语义（运行中→取消 / 排队中→取消排队 / 其它→发送），
   // 并提示用户当前工作区的运行状态，避免误把发送当取消
   updateSendButton();
-  var isRunningElsewhere = S.isSending && S.activeRun && S.activeRun.sessionId !== convId;
+  var otherRuns = (S.runs || []).filter(function(r) { return r.sessionId !== convId && !r.queued; });
   var isCurrentQueued = !!(S.queuedRun && S.queuedRun.sessionId === convId);
   if (isCurrentQueued) {
     var stateElQ = document.getElementById("agent-status-state");
     if (stateElQ) {
       stateElQ.innerHTML = '<span class="status-state-dot busy"></span>' + _t('排队中');
     }
-    showInfo(_t("当前会话有消息排队中，将在其它会话运行完成后自动执行"));
-  } else if (isRunningElsewhere) {
-    var runningConv = S.conversations.find(function(c) { return c.id === S.activeRun.sessionId; });
-    var runningName = runningConv ? (runningConv.title || runningConv.name || _t("其它会话")) : _t("其它会话");
+    showInfo(_t("当前会话有消息排队中，将在本轮结束后自动执行"));
+  } else if (otherRuns.length > 0) {
+    var otherNames = otherRuns.map(function(r) {
+      var conv = S.conversations.find(function(c) { return c.id === r.sessionId; });
+      return conv ? (conv.title || conv.name || _t("其它会话")) : _t("其它会话");
+    });
     updateStatusBar("busy", null, S.contextUsage.used);
     var stateEl = document.getElementById("agent-status-state");
     if (stateEl) {
-      stateEl.innerHTML = '<span class="status-state-dot busy"></span>' + escapeHtml(runningName) + " " + _t("运行中");
+      stateEl.innerHTML = '<span class="status-state-dot busy"></span>' + escapeHtml(otherNames[0]) + " " + _t("运行中");
     }
-    showInfo(_t("会话「") + runningName + _t("」正在运行，当前会话可正常发送，消息会排队等待"));
+    // 同目录多会话并行开关决定当前会话能否直接开跑，提示语必须区分，
+    // 否则关闭开关时用户会以为消息会像以前一样排队
+    showInfo(S.settings.agent_concurrent_sessions === true
+      ? _t("同工作区已有会话在运行（") + otherNames.join(_t("、")) + _t("）：当前会话可正常发送并与之并行执行")
+      : _t("会话「") + otherNames[0] + _t("」正在运行，且已关闭「同目录多会话并行」：当前会话需等其结束后才能发送"));
   }
 
   try {
