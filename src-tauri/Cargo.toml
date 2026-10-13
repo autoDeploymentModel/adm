@@ -48,6 +48,11 @@ tar = "0.4"
 rand = "0.8"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 wechatbot = "0.4"
+# 原生剪贴板文本读写：Linux（WebKitGTK）下 navigator.clipboard.readText 需宿主发放
+# WebKitClipboardPermissionRequest（Tauri/wry 未处理 → 默认拒绝），网页侧复制/粘贴会静默失效，
+# 故 linux 端必须由 Rust 直读系统剪贴板。wayland-data-control 让 Wayland 会话走
+# ext-data-control 协议（与 GTK 同一个剪贴板），不带该特性只会退化到 X11/XWayland。
+arboard = { version = "3", default-features = false, features = ["wayland-data-control"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # 读取 NSPasteboard 中的文件路径列表（对应 Windows 的 CF_HDROP）

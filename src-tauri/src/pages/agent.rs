@@ -3403,6 +3403,60 @@ pub async fn read_clipboard_files() -> Result<Vec<String>, String> {
     Ok(Vec::new())
 }
 
+// ===== 系统剪贴板文本读写（网页 API 的回退通道） =====
+// 桌面端复制/粘贴菜单原本只用 navigator.clipboard，在 Linux（WebKitGTK）上必然失败：
+// Clipboard::readText 需宿主发放 WebKitClipboardPermissionRequest（WebKitGTK 2.42 起，
+// Tauri/wry 未处理 → 默认拒绝），Promise 以 NotAllowedError 收尾；写入则要求处于用户
+// 手势内。失败被前端 catch 吞掉后表现为「右键复制/粘贴没反应」。这里提供原生实现。
+// 注意：Linux 上剪贴板内容由持有者进程按需提供，arboard 实例一析构内容即消失，
+// 必须用进程级静态实例承载，不能每次调用新建。
+static CLIPBOARD: std::sync::OnceLock<std::sync::Mutex<arboard::Clipboard>> =
+    std::sync::OnceLock::new();
+
+fn clipboard_instance() -> Result<&'static std::sync::Mutex<arboard::Clipboard>, String> {
+    if let Some(cb) = CLIPBOARD.get() {
+        return Ok(cb);
+    }
+    let cb = arboard::Clipboard::new().map_err(|e| format!("初始化系统剪贴板失败: {}", e))?;
+    // 并发首次调用可能被其它线程抢先注册：丢弃本地实例即可（内容归属先注册者）
+    let _ = CLIPBOARD.set(std::sync::Mutex::new(cb));
+    CLIPBOARD
+        .get()
+        .ok_or_else(|| "初始化系统剪贴板失败".to_string())
+}
+
+fn clipboard_read_text_blocking() -> Result<String, String> {
+    let cell = clipboard_instance()?;
+    let mut guard = cell.lock().map_err(|_| "系统剪贴板被占用".to_string())?;
+    guard
+        .get_text()
+        .map_err(|e| format!("读取剪贴板失败: {}", e))
+}
+
+fn clipboard_write_text_blocking(text: String) -> Result<(), String> {
+    let cell = clipboard_instance()?;
+    let mut guard = cell.lock().map_err(|_| "系统剪贴板被占用".to_string())?;
+    guard
+        .set_text(text)
+        .map_err(|e| format!("写入剪贴板失败: {}", e))
+}
+
+/// 读取系统剪贴板文本
+#[tauri::command]
+pub async fn clipboard_read_text() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(clipboard_read_text_blocking)
+        .await
+        .map_err(|e| format!("读取剪贴板失败: {}", e))?
+}
+
+/// 写入系统剪贴板文本
+#[tauri::command]
+pub async fn clipboard_write_text(text: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || clipboard_write_text_blocking(text))
+        .await
+        .map_err(|e| format!("写入剪贴板失败: {}", e))?
+}
+
 // ===== LSP 启动失败修复 =====
 
 struct LspFixCmd {

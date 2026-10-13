@@ -1,6 +1,6 @@
 // 通用 UI：状态栏 / 上下文用量 / 错误与确认弹窗 / 滚动模式 / 安全超时 / 右键菜单
 import { t as _t, tV } from "../../i18n.js";
-import { S, store } from "./store.js";
+import { S, store, invoke } from "./store.js";
 import { api } from "./api.js";
 import { formatTokens, isMsgAreaAtBottom, isFullyAtBottom } from "./utils.js";
 import { getErrorMessage, friendlyError } from "./error.js";
@@ -68,6 +68,67 @@ export function clearSendSafetyTimer() {
   }
 }
 
+// ===== 系统剪贴板读写（Web API → 原生命令回退） =====
+// Web 侧 navigator.clipboard 在 Linux（WebKitGTK）不可用：readText 需宿主发放
+// WebKitClipboardPermissionRequest（Tauri/wry 未处理 → 默认拒绝，Promise 以
+// NotAllowedError 收尾），writeText 也要求调用时处于用户手势内；失败被空 catch 吞掉时
+// 表现就是「右键复制/粘贴没反应」。故 Web API 失败、超时或不可用时一律回退到 Rust 命令。
+// 超时兜底不能省：WebKitGTK 上同源回读可能既不 resolve 也不 reject（origin 回读用例超时）。
+const CLIPBOARD_FALLBACK_MS = 800;
+
+/**
+ * 优先 primary（Web API），失败/超时/不可用时改用 native（Tauri 命令）。
+ * @param {() => Promise<any>|null} primary
+ * @param {() => Promise<any>} native
+ * @returns {Promise<any>}
+ */
+function clipboardWithFallback(primary, native) {
+  return new Promise(function(resolve, reject) {
+    var done = false;
+    var timer = 0;
+    var finish = function(fn, v) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      fn(v);
+    };
+    var toNative = function() {
+      clearTimeout(timer);
+      Promise.resolve().then(native).then(
+        function(v) { finish(resolve, v); },
+        function(e) { finish(reject, e); }
+      );
+    };
+    var p = null;
+    try { p = primary(); } catch (_) { p = null; }
+    if (!p || typeof p.then !== "function") { toNative(); return; }
+    p.then(function(v) { finish(resolve, v); }, function() { toNative(); });
+    timer = setTimeout(toNative, CLIPBOARD_FALLBACK_MS);
+  });
+}
+
+/** 写文本到系统剪贴板 @param {string} text @returns {Promise<any>} */
+export function clipboardWriteText(text) {
+  return clipboardWithFallback(
+    function() {
+      var c = navigator.clipboard;
+      return c && c.writeText ? c.writeText(text) : null;
+    },
+    function() { return invoke("clipboard_write_text", { text: text }); }
+  );
+}
+
+/** 读系统剪贴板文本 @returns {Promise<any>} */
+export function clipboardReadText() {
+  return clipboardWithFallback(
+    function() {
+      var c = navigator.clipboard;
+      return c && c.readText ? c.readText() : null;
+    },
+    function() { return invoke("clipboard_read_text"); }
+  );
+}
+
 // ===== 右键菜单（仅复制/粘贴） =====
 export function showCopyPasteMenu(e, targetInput) {
   e.preventDefault();
@@ -80,23 +141,22 @@ export function showCopyPasteMenu(e, targetInput) {
   menu.style.left = e.clientX + "px";
   menu.style.top = e.clientY + "px";
 
-  var hasSelection = false;
-  try { hasSelection = window.getSelection().toString().length > 0; } catch (_) {}
+  // 选区在右键时快照：点击菜单项会让文档选区折叠/失焦，届时再读 getSelection() 会是空
+  var selectedText = "";
+  try { selectedText = window.getSelection().toString(); } catch (_) {}
+  var hasSelection = selectedText.length > 0;
 
   var items = [];
   if (hasSelection) {
     items.push({ label: _t("复制"), action: function() {
-      var sel = window.getSelection();
-      if (sel && sel.toString()) {
-        navigator.clipboard.writeText(sel.toString()).catch(function() {
-          document.execCommand("copy");
-        });
-      }
+      clipboardWriteText(selectedText).catch(function(err) {
+        reportError(err, { prefix: _t("复制失败: ") });
+      });
     }});
   }
   if (targetInput) {
     items.push({ label: _t("粘贴"), action: function() {
-      navigator.clipboard.readText().then(function(text) {
+      clipboardReadText().then(function(text) {
         if (text) {
           var start = targetInput.selectionStart;
           var end = targetInput.selectionEnd;
@@ -105,7 +165,9 @@ export function showCopyPasteMenu(e, targetInput) {
           targetInput.selectionStart = targetInput.selectionEnd = start + text.length;
           targetInput.dispatchEvent(new Event("input", { bubbles: true }));
         }
-      }).catch(function() {});
+      }).catch(function(err) {
+        reportError(err, { prefix: _t("粘贴失败: ") });
+      });
     }});
   }
 

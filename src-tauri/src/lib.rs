@@ -263,6 +263,8 @@ pub fn run() {
             agent::is_directory,
             agent::save_attachment_file,
             agent::read_clipboard_files,
+            agent::clipboard_read_text,
+            agent::clipboard_write_text,
             agent::agent_lsp_fix,
             agent::agent_lsp_fix_targets,
             agent::read_project_memory,
