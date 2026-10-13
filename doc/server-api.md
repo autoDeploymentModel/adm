@@ -1348,42 +1348,6 @@ POST /v1/workspaces/{id}/permissions/grant
 
 ---
 
-### 7.4 获取 Agent 模式
-
-```
-GET /v1/workspaces/{id}/agent/mode
-```
-
-**响应** `200 OK`（`proto.AgentModeRequest`）：
-
-```json
-{
-  "plan": false
-}
-```
-
----
-
-### 7.5 设置 Agent 模式（Plan / 执行）
-
-```
-POST /v1/workspaces/{id}/agent/mode
-```
-
-设置 Agent 运行模式。`plan: true` 为 Plan（只读计划）模式：下一轮 run 起服务端只挂载只读工具（glob/grep/ls/view/lsp 只读系/sourcegraph/fetch/web_search/agent/todos/bash），其中 bash 仅允许只读命令白名单（git log/status/diff 等，拒绝链式命令）；移除全部写/执行工具与 MCP 工具，并在系统提示词追加 Plan 指令（只调研、产出实施计划）；`plan: false` 恢复完整执行模式。状态按工作区独立，中途切换对下一轮对话生效。
-
-**请求体**（`proto.AgentModeRequest`）：
-
-```json
-{
-  "plan": true
-}
-```
-
-**响应**：`200 OK`（无响应体）
-
----
-
 ## 8. 文件追踪接口
 
 ### 8.1 列出会话追踪文件
@@ -2059,36 +2023,34 @@ GUI 准备退出或升级：
 | 30 | GET | `/v1/workspaces/{id}/permissions/skip` | 获取跳过权限状态 |
 | 31 | POST | `/v1/workspaces/{id}/permissions/skip` | 设置跳过权限 |
 | 32 | POST | `/v1/workspaces/{id}/permissions/grant` | 授权权限请求 |
-| 33 | GET | `/v1/workspaces/{id}/agent/mode` | 获取 Agent 模式（Plan/执行） |
-| 34 | POST | `/v1/workspaces/{id}/agent/mode` | 设置 Agent 模式（Plan/执行） |
-| 35 | GET | `/v1/workspaces/{id}/agent` | Agent 信息 |
-| 36 | POST | `/v1/workspaces/{id}/agent` | 发送消息给 Agent |
-| 37 | POST | `/v1/workspaces/{id}/agent/init` | 初始化 Agent |
-| 38 | POST | `/v1/workspaces/{id}/agent/update` | 更新 Agent |
-| 39 | GET | `/v1/workspaces/{id}/agent/sessions/{sid}` | Agent 会话信息 |
-| 40 | POST | `/v1/workspaces/{id}/agent/sessions/{sid}/cancel` | 取消会话 |
-| 41 | GET | `/v1/workspaces/{id}/agent/sessions/{sid}/prompts/queued` | 排队状态 |
-| 42 | GET | `/v1/workspaces/{id}/agent/sessions/{sid}/prompts/list` | 排队列表 |
-| 43 | POST | `/v1/workspaces/{id}/agent/sessions/{sid}/prompts/clear` | 清除排队 |
-| 44 | POST | `/v1/workspaces/{id}/agent/sessions/{sid}/summarize` | 摘要会话 |
-| 45 | POST | `/v1/workspaces/{id}/agent/sessions/{sid}/undo` | 撤销上一轮 |
-| 46 | POST | `/v1/workspaces/{id}/agent/sessions/{sid}/shell` | 执行 Shell |
-| 47 | POST | `/v1/workspaces/{id}/config/set` | 设置配置字段 |
-| 48 | POST | `/v1/workspaces/{id}/config/remove` | 移除配置字段 |
-| 49 | POST | `/v1/workspaces/{id}/config/model` | 设置模型 |
-| 50 | POST | `/v1/workspaces/{id}/config/compact` | 设置 Compact 模式 |
-| 51 | POST | `/v1/workspaces/{id}/config/provider-key` | 设置 API Key |
-| 52 | GET | `/v1/workspaces/{id}/project/needs-init` | 检查项目初始化 |
-| 53 | POST | `/v1/workspaces/{id}/project/init` | 标记已初始化 |
-| 54 | GET | `/v1/workspaces/{id}/project/init-prompt` | 初始化提示 |
-| 55 | GET | `/v1/workspaces/{id}/skills` | Skills 列表 |
-| 56 | POST | `/v1/workspaces/{id}/skills/read` | 读取 Skill |
-| 57 | POST | `/v1/workspaces/{id}/mcp/refresh-tools` | 刷新 MCP 工具 |
-| 58 | POST | `/v1/workspaces/{id}/mcp/read-resource` | 读取 MCP 资源 |
-| 59 | POST | `/v1/workspaces/{id}/mcp/get-prompt` | 获取 MCP Prompt |
-| 60 | GET | `/v1/workspaces/{id}/mcp/states` | MCP 状态 |
-| 61 | POST | `/v1/workspaces/{id}/mcp/refresh-prompts` | 刷新 MCP Prompts |
-| 62 | POST | `/v1/workspaces/{id}/mcp/refresh-resources` | 刷新 MCP Resources |
-| 63 | POST | `/v1/workspaces/{id}/mcp/docker/enable` | 启用 Docker MCP |
-| 64 | POST | `/v1/workspaces/{id}/mcp/docker/disable` | 禁用 Docker MCP |
-| 65 | GET | `/v1/docs/` | Swagger 文档 |
+| 33 | GET | `/v1/workspaces/{id}/agent` | Agent 信息 |
+| 34 | POST | `/v1/workspaces/{id}/agent` | 发送消息给 Agent |
+| 35 | POST | `/v1/workspaces/{id}/agent/init` | 初始化 Agent |
+| 36 | POST | `/v1/workspaces/{id}/agent/update` | 更新 Agent |
+| 37 | GET | `/v1/workspaces/{id}/agent/sessions/{sid}` | Agent 会话信息 |
+| 38 | POST | `/v1/workspaces/{id}/agent/sessions/{sid}/cancel` | 取消会话 |
+| 39 | GET | `/v1/workspaces/{id}/agent/sessions/{sid}/prompts/queued` | 排队状态 |
+| 40 | GET | `/v1/workspaces/{id}/agent/sessions/{sid}/prompts/list` | 排队列表 |
+| 41 | POST | `/v1/workspaces/{id}/agent/sessions/{sid}/prompts/clear` | 清除排队 |
+| 42 | POST | `/v1/workspaces/{id}/agent/sessions/{sid}/summarize` | 摘要会话 |
+| 43 | POST | `/v1/workspaces/{id}/agent/sessions/{sid}/undo` | 撤销上一轮 |
+| 44 | POST | `/v1/workspaces/{id}/agent/sessions/{sid}/shell` | 执行 Shell |
+| 45 | POST | `/v1/workspaces/{id}/config/set` | 设置配置字段 |
+| 46 | POST | `/v1/workspaces/{id}/config/remove` | 移除配置字段 |
+| 47 | POST | `/v1/workspaces/{id}/config/model` | 设置模型 |
+| 48 | POST | `/v1/workspaces/{id}/config/compact` | 设置 Compact 模式 |
+| 49 | POST | `/v1/workspaces/{id}/config/provider-key` | 设置 API Key |
+| 50 | GET | `/v1/workspaces/{id}/project/needs-init` | 检查项目初始化 |
+| 51 | POST | `/v1/workspaces/{id}/project/init` | 标记已初始化 |
+| 52 | GET | `/v1/workspaces/{id}/project/init-prompt` | 初始化提示 |
+| 53 | GET | `/v1/workspaces/{id}/skills` | Skills 列表 |
+| 54 | POST | `/v1/workspaces/{id}/skills/read` | 读取 Skill |
+| 55 | POST | `/v1/workspaces/{id}/mcp/refresh-tools` | 刷新 MCP 工具 |
+| 56 | POST | `/v1/workspaces/{id}/mcp/read-resource` | 读取 MCP 资源 |
+| 57 | POST | `/v1/workspaces/{id}/mcp/get-prompt` | 获取 MCP Prompt |
+| 58 | GET | `/v1/workspaces/{id}/mcp/states` | MCP 状态 |
+| 59 | POST | `/v1/workspaces/{id}/mcp/refresh-prompts` | 刷新 MCP Prompts |
+| 60 | POST | `/v1/workspaces/{id}/mcp/refresh-resources` | 刷新 MCP Resources |
+| 61 | POST | `/v1/workspaces/{id}/mcp/docker/enable` | 启用 Docker MCP |
+| 62 | POST | `/v1/workspaces/{id}/mcp/docker/disable` | 禁用 Docker MCP |
+| 63 | GET | `/v1/docs/` | Swagger 文档 |

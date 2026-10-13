@@ -1175,7 +1175,7 @@ async fn adopt_workspace(rt: &Arc<IlinkRuntime>, ws: &str) -> Result<(), AppErro
         }
         flow_log(&rt.app, "adopt_init", &format!("ws={} 未就绪，已 init", ws));
     }
-    // 审批模式已移除：权限请求恒直通（skip=true），只读约束由 Plan 模式的服务端工具集承担
+    // 审批模式已移除：权限请求恒直通（skip=true）
     let cur_skip = match agent_get(rt, &format!("/v1/workspaces/{}/permissions/skip", ws)).await {
         Ok((200, v)) => v.get("skip").and_then(|b| b.as_bool()),
         _ => None,
@@ -1183,15 +1183,6 @@ async fn adopt_workspace(rt: &Arc<IlinkRuntime>, ws: &str) -> Result<(), AppErro
     if cur_skip != Some(true) {
         let _ = agent_post(rt, &format!("/v1/workspaces/{}/permissions/skip", ws), &json!({ "skip": true })).await;
         flow_log(&rt.app, "adopt_skip", &format!("ws={} skip {:?} -> true", ws, cur_skip));
-    }
-    // 强制 yolo（plan=false）：覆盖历史被切到 plan=true 的工作区（可能来自 TUI）
-    let cur_plan = match agent_get(rt, &format!("/v1/workspaces/{}/agent/mode", ws)).await {
-        Ok((200, v)) => v.get("plan").and_then(|b| b.as_bool()),
-        _ => None,
-    };
-    if cur_plan == Some(true) {
-        let _ = agent_post(rt, &format!("/v1/workspaces/{}/agent/mode", ws), &json!({ "plan": false })).await;
-        flow_log(&rt.app, "adopt_yolo", &format!("ws={} plan {:?} -> false", ws, cur_plan));
     }
     let mut s = rt.shared.lock().await;
     s.workspace_id = Some(ws.to_string());
@@ -1254,7 +1245,7 @@ async fn handle_sse_event(rt: &Arc<IlinkRuntime>, v: &Value, event_name: &str) {
         }
         "permission_request" => {
             // 审批模式已移除：skip=true 下正常不会收到；同步瞬间的竞态请求直接放行，
-            // 避免微信触发的运行被卡住（Plan 模式下服务端只挂载只读工具，放行的也只能是读操作）
+            // 避免微信触发的运行被卡住
             let ws = backend_of(rt).await;
             if let Some(ws) = ws {
                 let body = json!({ "permission": inner, "action": "allow" });
