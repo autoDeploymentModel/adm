@@ -702,14 +702,20 @@
       }
 
       if (appUpdate.status === "error") {
+        // 安装阶段失败时给一个「打开安装包所在目录」入口：Linux 的 deb 自动安装失败
+        // 需要用户按提示手动执行命令，能直接看到安装包更省事
+        const revealBtn = (appUpdate.phase === "install" && appUpdate.path)
+          ? `<button class="update-btn-secondary" onclick="onAppUpdateReveal()">${t("打开安装包所在目录")}</button>`
+          : "";
         showUpdateDialog(`
           <div class="update-icon">❌</div>
-          <div class="update-title">${t("下载更新失败")}</div>
-          <div class="update-desc">${escHtml(appUpdate.error || "")}</div>
+          <div class="update-title">${escHtml(appUpdate.errorTitle || t("下载更新失败"))}</div>
+          <div class="update-desc" style="white-space:pre-wrap;text-align:left;word-break:break-all;">${escHtml(appUpdate.error || "")}</div>
           ${versionRow}
           <div class="update-buttons">
             <button class="update-btn-primary" onclick="onAppUpdateRetry()">${t("重试")}</button>
             <button class="update-btn-secondary" onclick="onSystemUpdateDismiss()">${t("稍后再说")}</button>
+            ${revealBtn}
           </div>`, "app-update");
         return;
       }
@@ -758,6 +764,8 @@
         status: "downloading",
         progress: 0,
         error: "",
+        errorTitle: "",
+        phase: "download",     // download | install（决定失败弹窗标题与重试方式）
         manual: !!opts.manual,
         prompted: false,
       };
@@ -773,6 +781,8 @@
       }).catch(function (e) {
         if (!appUpdate || appUpdate.version !== result.remote_version) return;
         appUpdate.status = "error";
+        appUpdate.phase = "download";
+        appUpdate.errorTitle = t("下载更新失败");
         appUpdate.error = _errMod.friendlyError(e, { prefix: "下载更新失败: " });
         // 静默下载失败不弹窗（不打扰用户），仅用户主动查看过进度时把失败原因显示出来
         if (appUpdate.manual && updateDialogOwner === "app-update") renderAppUpdateDialog();
@@ -791,25 +801,41 @@
       if (!appUpdate || appUpdate.status !== "ready") return;
       const installerPath = appUpdate.path;
       if (!installerPath) { onAppUpdateRetry(); return; }
+      // Linux 的 deb 交给包管理器提权安装（弹系统授权框 -> 等安装结束），
+      // 与 Windows/macOS 拉起安装向导后立刻退出不同，这里的文案要分开
+      const isDeb = /\.deb$/i.test(installerPath);
+      appUpdate.phase = "install";
+      appUpdate.errorTitle = "";
       llamacppIsMandatory = true; // 升级期间禁止随手关掉弹窗
       showUpdateDialog(`
         <div class="update-icon">⚙️</div>
-        <div class="update-title">${t("正在启动安装程序")}</div>
-        <div class="update-desc">${t("ADM 即将关闭并完成升级，请按安装程序提示操作。")}</div>
+        <div class="update-title">${t(isDeb ? "正在安装新版本" : "正在启动安装程序")}</div>
+        <div class="update-desc">${t(isDeb ? "请在系统授权弹窗中输入密码；安装完成后 ADM 会自动关闭。" : "ADM 即将关闭并完成升级，请按安装程序提示操作。")}</div>
         <div class="llamacpp-status-text">${t("请稍候...")}</div>`, "app-update");
       try {
-        // 后端拉起安装包后会直接退出本进程，这里的 Promise 通常不会返回
+        // 后端拉起安装程序后会直接退出本进程，这里的 Promise 通常不会返回；
+        // deb 安装是例外：失败时后端带着原因返回，需要展示给用户（此时应用仍在运行）
         await invoke("install_app_update", { path: installerPath });
       } catch (e) {
         llamacppIsMandatory = false;
         appUpdate.status = "error";
-        appUpdate.error = _errMod.friendlyError(e, { prefix: "启动安装程序失败: " });
+        // 这里的错是后端写好的中文指引（含 sudo 命令与 apt 输出），不能再走
+        // friendlyError——它会把夹带英文/路径的细节整段丢掉，只剩"操作失败，任务中断"
+        appUpdate.errorTitle = t("升级失败");
+        appUpdate.error = _errMod.getErrorMessage(e) || t("升级失败");
         renderAppUpdateDialog();
       }
     }
 
     function onAppUpdateRetry() {
       if (!appUpdate) return;
+      // 安装阶段失败：安装包已在本地，直接重跑安装，不重新下载
+      if (appUpdate.phase === "install" && appUpdate.path) {
+        appUpdate.status = "ready";
+        appUpdate.error = "";
+        onAppUpdateInstall();
+        return;
+      }
       const result = {
         has_update: true,
         download_url: appUpdate.downloadUrl,
@@ -824,9 +850,20 @@
         appUpdate.status = "error";
         appUpdate.progress = 0;
         appUpdate.error = "";
+        appUpdate.errorTitle = "";
+        appUpdate.phase = "download";
       }
       startAppUpdateDownload(result, { manual: true });
       renderAppUpdateDialog();
+    }
+
+    // 在文件管理器中定位安装包（deb 自动安装失败时方便用户手动执行命令）
+    function onAppUpdateReveal() {
+      const target = appUpdate && appUpdate.path;
+      if (!target) return;
+      invoke("plugin:opener|reveal_item_in_dir", { path: target }).catch(function (e) {
+        console.warn("[index] 打开安装包目录失败:", e);
+      });
     }
 
     function onAppUpdateSkipVersion() {
@@ -1062,6 +1099,7 @@
     window.doLlamacppDownload = doLlamacppDownload;
     window.onAppUpdateInstall = onAppUpdateInstall;
     window.onAppUpdateRetry = onAppUpdateRetry;
+    window.onAppUpdateReveal = onAppUpdateReveal;
     window.onAppUpdateSkipVersion = onAppUpdateSkipVersion;
 
     // ===== 硬件栏 =====

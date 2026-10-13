@@ -655,10 +655,24 @@ pub async fn download_app_update(
     Ok(final_path.to_string_lossy().to_string())
 }
 
+/// 是否为 deb 包（Linux 分发形态之一）。
+/// deb 不能直接执行（exec 会返回 ENOEXEC），必须交给包管理器提权安装。
+/// 不加 cfg 限制是为了在任意平台的单测里都能验证扩展名判定。
+#[cfg(any(target_os = "linux", test))]
+fn is_deb_installer_path(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("deb"))
+        .unwrap_or(false)
+}
+
 /// 拉起下载好的安装包，随后清理子进程并退出本进程——安装程序需要覆盖
 /// 正在运行的可执行文件，ADM 必须先退出。（清理逻辑与托盘「退出」共用）
+///
+/// Linux 的 deb 例外：它由包管理器安装，必须先等出结果（失败时要把原因告诉
+/// 用户，而不是先退出再让升级无声失败），故整体放在阻塞线程里执行。
 #[tauri::command]
-pub fn install_app_update(app: tauri::AppHandle, path: String) -> Result<(), AppError> {
+pub async fn install_app_update(app: tauri::AppHandle, path: String) -> Result<(), AppError> {
     let dir = app_update_dir(&app)?;
     let dir_real = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
     // 只允许运行更新目录内下载下来的安装包：路径由前端透传，不能变成任意可执行文件的启动器
@@ -671,7 +685,10 @@ pub fn install_app_update(app: tauri::AppHandle, path: String) -> Result<(), App
         bail!("安装包不存在: {}", path);
     }
 
-    launch_installer(&installer)?;
+    let install_path = installer.clone();
+    tauri::async_runtime::spawn_blocking(move || launch_installer(&install_path))
+        .await
+        .map_err(|e| AppError::msg(format!("安装任务异常: {}", e)))??;
 
     crate::cleanup_processes(&app);
     app.exit(0);
@@ -713,10 +730,149 @@ fn launch_installer(path: &std::path::Path) -> Result<(), AppError> {
 
 #[cfg(target_os = "linux")]
 fn launch_installer(path: &std::path::Path) -> Result<(), AppError> {
+    if is_deb_installer_path(path) {
+        return install_deb_package(path);
+    }
+
+    // AppImage / .run 等自解压包：补可执行位后直接拉起
+    ensure_installer_executable(path);
+    // 当前进程本身就跑在 AppImage 里时（$APPIMAGE），必须先用新包覆盖该文件：
+    // 直接跑下载目录里的新包只会再开一个实例，旧文件始终没被升级
+    if let Some(current) = std::env::var_os("APPIMAGE").map(std::path::PathBuf::from) {
+        if current.as_path() != path {
+            replace_appimage(&current, path)?;
+            return spawn_installer(&current);
+        }
+    }
+    spawn_installer(path)
+}
+
+#[cfg(target_os = "linux")]
+fn spawn_installer(path: &std::path::Path) -> Result<(), AppError> {
     let mut cmd = std::process::Command::new(path);
     platform::spawn_detached(&mut cmd)
         .map(|_| ())
-        .map_err(|e| AppError::msg(format!("启动安装包失败: {}", e)))
+        .map_err(|e| AppError::msg(format!("启动安装包失败: {}（可手动执行：{}）", e, path.display())))
+}
+
+/// 用新下载的 AppImage 覆盖当前正在运行的那个文件（临时文件 + rename，避免写坏原文件）。
+/// AppImage 运行时它是 FUSE 挂载的只读文件，但所在目录通常可写，替换不影响正在运行的进程。
+#[cfg(target_os = "linux")]
+fn replace_appimage(current: &std::path::Path, new_file: &std::path::Path) -> Result<(), AppError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let Some(dir) = current.parent() else {
+        bail!("无法定位当前 AppImage 所在目录: {}", current.display());
+    };
+    let staged = dir.join(format!(".ADM-update-{}", std::process::id()));
+
+    let copy = || -> std::io::Result<()> {
+        std::fs::copy(new_file, &staged)?;
+        let mut perms = std::fs::metadata(&staged)?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&staged, perms)?;
+        std::fs::rename(&staged, current)?;
+        Ok(())
+    };
+    copy().map_err(|e| {
+        let _ = std::fs::remove_file(&staged);
+        AppError::msg(format!(
+            "无法覆盖当前 AppImage（{}）：{}\n请手动用下载好的新版本替换该文件：{}",
+            current.display(),
+            e,
+            new_file.display()
+        ))
+    })
+}
+
+/// deb 包：交给 apt 安装（能自动补依赖），用 pkexec 弹系统授权框提权——
+/// ADM 无 TTY，sudo 无法交互输入密码，只有 polkit 授权代理可用。
+/// 必须等出结果：安装失败（授权取消、依赖冲突）时保持应用运行并把原因显示给用户，
+/// 直接把文件当可执行文件拉起是行不通的（deb 不是可执行格式，exec 会 ENOEXEC）。
+#[cfg(target_os = "linux")]
+fn install_deb_package(path: &std::path::Path) -> Result<(), AppError> {
+    let log_path = path.with_extension("install.log");
+    let log = std::fs::File::create(&log_path)
+        .map_err(|e| AppError::msg(format!("创建安装日志失败: {}", e)))?;
+    let log_err = log
+        .try_clone()
+        .map_err(|e| AppError::msg(format!("创建安装日志失败: {}", e)))?;
+
+    // stdout/stderr 重定向到文件而非管道：安装过程只等退出码，不读管道，
+    // 用管道会因缓冲区写满把 apt 卡死
+    // --disable-internal-agent：只认桌面会话的 polkit 授权代理（图形密码框），
+    // 否则 pkexec 的内部文本代理会试图从 stdin 读密码——stdin 已置 null，会挂到超时
+    let mut cmd = std::process::Command::new("pkexec");
+    cmd.arg("--disable-internal-agent")
+        .arg("env")
+        .arg("DEBIAN_FRONTEND=noninteractive")
+        .arg("apt-get")
+        .arg("install")
+        .arg("-y")
+        .arg("--allow-downgrades")
+        .arg("--no-install-recommends")
+        .arg(path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::from(log))
+        .stderr(std::process::Stdio::from(log_err));
+
+    let mut child = platform::spawn_detached(&mut cmd).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            AppError::msg(format!(
+                "系统缺少 pkexec（polkit），无法自动提权安装。\n请手动执行升级：\nsudo apt install \"{}\"",
+                path.display()
+            ))
+        } else {
+            AppError::msg(format!("启动安装程序失败: {}", e))
+        }
+    })?;
+
+    // 等安装结束（上限 10 分钟，超时按失败处理，避免弹窗一直挂着）
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(600);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) => {}
+            Err(e) => return Err(AppError::msg(format!("等待安装程序失败: {}", e))),
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            break None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    };
+
+    let tail = read_log_tail(&log_path, 800);
+    match status {
+        Some(status) if status.success() => Ok(()),
+        Some(status) => Err(AppError::msg(format!(
+            "自动安装未能完成（安装程序退出码 {}，可能是授权被取消或系统未运行 polkit 授权代理）。\n请手动执行升级：\nsudo apt install \"{}\"\n\n{}",
+            status.code().map(|c| c.to_string()).unwrap_or_else(|| "未知".to_string()),
+            path.display(),
+            tail
+        ))),
+        None => Err(AppError::msg(format!(
+            "安装超时（超过 10 分钟）。请手动执行升级：\nsudo apt install \"{}\"\n\n{}",
+            path.display(),
+            tail
+        ))),
+    }
+}
+
+/// 读取日志文件末尾若干字符（安装失败时用于展示 apt 的真实原因）
+#[cfg(target_os = "linux")]
+fn read_log_tail(path: &std::path::Path, max_chars: usize) -> String {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return String::new();
+    };
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let chars: Vec<char> = trimmed.chars().collect();
+    let start = chars.len().saturating_sub(max_chars);
+    chars[start..].iter().collect()
 }
 
 #[tauri::command]
@@ -884,8 +1040,8 @@ async fn install_llamacpp_from_url(app: tauri::AppHandle, url: String) -> Result
 
 #[cfg(test)]
 mod tests {
-    use super::app_update_file_name;
-
+    use super::{app_update_file_name, is_deb_installer_path};
+    use std::path::Path;
     // 文件名必须带版本号：下载地址不带版本号时，沿用同名文件会被断点续传逻辑
     // 当成"已下载完成"，用户点升级装上的还是旧版本。
     #[test]
@@ -923,5 +1079,15 @@ mod tests {
     fn file_name_falls_back_when_version_is_empty() {
         let name = app_update_file_name("https://adm.tuduoduo.top/a.exe", "v");
         assert_eq!(name, "ADM-unknown-a.exe");
+    }
+
+    // Linux 分发的 deb 不能当可执行文件拉起（exec 会 ENOEXEC），必须走包管理器安装；
+    // 落地文件名形如 `ADM-0.7.5-ADM_0.7.5_amd64.deb`，扩展名判定不受前缀影响
+    #[test]
+    fn detects_deb_installer_by_extension() {
+        assert!(is_deb_installer_path(Path::new("/tmp/updates/ADM-0.7.5-ADM_0.7.5_amd64.deb")));
+        assert!(is_deb_installer_path(Path::new("/tmp/updates/ADM-0.7.5-setup.DEB")));
+        assert!(!is_deb_installer_path(Path::new("/tmp/updates/ADM-0.7.5-ADM_0.7.5_amd64.AppImage")));
+        assert!(!is_deb_installer_path(Path::new("/tmp/updates/ADM-0.7.5-setup")));
     }
 }
