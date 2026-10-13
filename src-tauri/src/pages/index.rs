@@ -512,6 +512,213 @@ pub fn check_llamacpp_runtime() -> Option<String> {
     llamacpp_runtime_warning()
 }
 
+// ===== 应用自身更新（静默下载安装包 → 提示升级）=====
+
+/// 更新包存放目录：与 llamacpp 的临时目录分开，安装包长期保留，
+/// 用户「稍后再说」后重启应用仍能直接提示升级（无需重新下载）。
+/// 统一放用户数据目录而非 exe 目录：Windows 装在 Program Files 下时那里不可写。
+fn app_update_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, AppError> {
+    use tauri::Manager;
+    let dir = match app.path().app_data_dir() {
+        Ok(data_dir) => data_dir.join("updates"),
+        Err(_) => config::get_base_dir(Some(app))?.join("updates"),
+    };
+    std::fs::create_dir_all(&dir).map_err(|e| format!("创建更新目录失败: {}", e))?;
+    Ok(dir)
+}
+
+/// 安装包落盘文件名：`ADM-<版本>-<URL 文件名>`。
+/// 必须带版本号——下载地址不带版本号时，若沿用同名文件会被断点续传逻辑
+/// 误判为"已下载完成"，导致用户升级到的还是上一个版本。
+fn app_update_file_name(url: &str, version: &str) -> String {
+    let raw = url
+        .split(['?', '#'])
+        .next()
+        .unwrap_or("")
+        .rsplit('/')
+        .next()
+        .unwrap_or("");
+    let cleaned: String = raw
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
+        .collect();
+    let cleaned = cleaned.trim_matches('.');
+
+    // 版本号同样来自远端 update.json，必须走同一套白名单：Path::join 不做归一化，
+    // 含路径分隔符或 '..' 的版本号会拼出更新目录之外的路径
+    let version_filtered: String = version
+        .trim()
+        .trim_start_matches('v')
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-' || *c == '_')
+        .collect();
+    let version_filtered = version_filtered.trim_matches('.').to_string();
+    let version = if version_filtered.is_empty() {
+        "unknown".to_string()
+    } else {
+        version_filtered
+    };
+
+    if cleaned.is_empty() {
+        format!("ADM-{}-setup", version)
+    } else {
+        format!("ADM-{}-{}", version, cleaned)
+    }
+}
+
+/// Linux：AppImage / deb 需要可执行位才能被直接拉起。
+/// 新下载完成与"上次已下载好"两条成功路径都要走一遍——若上次会话在 `.part`
+/// 重命名与 chmod 之间被杀，之后就只剩早退路径，安装包永远补不上可执行位。
+#[cfg(target_os = "linux")]
+fn ensure_installer_executable(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(meta) = std::fs::metadata(path) {
+        let mut perms = meta.permissions();
+        perms.set_mode(0o755);
+        let _ = std::fs::set_permissions(path, perms);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn ensure_installer_executable(_path: &std::path::Path) {}
+
+/// 静默下载应用安装包到本地（更新下载地址由 update.json 下发）。
+/// 前端启动时后台调用：不弹窗、不阻塞界面，完成后由前端提示用户升级。
+/// 已下载过（同名文件存在）时立即返回，实现"重启后无需重新下载直接提示"。
+#[tauri::command]
+pub async fn download_app_update(
+    app: tauri::AppHandle,
+    version: String,
+    url: String,
+) -> Result<String, AppError> {
+    let url = url.trim().to_string();
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        bail!("更新下载地址无效: {}", url);
+    }
+
+    let dir = app_update_dir(&app)?;
+    let file_name = app_update_file_name(&url, &version);
+    let final_path = dir.join(&file_name);
+    let part_path = dir.join(format!("{}.part", file_name));
+
+    // 清掉其它版本的残留安装包（每个版本只留当前一个文件，避免磁盘越攒越多）
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path == final_path || path == part_path {
+                continue;
+            }
+            if path.is_file() {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    }
+
+    let app_clone = app.clone();
+    let emit = move |status: &str, progress: u8| {
+        app_clone
+            .emit(
+                "app-update-progress",
+                serde_json::json!({ "status": status, "progress": progress }),
+            )
+            .ok();
+    };
+
+    if final_path.exists() {
+        ensure_installer_executable(&final_path);
+        emit("done", 100);
+        return Ok(final_path.to_string_lossy().to_string());
+    }
+
+    emit("downloading", 0);
+
+    // 安装包体积较大且可能走慢速网络，超时放宽到 30 分钟
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(1800))
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+
+    let app_progress = app.clone();
+    download_with_resume(&client, &url, &final_path, &part_path, |progress, _downloaded, _total| {
+        app_progress
+            .emit(
+                "app-update-progress",
+                serde_json::json!({ "status": "downloading", "progress": progress }),
+            )
+            .ok();
+    })
+    .await?;
+
+    ensure_installer_executable(&final_path);
+
+    emit("done", 100);
+    Ok(final_path.to_string_lossy().to_string())
+}
+
+/// 拉起下载好的安装包，随后清理子进程并退出本进程——安装程序需要覆盖
+/// 正在运行的可执行文件，ADM 必须先退出。（清理逻辑与托盘「退出」共用）
+#[tauri::command]
+pub fn install_app_update(app: tauri::AppHandle, path: String) -> Result<(), AppError> {
+    let dir = app_update_dir(&app)?;
+    let dir_real = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+    // 只允许运行更新目录内下载下来的安装包：路径由前端透传，不能变成任意可执行文件的启动器
+    let installer = std::fs::canonicalize(&path)
+        .map_err(|_| AppError::msg("安装包不存在或已被删除，请重新下载"))?;
+    if !installer.starts_with(&dir_real) {
+        bail!("安装包路径不合法: {}", path);
+    }
+    if !installer.is_file() {
+        bail!("安装包不存在: {}", path);
+    }
+
+    launch_installer(&installer)?;
+
+    crate::cleanup_processes(&app);
+    app.exit(0);
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn launch_installer(path: &std::path::Path) -> Result<(), AppError> {
+    use std::os::windows::process::CommandExt;
+    // 新进程组 + 不挂控制台：否则 ADM 一退出，安装向导可能被一并带走。
+    // BREAKAWAY 让安装程序脱离 ADM 所在的 Job（部分环境不允许，失败则退回普通启动）
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+
+    let spawn = |flags: u32| {
+        let mut cmd = std::process::Command::new(path);
+        cmd.creation_flags(flags);
+        cmd.spawn()
+    };
+
+    match spawn(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB) {
+        Ok(_) => Ok(()),
+        Err(_) => spawn(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+            .map(|_| ())
+            .map_err(|e| AppError::msg(format!("启动安装程序失败: {}", e))),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn launch_installer(path: &std::path::Path) -> Result<(), AppError> {
+    // DMG 交给系统挂载打开，用户在挂载窗口里把 ADM 拖进「应用程序」完成覆盖
+    let mut cmd = std::process::Command::new("open");
+    cmd.arg(path);
+    platform::spawn_detached(&mut cmd)
+        .map(|_| ())
+        .map_err(|e| AppError::msg(format!("打开安装包失败: {}", e)))
+}
+
+#[cfg(target_os = "linux")]
+fn launch_installer(path: &std::path::Path) -> Result<(), AppError> {
+    let mut cmd = std::process::Command::new(path);
+    platform::spawn_detached(&mut cmd)
+        .map(|_| ())
+        .map_err(|e| AppError::msg(format!("启动安装包失败: {}", e)))
+}
+
 #[tauri::command]
 pub async fn download_and_extract_llamacpp(app: tauri::AppHandle, url: String) -> Result<(), AppError> {
     install_llamacpp_from_url(app, url).await
@@ -673,4 +880,48 @@ async fn install_llamacpp_from_url(app: tauri::AppHandle, url: String) -> Result
     .ok();
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::app_update_file_name;
+
+    // 文件名必须带版本号：下载地址不带版本号时，沿用同名文件会被断点续传逻辑
+    // 当成"已下载完成"，用户点升级装上的还是旧版本。
+    #[test]
+    fn file_name_contains_version() {
+        let name = app_update_file_name("https://adm.tuduoduo.top/ADM_x64-setup.exe", "0.6.5");
+        assert!(name.starts_with("ADM-0.6.5-"), "got {}", name);
+        assert!(name.ends_with("ADM_x64-setup.exe"), "got {}", name);
+    }
+
+    #[test]
+    fn file_name_strips_query_and_unsafe_chars() {
+        let name = app_update_file_name(
+            "https://cdn.example.com/dl/ADM%20v1.2.3.dmg?token=abc#frag",
+            "v1.2.3",
+        );
+        assert_eq!(name, "ADM-1.2.3-ADM20v1.2.3.dmg");
+    }
+
+    #[test]
+    fn file_name_falls_back_when_url_has_no_file_part() {
+        let name = app_update_file_name("https://adm.tuduoduo.top/", "1.0.0");
+        assert_eq!(name, "ADM-1.0.0-setup");
+    }
+
+    // 版本号同样来自远端 update.json：含路径分隔符 / '..' 时必须被白名单吃掉，
+    // 否则 dir.join 会拼出更新目录之外的路径（Path::join 不做归一化）
+    #[test]
+    fn file_name_neutralizes_path_like_version() {
+        let name = app_update_file_name("https://adm.tuduoduo.top/a.exe", "../../etc/passwd");
+        assert!(!name.contains('/') && !name.contains(".."), "got {}", name);
+        assert_eq!(name, "ADM-etcpasswd-a.exe");
+    }
+
+    #[test]
+    fn file_name_falls_back_when_version_is_empty() {
+        let name = app_update_file_name("https://adm.tuduoduo.top/a.exe", "v");
+        assert_eq!(name, "ADM-unknown-a.exe");
+    }
 }

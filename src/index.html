@@ -478,7 +478,12 @@
     }
 
     // ===== 更新弹窗 =====
-    function showUpdateDialog(html) {
+    // owner 用于区分弹窗归属：'app-update' 之外的弹窗（VC++/llamacpp 引导）优先，
+    // 升级提示需等它关闭后再出现，避免互相覆盖
+    let updateDialogOwner = null;
+
+    function showUpdateDialog(html, owner) {
+      updateDialogOwner = owner || "other";
       document.getElementById("update-content").innerHTML = html;
       document.getElementById("update-overlay").classList.add("show");
     }
@@ -486,6 +491,12 @@
     function hideUpdateDialog() {
       if (llamacppIsMandatory || vcRedistMandatory) return;
       document.getElementById("update-overlay").classList.remove("show");
+      updateDialogOwner = null;
+      // 升级提示被其它弹窗推迟过：等当前弹窗关闭后补一次
+      if (appUpdatePromptPending) {
+        appUpdatePromptPending = false;
+        setTimeout(function () { tryShowAppUpdateReady(); }, 400);
+      }
     }
 
     function openUrl(url) {
@@ -525,26 +536,35 @@
         }
         const result = await invoke("check_update");
 
-        if (result.has_update) {
-          pendingLlamacppResult = result;
-          // 平台未提供安装包地址（update.json 无对应平台字段）时不渲染会点空的下载按钮
-          const downloadBtn = result.download_url
-            ? `<button class="update-btn-primary" onclick="openUrl('${escHtml(result.download_url)}')">${t("下载更新")}</button>`
-            : "";
-          const html = `
-            <div class="update-icon">📥</div>
-            <div class="update-title">${t("发现新版本")}</div>
-            <div class="update-desc">${t("有新版本可用，是否前往下载？")}</div>
-            <div class="update-info-row">
-              <div class="info-item"><div class="info-label">${t("当前版本")}</div><div class="info-value">v${escHtml(result.current_version)}</div></div>
-              <div class="info-item"><div class="info-label">${t("最新版本")}</div><div class="info-value">v${escHtml(result.remote_version)}</div></div>
-            </div>
-            <div class="update-buttons">
-              ${downloadBtn}
-              <button class="update-btn-secondary" onclick="onSystemUpdateDismiss()">${t("稍后再说")}</button>
-            </div>`;
-          showUpdateDialog(html);
-          return;
+        if (result.has_update && result.download_url) {
+          // 新版本：启动时静默后台下载（不打扰用户），下载完成后才弹窗询问是否升级；
+          // 用户主动点「检查新版本」时（silent=false）跟随弹窗展示下载进度
+          if (silent) {
+            startAppUpdateDownload(result);
+          } else {
+            pendingLlamacppResult = result;
+            startAppUpdate(result, { manual: true });
+            return;
+          }
+        } else if (result.has_update) {
+          // 平台未提供安装包地址（update.json 无对应平台字段）时维持旧行为：
+          // 只提示版本、不渲染会点空的下载按钮；静默检查则完全不打扰用户
+          if (!silent) {
+            pendingLlamacppResult = result;
+            const html = `
+              <div class="update-icon">📥</div>
+              <div class="update-title">${t("发现新版本")}</div>
+              <div class="update-desc">${t("有新版本可用，是否前往下载？")}</div>
+              <div class="update-info-row">
+                <div class="info-item"><div class="info-label">${t("当前版本")}</div><div class="info-value">v${escHtml(result.current_version)}</div></div>
+                <div class="info-item"><div class="info-label">${t("最新版本")}</div><div class="info-value">v${escHtml(result.remote_version)}</div></div>
+              </div>
+              <div class="update-buttons">
+                <button class="update-btn-secondary" onclick="onSystemUpdateDismiss()">${t("稍后再说")}</button>
+              </div>`;
+            showUpdateDialog(html);
+            return;
+          }
         }
 
         if (!result.vc_redist_installed) {
@@ -643,6 +663,196 @@
           }
         }, 300);
       }
+    }
+
+    // ===== 应用自升级（静默下载安装包 → 下载完成后提示升级）=====
+    // 启动时的更新检查只做后台静默下载，不打断用户；安装包落盘后才弹窗询问是否立即升级。
+    // 安装包保留在本地（get_base_dir/updates），用户「稍后再说」后重启即已就绪、无需重下。
+    const APP_UPDATE_SKIP_KEY = "adm_skip_update_version";
+    let appUpdate = null;              // { version, currentVersion, path, status: downloading|ready|error, progress, error, manual, prompted }
+    let appUpdatePromptPending = false; // 升级提示被其它弹窗推迟
+
+    function skippedAppUpdateVersion() {
+      try { return localStorage.getItem(APP_UPDATE_SKIP_KEY) || ""; } catch (_) { return ""; }
+    }
+
+    function renderAppUpdateDialog() {
+      if (!appUpdate) return;
+      const versionRow = `
+        <div class="update-info-row">
+          <div class="info-item"><div class="info-label">${t("当前版本")}</div><div class="info-value">v${escHtml(appUpdate.currentVersion || "")}</div></div>
+          <div class="info-item"><div class="info-label">${t("最新版本")}</div><div class="info-value">v${escHtml(appUpdate.version || "")}</div></div>
+        </div>`;
+
+      if (appUpdate.status === "ready") {
+        appUpdate.prompted = true;
+        showUpdateDialog(`
+          <div class="update-icon">🚀</div>
+          <div class="update-title">${t("新版本已下载完成")}</div>
+          <div class="update-desc">${t("新版本安装包已在后台下载完成，是否立即升级？升级会自动启动安装包并关闭当前软件。")}</div>
+          ${versionRow}
+          <div class="update-buttons">
+            <button class="update-btn-primary" onclick="onAppUpdateInstall()">${t("立即升级")}</button>
+            <button class="update-btn-secondary" onclick="onSystemUpdateDismiss()">${t("稍后再说")}</button>
+          </div>
+          <div class="update-buttons" style="margin-top:10px;">
+            <button class="update-btn-secondary" style="font-size:12px;padding:6px 18px;" onclick="onAppUpdateSkipVersion()">${t("跳过此版本")}</button>
+          </div>`, "app-update");
+        return;
+      }
+
+      if (appUpdate.status === "error") {
+        showUpdateDialog(`
+          <div class="update-icon">❌</div>
+          <div class="update-title">${t("下载更新失败")}</div>
+          <div class="update-desc">${escHtml(appUpdate.error || "")}</div>
+          ${versionRow}
+          <div class="update-buttons">
+            <button class="update-btn-primary" onclick="onAppUpdateRetry()">${t("重试")}</button>
+            <button class="update-btn-secondary" onclick="onSystemUpdateDismiss()">${t("稍后再说")}</button>
+          </div>`, "app-update");
+        return;
+      }
+
+      // downloading：用户主动检查时展示进度（启动时的静默下载不会走到这里）
+      showUpdateDialog(`
+        <div class="update-icon">📥</div>
+        <div class="update-title">${t("发现新版本")}</div>
+        <div class="update-desc">${t("正在后台下载新版本，下载完成后会提示您升级。")}</div>
+        ${versionRow}
+        <div class="llamacpp-progress-bar"><div class="llamacpp-progress-fill" id="app-update-progress-fill" style="width: ${Number(appUpdate.progress) || 0}%"></div></div>
+        <div class="llamacpp-status-text" id="app-update-status-text">${t("正在下载... ")}${Number(appUpdate.progress) || 0}%</div>
+        <div class="update-buttons" style="margin-top:16px;">
+          <button class="update-btn-secondary" onclick="hideUpdateDialog()">${t("后台下载，稍后再说")}</button>
+        </div>`, "app-update");
+    }
+
+    // 安装包就绪：无人打扰时就弹窗，弹窗被占用（VC++/llamacpp 引导）则等它关闭后补弹
+    function tryShowAppUpdateReady() {
+      if (!appUpdate || appUpdate.status !== "ready" || appUpdate.prompted) return;
+      // 用户点过「跳过此版本」：静默检查不再打扰（手动点「检查新版本」时仍照常提示）
+      if (skippedAppUpdateVersion() === appUpdate.version && !appUpdate.manual) return;
+      if (document.getElementById("update-overlay").classList.contains("show") && updateDialogOwner !== "app-update") {
+        appUpdatePromptPending = true;
+        return;
+      }
+      renderAppUpdateDialog();
+    }
+
+    // 后台静默下载安装包；返回是否新发起了一次下载
+    function startAppUpdateDownload(result, opts) {
+      opts = opts || {};
+      if (!result || !result.has_update || !result.download_url) return false;
+      // 已跳过该版本的静默下载不再重跑；手动检查（manual）时忽略跳过记录
+      if (opts.manual !== true && skippedAppUpdateVersion() === result.remote_version) return false;
+      if (appUpdate && appUpdate.version === result.remote_version
+        && (appUpdate.status === "downloading" || appUpdate.status === "ready")) {
+        if (opts.manual) appUpdate.manual = true;
+        return false;
+      }
+      appUpdate = {
+        version: result.remote_version,
+        currentVersion: result.current_version,
+        downloadUrl: result.download_url,
+        path: null,
+        status: "downloading",
+        progress: 0,
+        error: "",
+        manual: !!opts.manual,
+        prompted: false,
+      };
+      invoke("download_app_update", {
+        version: result.remote_version,
+        url: result.download_url,
+      }).then(function (path) {
+        if (!appUpdate || appUpdate.version !== result.remote_version) return;
+        appUpdate.path = path;
+        appUpdate.progress = 100;
+        appUpdate.status = "ready";
+        tryShowAppUpdateReady();
+      }).catch(function (e) {
+        if (!appUpdate || appUpdate.version !== result.remote_version) return;
+        appUpdate.status = "error";
+        appUpdate.error = _errMod.friendlyError(e, { prefix: "下载更新失败: " });
+        // 静默下载失败不弹窗（不打扰用户），仅用户主动查看过进度时把失败原因显示出来
+        if (appUpdate.manual && updateDialogOwner === "app-update") renderAppUpdateDialog();
+      });
+      return true;
+    }
+
+    // 对外统一入口（settings 页「检查新版本」复用）：manual=true 时展示下载进度
+    function startAppUpdate(result, opts) {
+      opts = opts || {};
+      startAppUpdateDownload(result, { manual: opts.manual });
+      if (opts.manual) renderAppUpdateDialog();
+    }
+
+    async function onAppUpdateInstall() {
+      if (!appUpdate || appUpdate.status !== "ready") return;
+      const installerPath = appUpdate.path;
+      if (!installerPath) { onAppUpdateRetry(); return; }
+      llamacppIsMandatory = true; // 升级期间禁止随手关掉弹窗
+      showUpdateDialog(`
+        <div class="update-icon">⚙️</div>
+        <div class="update-title">${t("正在启动安装程序")}</div>
+        <div class="update-desc">${t("ADM 即将关闭并完成升级，请按安装程序提示操作。")}</div>
+        <div class="llamacpp-status-text">${t("请稍候...")}</div>`, "app-update");
+      try {
+        // 后端拉起安装包后会直接退出本进程，这里的 Promise 通常不会返回
+        await invoke("install_app_update", { path: installerPath });
+      } catch (e) {
+        llamacppIsMandatory = false;
+        appUpdate.status = "error";
+        appUpdate.error = _errMod.friendlyError(e, { prefix: "启动安装程序失败: " });
+        renderAppUpdateDialog();
+      }
+    }
+
+    function onAppUpdateRetry() {
+      if (!appUpdate) return;
+      const result = {
+        has_update: true,
+        download_url: appUpdate.downloadUrl,
+        remote_version: appUpdate.version,
+        current_version: appUpdate.currentVersion,
+      };
+      if (!result.download_url) { hideUpdateDialog(); return; }
+      // 必须先把状态挪出 downloading/ready：startAppUpdateDownload 对同版本的这两种
+      // 状态会直接返回，预置成 downloading 会让「重试」在没有下载在跑时空转；
+      // 已就绪（ready）时不重置——安装包已在本地，不该再下一遍
+      if (appUpdate.status !== "ready") {
+        appUpdate.status = "error";
+        appUpdate.progress = 0;
+        appUpdate.error = "";
+      }
+      startAppUpdateDownload(result, { manual: true });
+      renderAppUpdateDialog();
+    }
+
+    function onAppUpdateSkipVersion() {
+      if (appUpdate && appUpdate.version) {
+        try { localStorage.setItem(APP_UPDATE_SKIP_KEY, appUpdate.version); } catch (_) {}
+      }
+      onSystemUpdateDismiss();
+    }
+
+    function setupAppUpdateProgressListener() {
+      if (typeof listen !== "function") return;
+      try {
+        listen("app-update-progress", function (event) {
+          if (!appUpdate) return;
+          const payload = event.payload || {};
+          if (payload.status === "downloading") {
+            appUpdate.progress = payload.progress || 0;
+            if (updateDialogOwner === "app-update") {
+              const fill = document.getElementById("app-update-progress-fill");
+              const text = document.getElementById("app-update-status-text");
+              if (fill) fill.style.width = appUpdate.progress + "%";
+              if (text) text.textContent = t("正在下载... ") + appUpdate.progress + "%";
+            }
+          }
+        });
+      } catch (_) {}
     }
 
     async function startLlamacppUpdate(result) {
@@ -838,6 +1048,9 @@
       checkForUpdate,
       showVcRedistInstallDialog,
       reinstallLlamacpp,
+      // 应用自升级：下载/升级状态查询与触发（settings 页「检查新版本」复用同一流程）
+      startAppUpdate,
+      getAppUpdate: function () { return appUpdate; },
     };
     window.hideUpdateDialog = hideUpdateDialog;
     window.goAgent = goAgent;
@@ -847,6 +1060,9 @@
     window.downloadVcRedist = downloadVcRedist;
     window.onVcRedistInstalled = onVcRedistInstalled;
     window.doLlamacppDownload = doLlamacppDownload;
+    window.onAppUpdateInstall = onAppUpdateInstall;
+    window.onAppUpdateRetry = onAppUpdateRetry;
+    window.onAppUpdateSkipVersion = onAppUpdateSkipVersion;
 
     // ===== 硬件栏 =====
     // 显卡栏：多张显卡时渲染下拉逐卡查看（卡名 + 显存），单卡/无卡维持原文本显示
@@ -1111,6 +1327,7 @@
       console.log("[index] init() 开始初始化");
       try {
         setupLlamacppProgressListener();
+        setupAppUpdateProgressListener();
         systemInfo = await window.__adm_systemInfoPromise;
         updateHardwareBar();
         setActiveNav("home-btn");

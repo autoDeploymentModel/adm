@@ -694,6 +694,15 @@ async function loadVersionInfo() {
   try {
     const admVersion = await invoke()("get_app_version");
     document.getElementById("v-adm").innerHTML = admVersion + ' <span id="update-badge" style="display:none;color:#4caf50;font-size:12px;margin-left:6px;">' + _t("✓ 最新") + '</span>';
+    // 后台静默下载已就绪时给出可升级提示（用户此前选了「稍后再说」也能在这里手动触发）
+    const pending = window.ADM && window.ADM.getAppUpdate ? window.ADM.getAppUpdate() : null;
+    if (pending && pending.status === "ready") {
+      const statusEl = document.getElementById("update-status");
+      if (statusEl) {
+        statusEl.textContent = _t("发现新版本 v") + pending.version + _t("（已下载，可升级）");
+        statusEl.style.color = "#ff9800";
+      }
+    }
   } catch (e) {
     document.getElementById("v-adm").textContent = _t("未知");
   }
@@ -780,19 +789,23 @@ async function checkUpdateNow() {
     if (result.has_update) {
       statusEl.textContent = _t("发现新版本 v") + result.remote_version;
       statusEl.style.color = "#ff9800";
-      const html = `
-        <div class="update-icon" style="font-size:40px;text-align:center;margin-bottom:12px;">📥</div>
-        <div class="update-title" style="font-size:20px;font-weight:600;color:#fff;text-align:center;margin-bottom:8px;">${_t("发现新版本")}</div>
-        <div class="update-desc" style="font-size:14px;color:var(--c-text-2);text-align:center;margin-bottom:20px;line-height:1.6;">${_t("有新版本可用，是否前往下载？")}</div>
-        <div class="update-info-row" style="display:flex;justify-content:center;gap:24px;margin-bottom:20px;font-size:13px;">
-          <div class="info-item" style="text-align:center;"><div class="info-label" style="color:var(--c-text-3);font-size:11px;">${_t("当前版本")}</div><div class="info-value" style="color:var(--c-text);font-weight:500;margin-top:2px;">v${escHtml(result.current_version)}</div></div>
-          <div class="info-item" style="text-align:center;"><div class="info-label" style="color:var(--c-text-3);font-size:11px;">${_t("最新版本")}</div><div class="info-value" style="color:var(--c-text);font-weight:500;margin-top:2px;">v${escHtml(result.remote_version)}</div></div>
-        </div>
-        <div class="update-buttons" style="display:flex;gap:12px;justify-content:center;">
-          <button class="update-btn-primary" style="background:var(--c-accent);color:#fff;border:none;padding:10px 28px;border-radius:8px;font-size:14px;font-weight:500;cursor:pointer;" onclick="window.ADM.hideUpdateDialog();window.openUrl('${escHtml(result.download_url)}')">${_t("下载更新")}</button>
-          <button class="update-btn-secondary" style="background:var(--c-overlay);color:var(--c-text);border:none;padding:10px 28px;border-radius:8px;font-size:14px;cursor:pointer;" onclick="window.ADM.hideUpdateDialog()">${_t("稍后再说")}</button>
-        </div>`;
-      window.ADM.showUpdateDialog(html);
+      if (result.download_url && window.ADM && window.ADM.startAppUpdate) {
+        // 与启动时的静默更新走同一条链路：后台下载（此处展示进度）→ 下载完成后提示升级
+        window.ADM.startAppUpdate(result, { manual: true });
+      } else {
+        // 平台未提供安装包地址（update.json 无对应平台字段）：只提示版本
+        window.ADM.showUpdateDialog(`
+          <div class="update-icon" style="font-size:40px;text-align:center;margin-bottom:12px;">📥</div>
+          <div class="update-title" style="font-size:20px;font-weight:600;color:#fff;text-align:center;margin-bottom:8px;">${_t("发现新版本")}</div>
+          <div class="update-desc" style="font-size:14px;color:var(--c-text-2);text-align:center;margin-bottom:20px;line-height:1.6;">${_t("有新版本可用，是否前往下载？")}</div>
+          <div class="update-info-row" style="display:flex;justify-content:center;gap:24px;margin-bottom:20px;font-size:13px;">
+            <div class="info-item" style="text-align:center;"><div class="info-label" style="color:var(--c-text-3);font-size:11px;">${_t("当前版本")}</div><div class="info-value" style="color:var(--c-text);font-weight:500;margin-top:2px;">v${escHtml(result.current_version)}</div></div>
+            <div class="info-item" style="text-align:center;"><div class="info-label" style="color:var(--c-text-3);font-size:11px;">${_t("最新版本")}</div><div class="info-value" style="color:var(--c-text);font-weight:500;margin-top:2px;">v${escHtml(result.remote_version)}</div></div>
+          </div>
+          <div class="update-buttons" style="display:flex;gap:12px;justify-content:center;">
+            <button class="update-btn-secondary" style="background:var(--c-overlay);color:var(--c-text);border:none;padding:10px 28px;border-radius:8px;font-size:14px;cursor:pointer;" onclick="window.ADM.hideUpdateDialog()">${_t("稍后再说")}</button>
+          </div>`);
+      }
     } else {
       statusEl.textContent = _t("已是最新版本");
       statusEl.style.color = "#4caf50";

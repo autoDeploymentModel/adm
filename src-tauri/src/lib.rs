@@ -34,8 +34,9 @@ fn show_main_window(app: &tauri::AppHandle) {
 }
 
 /// 清理所有子进程（模型 / Agent / admAgent）。
-/// 从原 `on_window_event(CloseRequested)` 提取，供托盘"退出"和正常关闭复用。
-fn cleanup_processes(app: &tauri::AppHandle) {
+/// 从原 `on_window_event(CloseRequested)` 提取，供托盘"退出"、正常关闭与
+/// 应用自升级（拉起安装包后退出）复用。
+pub(crate) fn cleanup_processes(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
 
     // 强杀记录中的模型进程（整棵进程树）
@@ -195,6 +196,8 @@ pub fn run() {
             index::check_llamacpp_runtime,
             index::download_and_extract_llamacpp,
             index::reinstall_llamacpp,
+            index::download_app_update,
+            index::install_app_update,
             // model_list.rs
             model_list::scan_local_models,
             model_list::scan_part_files,
