@@ -53,3 +53,4 @@ docker/*/models/*
 # docker 目录：预置源码（ComfyUI 本体 + custom_nodes，几十 MB）同样不入库，export-cache.sh 导出
 docker/*/sources/*
 !docker/*/sources/.gitkeep
+pi-vcc
