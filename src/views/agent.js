@@ -14,7 +14,7 @@ import { sendMessage, cancelCurrentRun, sendMessageWithFiles } from "./agent/sen
 import { setupSSEListener, cancelScheduledLoadTools, cancelRunCompleteFallback, cancelDiscardFallback } from "./agent/sse.js";
 import { syncModeToServer } from "./agent/permission.js";
 import { loadTools, activateToolsTab } from "./agent/tools.js";
-import { switchModel, refreshServerProviders, resolveAgentModel, updateModelDropdown, updateModelBtn, refreshAgentInfo } from "./agent/model.js";
+import { switchModel, refreshServerProviders, resolveAgentModel, updateModelDropdown, updateModelBtn, refreshAgentInfo, setAddCloudModelHandler } from "./agent/model.js";
 import { enableAutoCompact, updateWorkspaceSelector, toggleWorkDirDropdown, closeWorkDirDropdown, validateWorkDirs } from "./agent/workspace.js";
 import { showSettings, hideSettings, updateSettingsUI, saveSettings, showAddModelDialog, hideAddModelDialog, addModel, renderVisionModelSelect, updateProviderKeyHint, BUILTIN_VISION_KEY } from "./agent/settings_dialog.js";
 import { addPendingFiles, parseUriListPaths, addPastedPaths, looksLikeFilePath } from "./agent/attach.js";
@@ -572,6 +572,10 @@ function bindEvents() {
 
   // 云端模型管理
   document.getElementById("agent-add-cloud-btn").addEventListener("click", showAddModelDialog);
+
+  // 模型下拉最底部的「+ 添加云端模型」入口（与上面按钮同一逻辑；
+  // 经 model.js 的注入回调，避免 model.js ↔ settings_dialog.js 循环依赖）
+  setAddCloudModelHandler(showAddModelDialog);
 
   // 模型下拉
   document.getElementById("agent-model-btn").addEventListener("click", function(e) {

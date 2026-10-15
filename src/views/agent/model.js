@@ -184,6 +184,14 @@ function isHiddenBuiltinModel(a, b, c) {
   return false;
 }
 
+// 下拉底部「添加云端模型」入口的回调：由 agent.js 注入
+// （settings_dialog.js 已 import 本模块，反向直接 import 会形成循环依赖）
+var addCloudModelHandler = null;
+
+export function setAddCloudModelHandler(fn) {
+  addCloudModelHandler = fn;
+}
+
 // 合并本地模型 + 云端模型渲染下拉列表
 export function updateModelDropdown() {
   var dropdown = document.getElementById("agent-model-dropdown");
@@ -262,6 +270,16 @@ export function updateModelDropdown() {
     });
     dropdown.appendChild(item);
   });
+
+  // 固定在列表最底部：打开「添加云端模型」弹窗（与设置里的「+ 添加云端模型」同一逻辑）
+  var addItem = document.createElement("div");
+  addItem.className = "model-item model-add";
+  addItem.id = "agent-model-add-cloud";
+  addItem.innerHTML = '<span class="model-item-name">+ ' + _t("添加云端模型") + '</span>';
+  addItem.addEventListener("click", function() {
+    if (addCloudModelHandler) addCloudModelHandler();
+  });
+  dropdown.appendChild(addItem);
 
   updateModelBtn();
 }

@@ -2271,11 +2271,9 @@ export const template = `
         <input type="text" class="settings-input" id="add-model-apikey" placeholder="API Key">
         <input type="text" class="settings-input" id="add-model-ctx" placeholder="${_t("上下文大小 (如 256K, 1M)")}">
         <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--c-text-2);cursor:pointer;user-select:none;">
-          <input type="checkbox" id="add-model-images" style="cursor:pointer;"> ${_t("支持图片输入（视觉模型）")}
+          <input type="checkbox" id="add-model-images" style="cursor:pointer;"> ${_t("多模态模型（支持图片识别）")}
         </label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--c-text-2);cursor:pointer;user-select:none;">
-          <input type="checkbox" id="add-model-reasoning" style="cursor:pointer;"> ${_t("支持思考模式")}
-        </label>
+        <div style="font-size:12px;color:var(--c-text-4);line-height:16px;">${_t("云端模型一律按支持思考写入；如需关闭，请在工具栏把推理强度设为「关闭」")}</div>
         <div id="add-model-msg" style="font-size:12px;min-height:18px;line-height:18px;"></div>
         <button class="settings-btn settings-btn-primary" id="add-model-submit" style="align-self:flex-start;">${_t("添加")}</button>
       </div>

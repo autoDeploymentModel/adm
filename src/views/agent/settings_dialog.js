@@ -203,7 +203,6 @@ function clearAddModelForm() {
   $input("add-model-modelid").value = "";
   $input("add-model-ctx").value = "";
   $input("add-model-images").checked = false;
-  $input("add-model-reasoning").checked = false;
   document.getElementById("add-model-msg").textContent = "";
   updateProviderKeyHint();
 }
@@ -228,7 +227,6 @@ function showEditModelDialog(p) {
   $input("add-model-apikey").value = p.api_key || "";
   $input("add-model-ctx").value = formatCtxInput(p.context_window);
   $input("add-model-images").checked = !!p.supports_images;
-  $input("add-model-reasoning").checked = !!p.can_reason;
   document.getElementById("add-model-msg").textContent = "";
   updateProviderKeyHint();
   setAddModelDialogMode(true);
@@ -311,7 +309,7 @@ export async function addModel() {
   var apiKey = $input("add-model-apikey").value.trim();
   var ctx = parseContextSize($input("add-model-ctx").value) || 256000;
   var supportsImages = $input("add-model-images").checked;
-  var canReason = $input("add-model-reasoning").checked;
+  // 思考模式不再单独勾选：云端模型一律按支持思考写入（can_reason=true）
 
   if (!modelId || !baseUrl || !apiKey) {
     addModelMsg(_t("请填写模型ID、API地址和密钥"), true);
@@ -338,7 +336,7 @@ export async function addModel() {
     try {
       await invoke("update_cloud_provider", {
         key: key,
-        input: { name: name, base_url: baseUrl, api_key: apiKey, context_window: ctx, model_id: modelId, supports_images: supportsImages, can_reason: canReason }
+        input: { name: name, base_url: baseUrl, api_key: apiKey, context_window: ctx, model_id: modelId, supports_images: supportsImages, can_reason: true }
       });
       // 同步运行中的 server：与添加路径同理，只写标量 api_key 触发服务端落盘+从磁盘全量重载，
       // 让刚写入 admAgent.json 的新参数（base_url / model id / 上下文等）立即生效
@@ -379,7 +377,7 @@ export async function addModel() {
 
   try {
     var addResp = await invoke("add_cloud_provider", {
-      input: { name: name, base_url: baseUrl, api_key: apiKey, context_window: ctx, model_id: modelId, supports_images: supportsImages, can_reason: canReason }
+      input: { name: name, base_url: baseUrl, api_key: apiKey, context_window: ctx, model_id: modelId, supports_images: supportsImages, can_reason: true }
     });
     // 关键：把新 provider 同步进运行中的 server（/config/set 会写盘并自动重载内存）。
     // 否则 server 只在启动时读 admAgent.json，选中新模型会报
