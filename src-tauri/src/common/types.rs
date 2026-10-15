@@ -150,6 +150,14 @@ pub agent_allow_all_tools: bool,
 /// 若字段默认值与之相反，全新安装下开关的实际状态会与文档/UI 文案矛盾。
 #[serde(default)]
 pub agent_concurrent_sessions: bool,
+/// 压缩上下文时自动提取记忆规则：关闭后 admAgent 每次上下文压缩不再把会话里的
+/// 约束/决策沉淀进跨会话项目记忆（已有条目保留并继续注入）。
+/// 同步写入 admAgent.json 的 options.project_memory_sync。
+/// 默认开启，故用 `Option<bool>` 表达「未设置」：`Settings::default()`（config.json
+/// 缺失、解析失败、首次写盘等路径直接落盘的那一份）给的是 None，不会被当成用户
+/// 主动「关闭」写进磁盘；None 一律按开启处理（前端 `!== false`、Rust `unwrap_or(true)`）。
+#[serde(default, skip_serializing_if = "Option::is_none")]
+pub agent_project_memory_sync: Option<bool>,
 }
 
 /// 代理配置（仅 admAgent 使用，桌面端业务请求不走代理）

@@ -9,6 +9,15 @@ import { S, invoke } from "./store.js";
 import { escapeHtml, $input } from "./utils.js";
 import { reportError, showChoice } from "./ui.js";
 
+// 压缩时自动提取记忆规则：服务端在每次上下文压缩时把会话里的 durable 约束/决策
+// 沉淀进 project_memory.json。开关写入 config.json 的 agent_project_memory_sync，
+// Rust 侧 save_settings 会把它同步进 admAgent.json 的 options.project_memory_sync
+// 并触发服务端热重载（与 options.bash_allow_all 同一套流程）。
+// 默认开启：字段缺失（旧配置 / load_settings 失败）视为开启，只有显式 false 才关闭。
+export function memoryAutoExtractEnabled() {
+  return S.settings.agent_project_memory_sync !== false;
+}
+
 // Anchor JSON: { kind: "constraint"|"decision", key, value, why?, source?, salience?, updated_at? }
 // 中文标签与颜色（与 template.js .memory-tag 对应；标签渲染时经 _t 翻译）
 var KIND_LABEL = { constraint: _t("约束"), decision: _t("决策") };
@@ -163,8 +172,128 @@ export async function deleteMemoryEntry(index) {
   await saveProjectMemory(next);
 }
 
-// 设置弹窗打开时调用：读取并渲染项目记忆
+// 项目记忆弹窗打开时调用：读取并渲染项目记忆
 export async function refreshProjectMemory() {
   var anchors = await loadProjectMemory();
   renderProjectMemory(anchors);
+}
+
+// ===== 项目记忆弹窗（toolbar「🧠 项目记忆」按钮） =====
+
+// 弹窗顶部显示当前工作目录（允许为空：默认工作区没有路径）
+function updateMemoryWorkspaceLabel() {
+  var el = document.getElementById("agent-memory-workspace");
+  if (!el) return;
+  var path = (S.workspaceInfo && S.workspaceInfo.path) || "";
+  el.textContent = path || _t("默认工作区");
+  el.title = path || "";
+}
+
+function syncAutoExtractToggle() {
+  var box = /** @type {HTMLInputElement | null} */ (document.getElementById("agent-memory-auto-extract"));
+  if (box) box.checked = memoryAutoExtractEnabled();
+}
+
+// 切换「压缩时自动提取记忆规则」：先落 S，再持久化到 config.json（后端同步 admAgent.json）。
+// 写盘失败时回滚 UI 与内存态，避免出现「勾选着但没生效」的假状态。
+async function applyAutoExtract(enabled) {
+  var prev = S.settings.agent_project_memory_sync;
+  S.settings.agent_project_memory_sync = enabled;
+  try {
+    var s = await invoke("load_settings");
+    s.agent_project_memory_sync = enabled;
+    await invoke("save_settings", { settings: s });
+  } catch (e) {
+    S.settings.agent_project_memory_sync = prev;
+    syncAutoExtractToggle();
+    reportError(e, { prefix: _t("保存设置失败: ") });
+  }
+}
+
+export function openProjectMemoryDialog() {
+  var overlay = document.getElementById("agent-project-memory-overlay");
+  if (!overlay) return;
+  updateMemoryWorkspaceLabel();
+  syncAutoExtractToggle();
+  overlay.classList.add("show");
+  // 打开时刷新条目（读取 project_memory.json；只读展示 + 手动增删改）
+  refreshProjectMemory();
+}
+
+export function closeProjectMemoryDialog() {
+  var overlay = document.getElementById("agent-project-memory-overlay");
+  if (overlay) overlay.classList.remove("show");
+}
+
+// 视图 mount 时调用一次：toolbar 按钮、弹窗开合、折叠块、行内编辑/删除、新增/编辑弹窗
+export function initProjectMemoryUI() {
+  var openBtn = document.getElementById("agent-memory-btn");
+  if (openBtn) openBtn.addEventListener("click", openProjectMemoryDialog);
+
+  var overlay = document.getElementById("agent-project-memory-overlay");
+  var closeBtn = document.getElementById("agent-project-memory-close");
+  if (closeBtn) closeBtn.addEventListener("click", closeProjectMemoryDialog);
+  if (overlay) {
+    overlay.addEventListener("click", function(e) {
+      if (e.target === overlay) closeProjectMemoryDialog();
+    });
+  }
+
+  var autoBox = document.getElementById("agent-memory-auto-extract");
+  if (autoBox) {
+    autoBox.addEventListener("change", function() {
+      applyAutoExtract(/** @type {HTMLInputElement} */ (autoBox).checked);
+    });
+  }
+
+  // 条目折叠块：点击头部展开/收起
+  var toggle = document.getElementById("agent-memory-toggle");
+  var collapse = document.getElementById("agent-memory-collapse");
+  if (toggle && collapse) {
+    toggle.addEventListener("click", function() {
+      collapse.classList.toggle("open");
+    });
+  }
+
+  // 行内编辑/删除按钮（事件委托：行内容由 renderProjectMemory 动态生成）
+  var body = document.getElementById("agent-memory-body");
+  if (body) {
+    body.addEventListener("click", function(e) {
+      var target = /** @type {Element|null} */ (e.target);
+      var btn = target && target.closest ? target.closest(".memory-action") : null;
+      if (!btn) return;
+      var item = btn.closest(".memory-item");
+      var idx = item ? parseInt(item.getAttribute("data-idx") || "-1", 10) : -1;
+      if (idx < 0) return;
+      if (btn.getAttribute("data-act") === "edit") {
+        openMemoryEditor(idx);
+      } else if (btn.getAttribute("data-act") === "del") {
+        deleteMemoryEntry(idx);
+      }
+    });
+  }
+
+  // 折叠块外的「添加记忆」按钮
+  var addBtn = document.getElementById("agent-memory-add-btn");
+  if (addBtn) {
+    addBtn.addEventListener("click", function() {
+      // 自动展开，确保添加完能立即看到
+      if (collapse && !collapse.classList.contains("open")) {
+        collapse.classList.add("open");
+      }
+      openMemoryEditor(null);
+    });
+  }
+
+  // 编辑弹窗：关闭、提交、点遮罩关闭
+  var editor = document.getElementById("agent-memory-overlay");
+  var editorClose = document.getElementById("agent-memory-dialog-close");
+  var submitBtn = document.getElementById("memory-dialog-submit");
+  if (editorClose) editorClose.addEventListener("click", closeMemoryEditor);
+  if (submitBtn) submitBtn.addEventListener("click", submitMemoryEditor);
+  if (editor) {
+    editor.addEventListener("click", function(e) {
+      if (e.target === editor) closeMemoryEditor();
+    });
+  }
 }

@@ -16,13 +16,14 @@ import { syncModeToServer } from "./agent/permission.js";
 import { loadTools, activateToolsTab } from "./agent/tools.js";
 import { switchModel, refreshServerProviders, resolveAgentModel, updateModelDropdown, updateModelBtn, refreshAgentInfo } from "./agent/model.js";
 import { enableAutoCompact, updateWorkspaceSelector, toggleWorkDirDropdown, closeWorkDirDropdown, validateWorkDirs } from "./agent/workspace.js";
-import { showSettings, hideSettings, updateSettingsUI, saveSettings, showAddModelDialog, hideAddModelDialog, addModel, initProjectMemoryUI, renderVisionModelSelect, updateProviderKeyHint, BUILTIN_VISION_KEY } from "./agent/settings_dialog.js";
+import { showSettings, hideSettings, updateSettingsUI, saveSettings, showAddModelDialog, hideAddModelDialog, addModel, renderVisionModelSelect, updateProviderKeyHint, BUILTIN_VISION_KEY } from "./agent/settings_dialog.js";
 import { addPendingFiles, parseUriListPaths, addPastedPaths, looksLikeFilePath } from "./agent/attach.js";
 import { bindSkillSelectorEvents, initSkillSelector, clearAttachedSkillsAfterSend } from "./agent/skill_selector.js";
 import { bindCompactBtnEvents } from "./agent/compact.js";
 import { initMcpDialogUI } from "./agent/mcp_dialog.js";
 import { initPdfBatching, reconcilePdfBatching } from "./agent/pdf_batch.js";
 import { bindDecisionModeEvents, updateDecisionModeUI } from "./agent/decision_mode.js";
+import { initProjectMemoryUI } from "./agent/memory.js";
 
 // ===== 初始化 =====
 //
@@ -504,7 +505,7 @@ function bindEvents() {
   // 设置按钮 (在侧栏底部)
   document.getElementById("agent-settings-btn").addEventListener("click", showSettings);
   document.getElementById("agent-settings-close").addEventListener("click", hideSettings);
-  // 项目记忆折叠块交互（默认折叠）
+  // 项目记忆弹窗交互（toolbar 按钮 / 条目增删改 / 压缩时自动提取开关）
   initProjectMemoryUI();
 
   // 工作区选择器点击 → 下拉列表

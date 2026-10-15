@@ -39,6 +39,14 @@ pub async fn save_settings(app: tauri::AppHandle, settings: Settings) -> Result<
     // 同步「开启所有工具调用」到 admAgent.json 的 options.bash_allow_all，失败静默
     crate::pages::agent::sync_agent_allow_all_tools(&app, settings.agent_allow_all_tools);
 
+    // 同步「压缩时自动提取记忆规则」到 admAgent.json 的 options.project_memory_sync，失败静默。
+    // 字段为 None（旧配置没写过 / Settings::default() 首次落盘）时按开启处理，
+    // 只有用户显式关过（Some(false)）才写 false。
+    crate::pages::agent::sync_agent_project_memory(
+        &app,
+        settings.agent_project_memory_sync.unwrap_or(true),
+    );
+
     dbg_log!("[DEBUG] Config saved successfully to: {:?}", config_path);
     Ok(())
 }

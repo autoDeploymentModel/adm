@@ -17,6 +17,7 @@ import { showInfo, showWarning, reportError, showConfirm, showNotice, updateSend
 import { getErrorMessage, classifyError, ERROR_CANCEL } from "./error.js";
 import { loadConversations, refreshMessages } from "./session.js";
 import { refreshAgentInfo } from "./model.js";
+import { memoryAutoExtractEnabled } from "./memory.js";
 
 // 当前压缩请求的 sessionId：防止用户连点 / 切到别的会话后按钮仍处于 compressing 态。
 // 模块级状态 → unmount→remount 后会残留陈旧值，导致按钮永久卡在压缩态。
@@ -64,8 +65,13 @@ export function bindCompactBtnEvents() {
   }
 
   btn.addEventListener("click", function() {
-    // 防误点：确认后才触发压缩（压缩会改写会话历史，不可撤销）
-    showConfirm(_t("确定压缩当前会话的上下文吗？旧消息将被摘要替换，无法撤销。"), function() {
+    // 防误点：确认后才触发压缩（压缩会改写会话历史，不可撤销）。
+    // 关闭「压缩时自动提取记忆规则」时在确认文案里点明，避免用户以为记忆仍在沉淀。
+    var msg = _t("确定压缩当前会话的上下文吗？旧消息将被摘要替换，无法撤销。");
+    if (!memoryAutoExtractEnabled()) {
+      msg += "\n\n" + _t("已关闭「压缩时自动提取记忆规则」：本次压缩不会把约束与决策沉淀到项目记忆。");
+    }
+    showConfirm(msg, function() {
       triggerManualCompact();
     });
   });

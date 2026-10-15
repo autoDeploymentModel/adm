@@ -364,7 +364,14 @@ fn ensure_adm_agent_config(app: &tauri::AppHandle) -> Result<(), AppError> {
 
         first.insert("id".to_string(), serde_json::json!("localModel"));
         first.insert("name".to_string(), serde_json::json!("Local Model"));
+        // 统一词表 ctx_size / output_tokens；旧键同时再写一份：只认旧键的老版本
+        // admAgent（或仍在跑的旧 server 进程）靠它读到同样的值。
+        first.insert("ctx_size".to_string(), serde_json::json!(ctx));
         first.insert("context_window".to_string(), serde_json::json!(ctx));
+        first.insert(
+            "output_tokens".to_string(),
+            serde_json::json!(default_max_tokens),
+        );
         first.insert(
             "default_max_tokens".to_string(),
             serde_json::json!(default_max_tokens),
@@ -1148,6 +1155,54 @@ pub fn sync_agent_allow_all_tools(app: &tauri::AppHandle, enabled: bool) {
 /// 把 options.bash_allow_all 写入 admAgent.json（只补丁该字段，不动其它选项）。
 /// 返回是否真的发生了变更（供调用方决定是否触发服务端重载）。
 fn write_agent_allow_all_tools(enabled: bool) -> Result<bool, AppError> {
+    write_agent_option_bool("bash_allow_all", enabled)
+}
+
+/// 把「压缩上下文时自动提取记忆规则」写入 admAgent.json 的 options.project_memory_sync。
+///
+/// 关闭后 admAgent 每次上下文压缩不再从会话里提取约束/决策沉淀进 project_memory.json
+/// （已有条目保留并继续注入）。写入流程与 bash_allow_all 一致：写文件 → POST /config/set
+/// 触发服务端全量重载 → POST /agent/update 重建 agent（该开关在 agent 构造时读取）。
+/// 失败静默：写不进去等同于维持当前的提取行为，不影响主流程。
+pub fn sync_agent_project_memory(app: &tauri::AppHandle, enabled: bool) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let changed = {
+            api_debug_log(|| format!("Memory: 同步压缩时自动提取记忆规则 enabled={}", enabled));
+            write_agent_option_bool("project_memory_sync", enabled)
+        };
+        let changed = match changed {
+            Ok(c) => c,
+            Err(e) => {
+                api_debug_log(|| format!("Memory ! 写 admAgent.json 失败: {}", e));
+                return;
+            }
+        };
+        if !changed {
+            api_debug_log(|| "Memory: 配置未变化，跳过重载".to_string());
+            return;
+        }
+        let ws = match active_workspace_id(&app) {
+            Some(ws) => ws,
+            None => {
+                api_debug_log(|| "Memory: 无活跃工作区，跳过服务端重载".to_string());
+                return;
+            }
+        };
+        let client = match agent_local_client() {
+            Some(c) => c,
+            None => return,
+        };
+        api_debug_log(|| "Memory: admAgent.json 已更新，触发服务端热重载".to_string());
+        if post_config_reload(&client, &ws, "Memory").await {
+            post_agent_update(&client, &ws, "Memory").await;
+        }
+    });
+}
+
+/// 把 admAgent.json 的 options.<key> 补丁为布尔值（保留 options 下的其它键）。
+/// 返回是否真的发生了变更（供调用方决定是否触发服务端重载）。
+fn write_agent_option_bool(key: &'static str, enabled: bool) -> Result<bool, AppError> {
     update_adm_agent_config(move |config| {
         let root = config
             .as_object_mut()
@@ -1160,10 +1215,10 @@ fn write_agent_allow_all_tools(enabled: bool) -> Result<bool, AppError> {
         }
         let options = options.as_object_mut().unwrap();
         let target = serde_json::json!(enabled);
-        if options.get("bash_allow_all") == Some(&target) {
+        if options.get(key) == Some(&target) {
             return Ok(false);
         }
-        options.insert("bash_allow_all".to_string(), target);
+        options.insert(key.to_string(), target);
         Ok(true)
     })
 }
@@ -1294,6 +1349,7 @@ pub async fn add_cloud_provider(
             {
                 "id": model_id,
                 "name": input.name,
+                "ctx_size": input.context_window,
                 "context_window": input.context_window,
                 "supports_images": input.supports_images,
                 "can_reason": can_reason,
@@ -1330,6 +1386,14 @@ pub struct CloudProviderView {
     pub supports_images: bool,
     /// models[0].can_reason，是否开启思考模式
     pub can_reason: bool,
+}
+
+/// 读取可能写成 JSON 数字或带引号数字的配置数值：admAgent 侧两者都接受
+/// （`parseJSONInt64`），桌面端也必须接受——否则字符串形式会读成 0，
+/// 桌面显示“无窗口”而 agent 实际按该值工作。
+fn config_u64(v: &serde_json::Value) -> Option<u64> {
+    v.as_u64()
+        .or_else(|| v.as_str().and_then(|s| s.trim().parse::<u64>().ok()))
 }
 
 /// 列出 admAgent.json 中已添加的全部云端模型 Provider（排除自动管理的 `local`）。
@@ -1373,8 +1437,13 @@ pub async fn list_cloud_providers(
             let context_window = prov
                 .get("models")
                 .and_then(|m| m.get(0))
-                .and_then(|m0| m0.get("context_window"))
-                .and_then(|c| c.as_u64())
+                .and_then(|m0| {
+                    // First key that PARSES wins: a quoted "128000" must not
+                    // shadow a valid legacy number.
+                    ["ctx_size", "context_window"]
+                        .iter()
+                        .find_map(|k| m0.get(k).and_then(config_u64))
+                })
                 .unwrap_or(0) as u32;
             let model_id = prov
                 .get("models")
@@ -1410,29 +1479,62 @@ pub async fn list_cloud_providers(
     Ok(out)
 }
 
+/// 从全局 `recent_models` 中剔除指向指定 provider 的历史条目，返回剔除条数。
+///
+/// 该字段是 TUI/桌面端「最近使用」的数据源，只在切换模型时由服务端追加，删除
+/// provider 不会级联清理，留着会在配置里长期残留已失效的模型。列表被清空时直接
+/// 删掉字段，与服务端 `omitempty` 的写回语义一致（避免留下 `recent_models: []`）。
+fn prune_recent_models_for_provider(config: &mut serde_json::Value, provider_key: &str) -> usize {
+    let mut removed = 0;
+    let mut emptied = false;
+    if let Some(list) = config
+        .get_mut("recent_models")
+        .and_then(|v| v.as_array_mut())
+    {
+        let before = list.len();
+        list.retain(|item| item.get("provider").and_then(|p| p.as_str()) != Some(provider_key));
+        removed = before - list.len();
+        emptied = list.is_empty();
+    }
+    if emptied {
+        if let Some(root) = config.as_object_mut() {
+            root.remove("recent_models");
+        }
+    }
+    removed
+}
+
+/// 从 `providers` 分支移除指定 key，并顺带清掉 `recent_models` 中指向它的历史
+/// 条目，返回被剔除的最近使用条数。
+fn remove_provider_with_recent_models(
+    config: &mut serde_json::Value,
+    key: &str,
+) -> Result<usize, AppError> {
+    let providers = config
+        .get_mut("providers")
+        .and_then(|p| p.as_object_mut())
+        .ok_or_else(|| AppError::msg("admAgent.json 结构异常：缺少 providers"))?;
+
+    if providers.remove(key).is_none() {
+        return Err(AppError::msg(format!("未找到 provider: {}", key)));
+    }
+
+    Ok(prune_recent_models_for_provider(config, key))
+}
+
 /// 删除指定 key 的云端模型 Provider。
-/// 按 key 定位并从 admAgent.json 的 providers 分支中移除，原子写入。
+/// 按 key 定位并从 admAgent.json 的 providers 分支中移除，原子写入；同一次写入里
+/// 顺带清掉 `recent_models` 中指向该 provider 的历史条目。
 #[tauri::command]
 pub async fn delete_cloud_provider(
     _app: tauri::AppHandle,
     key: String,
 ) -> Result<serde_json::Value, AppError> {
     // 锁由 update_adm_agent_config 统一获取（进程内 Mutex + 跨进程 flock）
-    let removed = update_adm_agent_config(|config| {
-        let providers = config
-            .get_mut("providers")
-            .and_then(|p| p.as_object_mut())
-            .ok_or_else(|| AppError::msg("admAgent.json 结构异常：缺少 providers"))?;
+    let removed_recent =
+        update_adm_agent_config(|config| remove_provider_with_recent_models(config, &key))?;
 
-        if providers.get(&key).is_none() {
-            return Err(AppError::msg(format!("未找到 provider: {}", key)));
-        }
-        providers.remove(&key);
-        Ok(true)
-    })?;
-    debug_assert!(removed);
-
-    Ok(serde_json::json!({ "key": key, "success": true }))
+    Ok(serde_json::json!({ "key": key, "success": true, "removed_recent": removed_recent }))
 }
 
 /// 更新指定 key 的云端模型 Provider（按 key 定位，替换其全部参数）。
@@ -1466,6 +1568,7 @@ pub async fn update_cloud_provider(
             {
                 "id": model_id,
                 "name": input.name,
+                "ctx_size": input.context_window,
                 "context_window": input.context_window,
                 "supports_images": input.supports_images,
                 "can_reason": can_reason,
@@ -3913,6 +4016,92 @@ mod adm_agent_config_tests {
             out["agent_vision_model"]["model"], "m",
             "新字段必须写入"
         );
+    }
+
+    // ---- delete_cloud_provider：顺带清理 recent_models ----
+
+    const DELETE_SAMPLE: &str = r#"{
+  "model": { "provider": "local", "model": "localModel" },
+  "recent_models": [
+    { "model": "deepseek-v4.1-flash", "provider": "deepseekv41flash" },
+    { "model": "adm-models", "provider": "admAgent" },
+    { "model": "qwen3.8-flash", "provider": "qwen38flash" },
+    { "model": "sensenova-6.8-flash-lite", "provider": "sensenova68flashlite" }
+  ],
+  "providers": {
+    "local": { "name": "Local" },
+    "qwen38flash": { "name": "Qwen" }
+  }
+}"#;
+
+    fn read_config(path: &std::path::Path) -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(path).expect("读回配置"))
+            .expect("落盘后必须是合法 JSON")
+    }
+
+    /// 删除 provider 时顺带剔除指向它的「最近使用」条目，其余条目与字段原样保留。
+    #[test]
+    fn delete_provider_prunes_matching_recent_models() {
+        let t = temp_config_dir("delete_prune");
+        let path = t.dir.join("admAgent.json");
+        std::fs::write(&path, DELETE_SAMPLE).expect("写入样本配置");
+
+        let removed =
+            update_adm_agent_config(|v| remove_provider_with_recent_models(v, "qwen38flash"))
+                .expect("删除应成功");
+        assert_eq!(removed, 1, "应剔除 1 条指向该 provider 的历史记录");
+
+        let raw = std::fs::read_to_string(&path).expect("读回配置");
+        assert!(
+            !raw.contains("qwen38flash"),
+            "已删 provider 不得残留在配置任何位置"
+        );
+        let out = read_config(&path);
+        assert_eq!(out["providers"]["local"]["name"], "Local", "其它 provider 必须保留");
+        assert_eq!(
+            out["recent_models"].as_array().expect("列表应仍在").len(),
+            3,
+            "其余「最近使用」条目必须保留（顺序不变）"
+        );
+        assert_eq!(out["recent_models"][0]["provider"], "deepseekv41flash");
+        assert_eq!(out["model"]["model"], "localModel", "无关字段必须原样保留");
+    }
+
+    /// 剔除后列表为空：直接移除字段，避免留下 `recent_models: []`
+    /// （服务端 omitempty 的写回语义是字段缺失）。
+    #[test]
+    fn delete_provider_drops_empty_recent_models_field() {
+        let t = temp_config_dir("delete_prune_empty");
+        let path = t.dir.join("admAgent.json");
+        std::fs::write(
+            &path,
+            r#"{
+  "recent_models": [ { "model": "qwen3.8-flash", "provider": "qwen38flash" } ],
+  "providers": { "qwen38flash": { "name": "Qwen" } }
+}"#,
+        )
+        .expect("写入样本配置");
+
+        let removed =
+            update_adm_agent_config(|v| remove_provider_with_recent_models(v, "qwen38flash"))
+                .expect("删除应成功");
+        assert_eq!(removed, 1);
+
+        let out = read_config(&path);
+        assert!(out.get("recent_models").is_none(), "空列表必须整体移除字段");
+    }
+
+    /// provider 不存在：报错并放弃整次写入（文件内容一字不动）。
+    #[test]
+    fn delete_unknown_provider_leaves_file_untouched() {
+        let t = temp_config_dir("delete_missing");
+        let path = t.dir.join("admAgent.json");
+        std::fs::write(&path, DELETE_SAMPLE).expect("写入样本配置");
+
+        let err = update_adm_agent_config(|v| remove_provider_with_recent_models(v, "nope"))
+            .expect_err("删除不存在的 provider 必须失败");
+        assert!(err.to_string().contains("未找到 provider"), "错误信息应指明原因");
+        assert_eq!(std::fs::read_to_string(&path).expect("读回配置"), DELETE_SAMPLE);
     }
 
     // ---- write_agent_vision_model：supports_images 校验 ----

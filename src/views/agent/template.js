@@ -1588,11 +1588,18 @@ export const template = `
     color: var(--c-text-4);
   }
   .memory-collapse.open .memory-collapse-arrow { transform: rotate(90deg); }
-  .memory-count { color: var(--c-text-4); font-size: 12px; }
+  .memory-count { color: var(--c-text-4); font-size: 12px; margin-left: 6px; }
+  /* 项目记忆弹窗里的当前工作目录（长路径需换行，避免撑破弹窗） */
+  .memory-workspace {
+    font-size: 12px;
+    color: var(--c-text);
+    word-break: break-all;
+    line-height: 1.5;
+  }
   .memory-collapse-body {
     display: none;
     padding: 4px 12px 10px;
-    max-height: 260px;
+    max-height: 46vh;
     overflow-y: auto;
   }
   .memory-collapse.open .memory-collapse-body { display: block; }
@@ -2077,6 +2084,11 @@ export const template = `
             <span class="compact-icon">🗜️</span>
             <span class="compact-text">${_t("压缩上下文")}</span>
           </button>
+          <!-- ②a++ 项目记忆：打开当前工作目录的跨会话持久记忆弹窗（查看/编辑 + 压缩时自动提取开关） -->
+          <button class="toolbar-compact-btn" id="agent-memory-btn" title="${_t("查看当前工作目录的项目记忆（跨会话持久约束与决策）")}">
+            <span class="compact-icon">🧠</span>
+            <span class="compact-text">${_t("项目记忆")}</span>
+          </button>
           <!-- ②b 微信消息开关：开 = 微信 Bot 消息进入当前打开的会话；关 = 不接收微信消息 -->
           <button class="toolbar-wx-btn" id="agent-wx-follow-btn" title="${_t("微信消息开关：开启后微信 Bot 消息进入当前打开的会话；关闭后不再接收微信消息")}">
             <span class="wx-icon">💬</span>
@@ -2192,26 +2204,52 @@ export const template = `
         </div>
       </div>
 
-      <!-- 项目记忆（跨会话持久记忆，只读展示） -->
-      <div class="param-group">
-        <div class="param-group-title">${_t("项目记忆")}</div>
-        <div class="param-desc" style="margin-bottom:6px;">${_t("Agent 跨会话自动沉淀的持久约束与决策（保存在 workspace 的 project_memory.json，可手动新增/修改/删除；下次上下文压缩时会与 Agent 自动沉淀结果合并）")}</div>
-        <div class="memory-collapse" id="agent-memory-collapse">
-          <div class="memory-collapse-header" id="agent-memory-toggle">
-            <span class="memory-collapse-arrow">▶</span>
-            <span>${_t("查看项目记忆")}</span>
-            <span class="memory-count" id="agent-memory-count"></span>
-          </div>
-          <div class="memory-collapse-body" id="agent-memory-body"></div>
-        </div>
-        <button class="btn-add-cloud" id="agent-memory-add-btn" style="margin-top:6px;">+ ${_t("添加记忆")}</button>
-      </div>
-
       <!-- 云端模型管理 -->
       <div class="param-group">
         <div class="param-group-title">${_t("云端模型管理")}</div>
         <div class="provider-list" id="provider-list"></div>
         <button class="btn-add-cloud" id="agent-add-cloud-btn">+ ${_t("添加云端模型")}</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 项目记忆弹窗（toolbar「🧠 项目记忆」打开）：查看/编辑当前工作目录的跨会话持久记忆，
+     并控制压缩上下文时是否自动提取记忆规则（写入 config.json 的 agent_project_memory_sync） -->
+<div class="settings-overlay" id="agent-project-memory-overlay">
+  <div class="settings-modal">
+    <div class="settings-header">
+      <span class="settings-title">${_t("项目记忆")}</span>
+      <button class="settings-close" id="agent-project-memory-close">✕</button>
+    </div>
+    <div class="settings-body">
+      <div class="param-row">
+        <div class="param-label">${_t("工作目录")}</div>
+        <div class="param-input">
+          <div class="memory-workspace" id="agent-memory-workspace">--</div>
+          <div class="param-desc">${_t("Agent 跨会话自动沉淀的持久约束与决策，保存在该工作目录的 project_memory.json（可手动新增/修改/删除）")}</div>
+        </div>
+      </div>
+      <div class="param-row">
+        <div class="param-label">${_t("压缩时自动提取")}</div>
+        <div class="param-input">
+          <div class="checkbox-wrap">
+            <input type="checkbox" id="agent-memory-auto-extract">
+            <span>${_t("压缩上下文时自动提取记忆规则")}</span>
+          </div>
+          <div class="param-desc">${_t("开启后每次上下文压缩都会自动从会话中提取约束与决策并沉淀到项目记忆；关闭后压缩只生成摘要，不再自动提取新的记忆规则（已有条目保留并继续生效）")}</div>
+        </div>
+      </div>
+      <div class="param-group">
+        <div class="param-group-title">${_t("记忆条目")}<span class="memory-count" id="agent-memory-count"></span></div>
+        <div class="memory-collapse open" id="agent-memory-collapse">
+          <div class="memory-collapse-header" id="agent-memory-toggle">
+            <span class="memory-collapse-arrow">▶</span>
+            <span>${_t("查看项目记忆")}</span>
+          </div>
+          <div class="memory-collapse-body" id="agent-memory-body"></div>
+        </div>
+        <button class="btn-add-cloud" id="agent-memory-add-btn" style="margin-top:6px;">+ ${_t("添加记忆")}</button>
       </div>
     </div>
   </div>
@@ -2245,7 +2283,7 @@ export const template = `
   </div>
 </div>
 
-<!-- 项目记忆 添加/修改弹窗（标题/提交文案由 settings_dialog.js 按模式切换） -->
+<!-- 项目记忆 添加/修改弹窗（标题/提交文案由 memory.js 按模式切换） -->
 <div class="add-model-overlay" id="agent-memory-overlay">
   <div class="settings-modal" style="width:440px;">
     <div class="settings-header">

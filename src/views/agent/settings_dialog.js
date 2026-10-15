@@ -6,7 +6,6 @@ import { parseContextSize, escapeHtml, $input, normalizeReasoningEffort, reasoni
 import { showConfirm, reportError } from "./ui.js";
 import { updateWorkspaceSelector } from "./workspace.js";
 import { updateModelDropdown, switchModel, refreshServerProviders } from "./model.js";
-import { refreshProjectMemory, openMemoryEditor, closeMemoryEditor, submitMemoryEditor, deleteMemoryEntry } from "./memory.js";
 
 // 内置多模态模型（图片识别）在服务端的显示名：admAgent 的图片后端池只暴露 adm-models。
 // 旧版本使用 admImage-model（服务端两者等价），这里统一归一化，避免下拉出现重复项。
@@ -21,65 +20,10 @@ function normalizeVisionKey(value) {
 export function showSettings() {
   updateSettingsUI();
   document.getElementById("agent-settings-overlay").classList.add("show");
-  // 打开弹窗时刷新项目记忆（读取 workspace/project_memory.json，只读展示）
-  refreshProjectMemory();
 }
 
 export function hideSettings() {
   document.getElementById("agent-settings-overlay").classList.remove("show");
-}
-
-// 项目记忆折叠块交互：点击头部展开/收起（默认折叠）；行内编辑/删除、新增弹窗
-export function initProjectMemoryUI() {
-  var toggle = document.getElementById("agent-memory-toggle");
-  var collapse = document.getElementById("agent-memory-collapse");
-  if (toggle && collapse) {
-    toggle.addEventListener("click", function() {
-      collapse.classList.toggle("open");
-    });
-  }
-
-  // 行内编辑/删除按钮（事件委托：行内容由 memory.js 动态生成）
-  var body = document.getElementById("agent-memory-body");
-  if (body) {
-    body.addEventListener("click", function(e) {
-      var target = /** @type {Element|null} */ (e.target);
-      var btn = target && target.closest ? target.closest(".memory-action") : null;
-      if (!btn) return;
-      var item = btn.closest(".memory-item");
-      var idx = item ? parseInt(item.getAttribute("data-idx") || "-1", 10) : -1;
-      if (idx < 0) return;
-      if (btn.getAttribute("data-act") === "edit") {
-        openMemoryEditor(idx);
-      } else if (btn.getAttribute("data-act") === "del") {
-        deleteMemoryEntry(idx);
-      }
-    });
-  }
-
-  // 折叠块外的「添加记忆」按钮
-  var addBtn = document.getElementById("agent-memory-add-btn");
-  if (addBtn) {
-    addBtn.addEventListener("click", function() {
-      // 自动展开，确保添加完能立即看到
-      if (collapse && !collapse.classList.contains("open")) {
-        collapse.classList.add("open");
-      }
-      openMemoryEditor(null);
-    });
-  }
-
-  // 编辑弹窗：关闭、提交、点遮罩关闭
-  var overlay = document.getElementById("agent-memory-overlay");
-  var closeBtn = document.getElementById("agent-memory-dialog-close");
-  var submitBtn = document.getElementById("memory-dialog-submit");
-  if (closeBtn) closeBtn.addEventListener("click", closeMemoryEditor);
-  if (submitBtn) submitBtn.addEventListener("click", submitMemoryEditor);
-  if (overlay) {
-    overlay.addEventListener("click", function(e) {
-      if (e.target === overlay) closeMemoryEditor();
-    });
-  }
 }
 
 export function updateSettingsUI() {
@@ -195,6 +139,9 @@ export async function saveSettings() {
     s.agent_vision_model = normalizeVisionKey(S.settings.agent_vision_model) || BUILTIN_VISION_KEY;
     s.agent_allow_all_tools = S.settings.agent_allow_all_tools === true;
     s.agent_concurrent_sessions = S.settings.agent_concurrent_sessions === true;
+    // 压缩时自动提取记忆规则（默认开：只有显式 false 才关闭），
+    // 后端 save_settings 会同步进 admAgent.json 的 options.project_memory_sync
+    s.agent_project_memory_sync = S.settings.agent_project_memory_sync !== false;
     await invoke("save_settings", { settings: s });
     updateWorkspaceSelector();
   } catch (e) {
@@ -259,26 +206,6 @@ function clearAddModelForm() {
   $input("add-model-reasoning").checked = false;
   document.getElementById("add-model-msg").textContent = "";
   updateProviderKeyHint();
-}
-
-// 清理「最近使用」里指向已删 provider 的条目（服务端数据配置的 recent_models，
-// TUI 模型菜单的"最近使用"分组数据源）。删除 provider 不会触碰它，若不在此清理，
-// 历史里会长期残留已删模型的键；TUI 菜单读时也会自动剔除，此处只是让配置保持干净。
-// 该字段仅 TUI 使用，写回不会影响 ADM 的模型选择。
-async function removeRecentModelsByProvider(wsId, providerKey) {
-  // recent_models 只存在服务端的全局数据配置里，需读 /v1/config 再按剩余条目写回
-  var cfg = await api("GET", "/v1/config");
-  var list = cfg && cfg.recent_models || null;
-  if (!Array.isArray(list)) return;
-  var kept = list.filter(function(m) { return !m || m.provider !== providerKey; });
-  if (kept.length === list.length) return; // 本就无残留，避免无谓写盘
-  var url = "/v1/workspaces/" + wsId + "/config/";
-  if (kept.length === 0) {
-    // 清空时直接删字段，避免留下 recent_models: []（omitempty 期望的是字段缺失）
-    await api("POST", url + "remove", { scope: 0, key: "recent_models" });
-  } else {
-    await api("POST", url + "set", { scope: 0, key: "recent_models", value: kept });
-  }
 }
 
 export function showAddModelDialog() {
@@ -346,10 +273,6 @@ function renderProviderList() {
             await api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/config/remove", {
               scope: 0, key: "providers." + p.key
             }).catch(function(e) { console.warn("[agent] 同步删除 provider 到服务端失败:", e); });
-            // 顺带清掉「最近使用」里指向该 provider 的条目（失败不影响删除结果）
-            removeRecentModelsByProvider(S.serverInfo.workspace_id, p.key).catch(function(e) {
-              console.warn("[agent] 清理最近使用模型记录失败:", e);
-            });
           }
           // 删的正是当前激活的 provider：立即切回本地模型，避免 active model 悬空
           // 导致 /agent/update 报 "active model provider not configured"、
