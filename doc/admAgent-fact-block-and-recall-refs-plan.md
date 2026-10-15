@@ -354,3 +354,17 @@ usableRequestBudget(cw, fixedOverhead) − 2×deriveSummaryMaxTokens(cw)
 `go build ./...`、`go vet`、`gofmt` 通过；`internal/agent|context|config` 全绿；全量仅剩三个既有环境抖动包。检索侧无回归：Rail 3 回放 `recall@10` 三次运行**位级一致**（2.690 / 2.923 / 3.373，与改动前同值），MRR 在同一份代码上自身波动 ±0.01（map 迭代序所致）→ 改动未影响召回质量。
 
 生效方式：`build.ps1` + `pnpm agent:push`（sidecar）。
+
+## 9. 第五轮：字段日志驱动的三处参数修正
+
+来源：2026-10-15 现场日志（`admAgent.log`，128k 与 1M 窗口模型混跑）。压缩链路本身健康——4 次压缩全部落地、无 `summarize skipped` / `max summarize resumes` / `could not bring`、事实块 203–205 字符稳定、无 ERROR——但暴露三处参数问题：
+
+| 级别 | 现象（日志证据） | 修复 |
+|---|---|---|
+| P1 | `tail_budget=55258` 是 `guard_limit=89600` 的 **62%**：落点上限 ≈ 固定开销 16.4k + 工具 schema 6.5k + 尾部 55.3k + 摘要 ≈ 79.6k/89.6k，工作窗口只剩 ~10k。实测保留尾部 1859→4687→7168→**16581**，落地 19480→22305→26690→**35549**，间隔 18m→14m，`tail_budget_limited` 始终 false（预算还能继续长） | `recentTailBudget` 增加工作窗口预留：`window = usable − 2×摘要上限 − reservedWorkWindow`，`reservedWorkWindow = min(minUsableWorkWindow, usable/2)`。128000 下尾部预算 55.3k→**35.9k**（落点约 62k、工作窗口约 25k ≈ 5–6 步）；64000 下 12.8k→**5.5k**（旧值本可把落点顶到 guard 之上，等于零工作窗口） |
+| P1 | 分档点写成 128KiB(131072)，实测模型 cw=**128000** → 反解 tail_budget 公式得到 `2×3072`，证明 128k 模型走的是**小档 caps**，且 shortfall 警告也不触发 | `recommendedContextWindow` 改为 **128000**（厂商标称 128k 的模型配的就是 128000）；用例显式钉住 128000 走大档 |
+| P2 | `deriveToolResultCompressThreshold = 6%×cw` 无上限 → 1M 窗口下 **60k** 才触发；实测一条 **25610 token** 的 fetch 结果原样进上下文，同一会话（guard=700k）涨到 251k / 204 条消息仍零压缩 | 新增 `toolResultCompressThresholdCap = 12000`（仍高于 `recallToolTokenBudget`，召回结果不会被二次压缩） |
+
+用例：`TestCapsScaleAtRecommendedWindow`（128000 显式走大档）、`TestToolResultCompressThresholdIsEager`（1M → 12000）、`TestRecentTailBudgetLeavesRoomForTheSummary`（尾部必须留下 `reservedWorkWindow`，128000 下留满 25k）。
+
+验证：gofmt、`go build ./...`、`go vet` 通过；`internal/agent|context|config` 全绿。
