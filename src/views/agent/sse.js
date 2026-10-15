@@ -637,7 +637,10 @@ function onConfigChangedSSEEvent() {
 // 服务端「丢弃半成品并重试」的通知 token（admAgent agent_loop_llm.go 的 notifyDiscard）：
 // 与 message deleted 事件属于同一次丢弃（token 先发出，但两者走不同 broker，到达顺序不保证），
 // 按 token 出本地化文案，并以此抑制下方按消息内容猜测的兜底提示，避免双提示。
-// 取值须与 admAgent 的 discardReasoning* / discardStreamInterrupted 常量保持一致。
+// 取值须与 admAgent 的 discardReasoningOverrun / discardStreamInterrupted 常量保持一致。
+// discard_reasoning_timeout 已不由新服务端发出（300s 无可见输出看门狗已删除），但保留一个
+// 版本周期：桌面端与内置 sidecar 分别发布，仍可能跑着旧 admAgent，而删掉该映射会让用户
+// 在提示里直接看到未翻译的英文 token 原文。
 var DISCARD_NOTICE_TEXT = {
   discard_reasoning_overrun: "模型思考量超出本轮上限，已丢弃该段思考并重新生成",
   discard_reasoning_timeout: "模型思考超过 300 秒仍无输出，已丢弃该段思考并重新生成",
@@ -728,9 +731,9 @@ function handleMessageSSEEvent(action, msgData) {
 
 // 思考气泡被服务端丢弃时补一条提示（旧版服务端兜底：新服务端会先发 DISCARD_NOTICE_TEXT
 // 里的 token，由 onAgentEventSSEEvent 给出精确原因并抑制本提示）。
-// 服务端在「推理超量」（reasoningOverrunThreshold 按推理强度取 16384/32768/65536 字符）
-// 或「流式思考满 300 秒仍无正文/工具调用」时会中止当前 step、删掉那条只含思考的
-// assistant 消息（message.Delete → 本条 deleted 事件）并带 nudge 重试，见 admAgent
+// 服务端在「推理超量」（reasoningOverrunMaxTokens ≈ 120000 tokens，按估算：ASCII 约 4 字节
+// /token、非 ASCII rune 计 1 token；不再按推理强度分档）时会中止当前 step、删掉那条只含
+// 思考的 assistant 消息（message.Delete → 本条 deleted 事件）并带 nudge 重试，见 admAgent
 // agent_loop_llm.go 的 errOutputDegraded 分支。前端此前只让思考气泡凭空消失，用户看到的
 // 是「思考很久 → 突然清屏 → 又继续思考」却没有任何说明，这里补上原因。
 // 只认「纯思考气泡」：带正文/工具调用的删除与空消息删除（上下文溢出、无 step 结果、
