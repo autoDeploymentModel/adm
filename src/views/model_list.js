@@ -1,6 +1,7 @@
 // @ts-nocheck -- 历史视图暂未类型化（jsconfig checkJs 全局开启，新代码请勿加此标记）
 import { t as _t } from "../i18n.js";
 import { friendlyError, getErrorMessage } from "./agent/error.js";
+import { clipboardWriteText } from "./agent/ui.js";
 const template = `
 <style>
   /* 全局 reset（*）由 index.html 壳层统一提供，视图内不重复定义；选择器尽量限定在本视图容器内 */
@@ -133,6 +134,36 @@ const template = `
     border: 1px solid rgba(244, 67, 54, 0.25);
     border-radius: 6px;
     padding: 6px 10px;
+  }
+
+  /* 不支持时附带的「复制修复提示词」入口：把环境问题整理成可直接交给 AI 执行的提示词 */
+  .hint-fix-btn {
+    display: block;
+    margin-top: 8px;
+    padding: 4px 10px;
+    font-size: 12px;
+    color: inherit;
+    background: transparent;
+    border: 1px solid rgba(244, 67, 54, 0.4);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+
+  .hint-fix-btn:hover {
+    background: rgba(244, 67, 54, 0.12);
+  }
+
+  /* 剪贴板不可用时的兜底文本框（已选中，用户 Ctrl+C 即可） */
+  .hint-prompt-box {
+    display: block;
+    width: 100%;
+    height: 90px;
+    margin-top: 8px;
+    font-family: inherit;
+    font-size: 11px;
+    line-height: 1.4;
+    resize: vertical;
   }
 
   .card-actions {
@@ -625,6 +656,77 @@ function dockerBlockReason() {
   return "";
 }
 
+// ===== 不可用时的「AI 修复提示词」=====
+// 卡片不能只丢一句「不可用」：把判定原因 + 环境现状整理成一段自包含提示词，用户复制后交给
+// AI（ADM 的 Agent 视图 / 任意助手）继续排查。只写现状与目标、不写死修复命令——驱动 / WSL2 /
+// nvidia runtime 三层的排查顺序随机器而异，交给 AI 按实测输出决定。
+// 同时写清能力边界（无 NVIDIA 显卡、macOS / Linux 原理上跑不了），避免 AI 反复尝试安装。
+function dockerFixPrompt(modelId, reason) {
+  const st = getDockerState();
+  const env = st.dockerEnv || {};
+  const model = (st.modelList || []).find(m => m.model_id === modelId);
+  const image = (model && model.model_images) || "";
+  // 关键验证命令带实际镜像名（AI 可直接照抄执行）；取不到镜像时退回占位符
+  const verifyCmd = "docker run --rm --gpus all " + (image || _t("<目标镜像>")) + " nvidia-smi";
+  const lines = [
+    _t("我在 ADM（Auto Deploy Model）里无法使用图片生成模型「") + modelId + _t("」（Docker 部署），卡片显示不可用，请帮我排查并修复运行环境。"),
+    "",
+    _t("【ADM 的检测结果】"),
+    _t("- 判定：") + (reason || _t("当前设备不支持图片生成模型")),
+    _t("- 操作系统：") + (env.platform || _t("未知")),
+    _t("- Docker 客户端：") + (env.installed ? (env.version || _t("已安装")) : _t("未安装")),
+    _t("- Docker 引擎：") + (env.daemon_running ? _t("已就绪") : _t("未运行")),
+  ];
+  if (image) lines.push(_t("- 目标镜像：") + image);
+  lines.push(
+    _t("- 期望结果：该模型在 ADM 里恢复可用，容器跑起来后 ComfyUI 监听 127.0.0.1:64646"),
+    "",
+    _t("【要求】"),
+    _t("1. 先诊断再改动：依次执行下面几条命令并原样贴出输出，据此判断问题卡在哪一层，不要跳过诊断直接改配置。"),
+    "   nvidia-smi",
+    "   wsl --status",
+    "   docker version",
+    '   docker info --format "{{json .Runtimes}}"',
+    _t("2. 有三个必要条件：① nvidia-smi 能枚举到显卡；② Docker Desktop 使用 WSL 2 后端，且 docker info 的 Runtimes 里包含 nvidia；③ ") + verifyCmd + _t(" 能打印出显卡信息。"),
+    _t("3. 按诊断结果修复：能自己执行的直接执行；需要管理员权限或必须手动操作的，明确告诉我操作位置与命令。"),
+    _t("   - nvidia-smi 不可用：安装 / 更新 Windows 版 NVIDIA 显卡驱动（安装时勾选 WSL 相关组件），装完重启系统"),
+    _t("   - Runtimes 里没有 nvidia：确认 Docker Desktop 使用 WSL 2 后端，执行 wsl --update 更新内核，必要时 wsl --shutdown 后重启 Docker Desktop"),
+    _t("   - GPU 仍不可见：检查 NVIDIA Container Toolkit 是否随 Docker Desktop 生效，并确认容器参数里有 --gpus all"),
+    _t("4. 每步执行后给出验证命令与预期输出；全部完成后告诉我回 ADM 点「下载」或「启动」即可。"),
+    _t("5. 不要删除我的镜像、容器与工作目录文件；除非确认必要，不要重装 Docker Desktop。"),
+    "",
+    _t("如果诊断后确认这台机器（没有 NVIDIA 显卡 / macOS / Linux）在原理上无法运行该模型，请直接说明并停止尝试，不要继续安装。")
+  );
+  return lines.join("\n");
+}
+
+// 剪贴板不可用（平台权限差异）时兜底：在卡片里放一个已选中的文本框，用户 Ctrl+C 即可
+function showFixPromptBox(btn, prompt) {
+  const host = btn.parentElement;
+  if (!host) return;
+  const old = host.querySelector(".hint-prompt-box");
+  if (old) old.remove();
+  const box = document.createElement("textarea");
+  box.className = "hint-prompt-box";
+  box.value = prompt;
+  host.appendChild(box);
+  box.focus();
+  box.select();
+}
+
+// 「复制修复提示词」：原因 / 环境现状现场现取，避免卡片重渲染后提示词与判定不一致
+async function copyDockerFixPrompt(modelId, btn) {
+  const prompt = dockerFixPrompt(modelId, dockerBlockReason());
+  try {
+    await clipboardWriteText(prompt);
+    showToast(_t("修复提示词已复制，粘贴给 AI 助手即可继续排查"));
+  } catch (e) {
+    console.warn("[model_list] 复制修复提示词失败:", e);
+    showFixPromptBox(btn, prompt);
+    showToast(_t("剪贴板不可用，请在弹出的文本框中手动复制"));
+  }
+}
+
 async function refreshDockerImages() {
   const st = getDockerState();
   const list = (st.modelList || []).filter(isDockerModel);
@@ -885,7 +987,13 @@ function renderModelTable() {
     const featuresHtml = features.length > 0 ? '<div class="card-features">' + features.join('') + '</div>' : '';
     const descHtml = model.model_description ? '<div class="card-desc">' + escapeHtml(model.model_description) + '</div>' : '';
     // 运行中说明该容器确实起来了，此时再挂"不支持"提示会自相矛盾
-    let hintHtml = (dockerBlocked && !isRunning) ? '<div class="card-hint">' + escapeHtml(dockerReason) + '</div>' : '';
+    // 不支持时不止给一句原因：附「复制修复提示词」，把环境现状交给 AI 继续排查
+    // （模型页在 Agent 视图外，无法直接投喂会话，走剪贴板交接）
+    let hintHtml = (dockerBlocked && !isRunning)
+      ? '<div class="card-hint">' + escapeHtml(dockerReason) +
+        '<button class="hint-fix-btn" data-docker-fix-prompt="' + safeModelId + '">' + _t("复制修复提示词") + '</button>' +
+        '</div>'
+      : '';
     // 启动阶段：进度按钮只写「模型启动中」，详细阶段说明放这里
     if (dockerBusy && isDockerStarting(dockerTask.stage) && dockerTask.message) {
       hintHtml = '<div class="card-hint" data-hint="' + safeModelId + '">' + escapeHtml(dockerTask.message) + '</div>';
@@ -959,6 +1067,12 @@ function bindRowEvents() {
       const modelId = btn.dataset.deleteBtn;
       if (btn.dataset.docker === '1') showDeleteConfirm(modelId, { docker: true, image: btn.dataset.modelImage });
       else showDeleteConfirm(modelId);
+    });
+  });
+  const fixPromptBtns = document.querySelectorAll('#model-grid .hint-fix-btn[data-docker-fix-prompt]');
+  fixPromptBtns.forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      copyDockerFixPrompt(btn.dataset.dockerFixPrompt, btn);
     });
   });
 }
