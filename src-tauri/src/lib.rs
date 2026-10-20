@@ -245,6 +245,7 @@ pub fn run() {
             agent::list_cloud_providers,
             agent::update_cloud_provider,
             agent::delete_cloud_provider,
+            agent::probe_models_endpoint,
             agent::list_mcp_servers,
             agent::add_mcp_server,
             agent::update_mcp_server,

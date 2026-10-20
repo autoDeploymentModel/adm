@@ -16,7 +16,7 @@ import { syncModeToServer } from "./agent/permission.js";
 import { loadTools, activateToolsTab } from "./agent/tools.js";
 import { switchModel, refreshServerProviders, resolveAgentModel, updateModelDropdown, updateModelBtn, refreshAgentInfo, setAddCloudModelHandler } from "./agent/model.js";
 import { enableAutoCompact, updateWorkspaceSelector, toggleWorkDirDropdown, closeWorkDirDropdown, validateWorkDirs } from "./agent/workspace.js";
-import { showSettings, hideSettings, updateSettingsUI, saveSettings, showAddModelDialog, hideAddModelDialog, addModel, renderVisionModelSelect, updateProviderKeyHint, BUILTIN_VISION_KEY } from "./agent/settings_dialog.js";
+import { showSettings, hideSettings, updateSettingsUI, saveSettings, showAddModelDialog, hideAddModelDialog, addModel, renderVisionModelSelect, updateProviderKeyHint, initModelIdFetch, BUILTIN_VISION_KEY } from "./agent/settings_dialog.js";
 import { addPendingFiles, parseUriListPaths, addPastedPaths, looksLikeFilePath } from "./agent/attach.js";
 import { bindSkillSelectorEvents, initSkillSelector, clearAttachedSkillsAfterSend } from "./agent/skill_selector.js";
 import { bindCompactBtnEvents } from "./agent/compact.js";
@@ -617,6 +617,8 @@ function bindEvents() {
     var el = document.getElementById(id);
     if (el) el.addEventListener("input", updateProviderKeyHint);
   });
+  // baseurl/apikey 变化时拉取 /models 候选列表（datalist）
+  initModelIdFetch();
 
   // MCP 管理（MCP tab 添加按钮 + 列表点击编辑 + 添加/修改弹窗）
   initMcpDialogUI();

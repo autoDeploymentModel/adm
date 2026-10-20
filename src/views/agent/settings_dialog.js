@@ -201,10 +201,81 @@ function clearAddModelForm() {
   $input("add-model-baseurl").value = "";
   $input("add-model-apikey").value = "";
   $input("add-model-modelid").value = "";
+  $input("add-model-name").value = "";
   $input("add-model-ctx").value = "";
   $input("add-model-images").checked = false;
   document.getElementById("add-model-msg").textContent = "";
+  clearModelIdOptions();
   updateProviderKeyHint();
+}
+
+// ===== 模型ID candidates（OpenAI 兼容 /models，走 Rust 侧请求避开 CORS） =====
+var lastModelsFetchSig = "";
+var modelIdFetchSeq = 0;
+
+// 清空候选并作废在途请求（序号闰一格，迟到的响应回来时会被丢弃）
+function clearModelIdOptions() {
+  modelIdFetchSeq++;
+  var dl = document.getElementById("add-model-modelid-options");
+  if (dl) dl.innerHTML = "";
+  lastModelsFetchSig = "";
+  var msgEl = document.getElementById("add-model-fetch-msg");
+  if (msgEl) { msgEl.textContent = ""; msgEl.style.color = ""; }
+}
+
+function fetchModelsMsg(text, color) {
+  var el = document.getElementById("add-model-fetch-msg");
+  if (!el) return;
+  el.textContent = text || "";
+  el.style.color = color || "";
+}
+
+// 请求 {base}/models 并返回模型 ID 数组。走 Rust（`probe_models_endpoint`，10s 超时）：
+// WebView 页面源是 http://tauri.localhost，服务商普遍不返回 CORS 头，前端直连会被拦。
+function probeModels(base, key) {
+  return invoke("probe_models_endpoint", { baseUrl: base, apiKey: key || "" });
+}
+
+async function fetchModelIds() {
+  var base = $input("add-model-baseurl").value.trim().replace(/\/+$/, "");
+  var key = $input("add-model-apikey").value.trim();
+  var dl = document.getElementById("add-model-modelid-options");
+  if (!dl) return;
+  if (!base) { clearModelIdOptions(); return; }
+  var sig = base + "|" + key;
+  if (sig === lastModelsFetchSig) return;
+  lastModelsFetchSig = sig;
+  var seq = ++modelIdFetchSeq;
+  fetchModelsMsg(_t("正在获取模型列表…"), "var(--c-text-2)");
+  try {
+    var ids = await probeModels(base, key);
+    if (seq !== modelIdFetchSeq) return; // 已有更新的请求，丢弃旧响应
+    dl.innerHTML = "";
+    (ids || []).forEach(function(id) {
+      if (!id) return;
+      var o = document.createElement("option");
+      o.value = String(id);
+      dl.appendChild(o);
+    });
+    if (dl.children.length > 0) {
+      fetchModelsMsg(_t("已获取 ") + dl.children.length + _t(" 个候选模型，点击模型ID输入框可下拉选择"), "var(--c-text-2)");
+    } else {
+      fetchModelsMsg(_t("接口返回成功但没有解析到模型，可能不是 OpenAI 兼容格式，请手动填写"), "#f59e0b");
+    }
+  } catch (e) {
+    if (seq !== modelIdFetchSeq) return;
+    dl.innerHTML = "";
+    lastModelsFetchSig = "";
+    fetchModelsMsg(_t("获取模型列表失败 ") + e + _t("，请检查 Base URL / Key，仍可手动填写模型ID"), "#ef4444");
+  }
+}
+
+// 绑定 baseurl/apikey 变化触发拉取（blur 即够，避免每键一次请求）
+export function initModelIdFetch() {
+  ["add-model-baseurl", "add-model-apikey"].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.addEventListener("change", fetchModelIds);
+  });
 }
 
 export function showAddModelDialog() {
@@ -215,6 +286,7 @@ export function showAddModelDialog() {
   }
   setAddModelDialogMode(false);
   document.getElementById("agent-add-model-overlay").classList.add("show");
+  fetchModelIds();
   renderProviderList();
 }
 
@@ -231,6 +303,7 @@ function showEditModelDialog(p) {
   updateProviderKeyHint();
   setAddModelDialogMode(true);
   document.getElementById("agent-add-model-overlay").classList.add("show");
+  fetchModelIds();
 }
 
 export function hideAddModelDialog() {
@@ -315,6 +388,18 @@ export async function addModel() {
     addModelMsg(_t("请填写模型ID、API地址和密钥"), true);
     return;
   }
+
+  // 提交前校验 API 地址与密钥：请求 {base}/models，不通过则阻止添加（新增/修改均校验）。
+  // 走 Rust 侧（`probe_models_endpoint`，10s 超时）：前端直连会被 CORS 拦成假报错。
+  var probeBase = baseUrl.replace(/\/+$/, "");
+  addModelMsg(_t("正在校验 API 地址与密钥…"), false);
+  try {
+    await probeModels(probeBase, apiKey);
+  } catch (verifyErr) {
+    addModelMsg(_t("校验失败，API 地址或密钥不正确：") + verifyErr, true);
+    return;
+  }
+  addModelMsg(_t("校验通过，正在保存…"), false);
 
   // 新增时先查键冲突：providers 是对象，slug 后同名的两个名称会指向同一个键，
   // 后加的会静默覆盖先加的（agent.rs add_cloud_provider 直接 providers[key] = ...），

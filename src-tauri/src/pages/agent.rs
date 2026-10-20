@@ -1950,6 +1950,71 @@ pub fn get_platform_arch() -> String {
     std::env::consts::ARCH.to_string()
 }
 
+/// 探测云端模型的 OpenAI 兼容 `/models` 接口，返回模型 ID 列表。
+///
+/// 必须走 Rust 侧而不是前端 fetch：WebView 页面源是 `http://tauri.localhost`，
+/// 多数服务商不返回 CORS 头，前端直连会被浏览器拦下并误报成“地址或密钥不正确”
+/// （与 `fetch_skill_store` 同理）。返回空列表表示接口通了但没解析到模型。
+#[tauri::command]
+pub async fn probe_models_endpoint(
+    base_url: String,
+    api_key: Option<String>,
+) -> Result<Vec<String>, AppError> {
+    let base = base_url.trim().trim_end_matches('/').to_string();
+    if base.is_empty() {
+        bail!("API 地址为空");
+    }
+    let url = format!("{}/models", base);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
+
+    let mut req = client.get(&url);
+    let key = api_key.unwrap_or_default();
+    if !key.trim().is_empty() {
+        req = req.bearer_auth(key.trim());
+    }
+
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| format!("请求 {} 失败: {}", url, e))?;
+    let status = resp.status();
+    if !status.is_success() {
+        bail!("{} 返回 HTTP {}", url, status.as_u16());
+    }
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("解析 {} 响应失败: {}", url, e))?;
+
+    // OpenAI 兼容格式为 {"data":[{"id":...}]}；少数服务商直接返回数组
+    let items = if let Some(arr) = body.as_array() {
+        arr.clone()
+    } else if let Some(arr) = body.get("data").and_then(|d| d.as_array()) {
+        arr.clone()
+    } else {
+        bail!("{} 响应不是 OpenAI 兼容的模型列表", url);
+    };
+
+    let mut ids = Vec::new();
+    for item in items {
+        let id = match item {
+            serde_json::Value::String(s) => s,
+            other => other
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+        };
+        if !id.is_empty() {
+            ids.push(id);
+        }
+    }
+    Ok(ids)
+}
+
 /// 平台默认工作目录：
 /// - Windows：软件安装目录（ADM.exe 所在目录）
 /// - macOS：用户主目录（$HOME）
