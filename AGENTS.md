@@ -37,6 +37,7 @@
 | [`doc/rust-backend.md`](doc/rust-backend.md) | Rust 命令地图、应用自升级、下载链路、VC++ / Vulkan 运行库预检、平台差异 |
 | [`doc/docker-image-models.md`](doc/docker-image-models.md) | 图片生成模型的 Docker 部署链路、取消与清理、模型页加载顺序 |
 | [`doc/admAgent-server.md`](doc/admAgent-server.md) | 服务端 loop 抖动恢复、压缩与事实块、归档编号、决策模式、代理链路、配置词表 |
+| [`doc/admAgent-context-compaction-flow.md`](doc/admAgent-context-compaction-flow.md) | 压缩机制全流程：触发路径、参数派生、Summarize 13 步、取回通路、熔断与日志、审核风险点 |
 | [`doc/agent-settings.md`](doc/agent-settings.md) | Agent 设置项、推理强度与思考开关、云端模型 `can_reason`、开关写入链路 |
 | [`doc/build-and-release.md`](doc/build-and-release.md) | CI、构建与发布、内置 admAgent 分发、Linux 打包/更新链路 |
 | [`doc/conventions.md`](doc/conventions.md) | 工作边界、工作目录功能归属、代码↔文档同步映射表（改动收尾必查）、调试日志格式与标记 |
