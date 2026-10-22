@@ -2,7 +2,7 @@
 import { t as _t } from "../../i18n.js";
 import { S, invoke, store } from "./store.js";
 import { api } from "./api.js";
-import { updateContextUsage, exitManualScrollMode, clearErrorNotices, reportError, clearSendSafetyTimer, updateStatusBar, showConfirm } from "./ui.js";
+import { updateContextUsage, exitManualScrollMode, clearErrorNotices, reportError, clearSendSafetyTimer, updateStatusBar, updateSendButton, showConfirm } from "./ui.js";
 import { log } from "./log.js";
 import { renderMessages, renderTodos } from "./render.js";
 import { loadConversations, renderConversationList, syncWxFollowSession } from "./session.js";
@@ -89,6 +89,12 @@ export async function switchToWorkspace(wsId, wsPath) {
     updateStatusBar("ready", wsPath || null, 0);
     // 首次进入后保存到状态池（store.setActive 已注册，store 方法写入时自动快照）
   }
+
+  // 切回工作区后必须重算工具栏：其它 tab 期间该 workspace 的 run_complete 只更新状态池
+  // 不触发 UI 副作用（sse.js 按 active workspace 过滤），「停止」按钮的显隐只由
+  // updateSendButton 维护，不在此重算会保留上一个工作区的可见性——表现为任务早已结束
+  // 停止按钮仍常驻，或切进正在运行的工作区却没有停止按钮
+  updateSendButton();
 
   // 切回工作区后对账 PDF 批次：其它 tab 期间该 workspace 的 run_complete 不被处理
   // （SSE 事件按 active workspace 过滤），有剩余计划时在此按 is_busy 恢复推进
