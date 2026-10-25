@@ -1652,6 +1652,9 @@ fn validate_mcp_input(input: &McpServerView) -> Result<(String, String), AppErro
     {
         bail!("MCP 名称只能包含字母、数字、下划线、连字符和点");
     }
+    if !name.chars().next().map(|c| c.is_ascii_alphanumeric() || c == '_').unwrap_or(false) || name.contains("..") {
+        bail!("MCP 名称必须以字母、数字或下划线开头，且不能包含连续的点");
+    }
 
     let kind = {
         let k = input.kind.trim().to_ascii_lowercase();
