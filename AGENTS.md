@@ -16,7 +16,7 @@
 - `go test ./internal/... -count=1` — 全量单测（Windows 上 `internal/shell` 的 shebang 测试依赖 /bin/bash、`internal/server` 与 `internal/backend`（`TestBackend_ReloadSkills`）偶发 TempDir 句柄/文件锁抖动，属环境问题可忽略——均可在未改动的 HEAD 上复现）
 - `go test ./internal/agent/ -run 'TestName' -count=1` — 单个测试
 - `build.ps1` — Windows 构建脚本；改完 Go 代码必须重新编译打包 sidecar 才在 ADM 里生效
-- 运行时日志：`%LOCALAPPDATA%\admAgent\cache\admAgent.log`（Windows）/ `~/.cache/admAgent/admAgent.log`（macOS、Linux）。单文件、每次启动截断重写（`GlobalLogPath()`），直接读内容为准；注意 Windows 目录列表可能显示 0 字节。排查“对话突然中断”类问题 grep `Loop step response|ending turn|nudg`：`text_bytes=0` 但 `output_tokens` 很大 = 模型输出全部漏进 reasoning（典型为 localModel 在 40k+ 上下文下退化）
+- 运行时日志：`%LOCALAPPDATA%\admAgent\cache\admAgent.log`（Windows）/ `~/.cache/admAgent/admAgent.log`（macOS、Linux）。单文件、每次启动截断重写（`GlobalLogPath()`），直接读内容为准；注意 Windows 目录列表可能显示 0 字节。panic 栈单独写同目录 `admAgent-panic.log`（只追加、超 8MB 轮转 `.prev`；回合 goroutine 的 recover 与 runtime fatal 都进这里），排查“对话突然中断 / 服务异常退出”先看它。排查“对话突然中断”类问题 grep `Loop step response|ending turn|nudg`：`text_bytes=0` 但 `output_tokens` 很大 = 模型输出全部漏进 reasoning（典型为 localModel 在 40k+ 上下文下退化）
 
 ## 硬规则（违反会返工）
 

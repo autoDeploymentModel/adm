@@ -49,3 +49,4 @@
   - `UpdateModels:` / `readyWg:` — admAgent 服务端诊断日志
   - `ilink: [阶段]` — 微信 Bot 流程（登录/工作区复用/入站消息/SSE 转发/回投），原 `ilink_flow_debug.log` 已并入本文件
   日志格式：`{epoch_ms} {HH:MM:SS.mmm 本地时间} {类型标记} {内容}`，由 Rust 端统一格式化。调试模式开关：设置→调试模式（`config.json` 的 `debug_logging` 字段）。
+- **admAgent 崩溃日志单独落盘**：服务端自身的 slog 写 `%LOCALAPPDATA%\admAgent\cache\admAgent.log`（每次启动截断），panic 栈写同目录的 `admAgent-panic.log`（只追加，超 8MB 轮转为 `.prev`；每进程启动写一行 `process start pid=`）：回合 goroutine 的 recover 走 `log.WritePanic("agent.run", …)`，recover 不到的 fatal（并发 map 写、栈溢出等）由 `debug.SetCrashOutput` 兜底。排查“对话突然中断/服务异常退出”先看这个文件，再看 `adm_api_debug.log` 的 `SSE !` 时间线。
