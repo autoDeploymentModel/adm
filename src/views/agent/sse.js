@@ -334,6 +334,9 @@ function reconnectSSE() {
 // 中文界面不出现英文报错）；quota 类错误沿用"余额不足"文案；同一会话 3 秒内
 // 相同错误去重（输出退化场景服务端会同时发 agent_event error + run_complete error）。
 var lastErrorBubble = null;
+// 任务清单未完成提示的常驻节点：incomplete_todos 统计的是会话累积清单，
+// 旧清单未清掉时每轮都会触发；复用同一节点改写文案，避免每轮叠一条相同黄条。
+var todosNoticeEl = null;
 function appendErrorBubble(err, opts) {
   opts = opts || {};
   var wsId = opts.wsId || S.serverInfo.workspace_id;
@@ -512,6 +515,16 @@ function onRunCompleteSSEEvent(ev, ctx) {
     // 排队接管时仍有运行在队列中，状态栏保持运行中，不切回就绪；
     // empty_output 分支上面已置 error 态（模型未产生有效输出），此处不得覆盖
     setReadyIfIdle();
+  }
+  // 正常结束但任务清单仍有未完成项：模型把「做完了」写进正文却没回写 todos，
+  // 面板会一直停在 0/N（服务端用完未完成 nudge 预算后结束本轮）。
+  // 这里明确提示，避免终稿与清单互相矛盾。清单是会话累积的，旧清单未清掉时
+  // 后续每轮都会再次触发，因此复用同一常驻节点改写文案（见 todosNoticeEl）。
+  if (action.kind === "ok" && actualData && actualData.incomplete_todos > 0) {
+    console.warn("[agent] run_complete 任务清单仍有未完成项: " + actualData.incomplete_todos);
+    var todosMsg = _t("任务清单还有 ") + actualData.incomplete_todos + _t(" 项未完成，本轮已结束；可发送“继续”让模型收尾");
+    if (todosNoticeEl && todosNoticeEl.parentNode) todosNoticeEl.textContent = todosMsg;
+    else todosNoticeEl = showNotice(todosMsg, "warn", true);
   }
   maybeReloadPendingModel();
   // 运行完成后刷新会话列表和消息

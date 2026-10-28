@@ -12,6 +12,7 @@
 - **SSE 错误路径**：`run_complete` / `agent_event` 内嵌 error 均走 `reportError`，不要在 sse.js 里自行实现 formatRunError/isQuotaError（已在统一模块）。
 - **模型不支持关闭思考**（`error.js` 的 `ERROR_THINKING_UNSUPPORTED`）：provider 同时拒绝 `reasoning_effort:none` 与 `thinking.disabled` 时，admAgent 返回 400，文案以 **`thinking_mode_unsupported`** 开头（前后端契约 token，`internal/llm/client.go` 产出、`client_test.go` 锁定，改文案须保留）。桌面端按该 token 分类（早于 network 匹配——被包裹的 provider 原文含 "Upstream request failed"），提示"本模型不支持关闭思考，请切回思考模式"并**中断本轮**；既不自动恢复默认档，也不静默去掉参数继续跑。
 - **假完成/静默停止检测**（`sse.js` `detectFakeCompletion`）：本轮有 edit/write/multiedit/bash/lsp 等副作用工具调用、但工具调用总数 ≤4、且 prompt 含操作动词（部署/修复/重构…）时，`showWarning` 提示"任务可能未完整执行"（服务端重试耗尽后 run_complete 无 error 静默结束的兜底）。
+- **任务清单未完成提示**（`sse.js` run_complete 收尾）：`action.kind === "ok"` 且 `run_complete.incomplete_todos > 0` 时弹常驻 `showNotice(..., "warn", true)`「任务清单还有 N 项未完成，本轮已结束；可发送"继续"让模型收尾」。`todos` 面板按会话快照渲染（`renderTodos`），服务端未回写完成态时面板就是 0/N——这类"终稿说做完了、清单还全没勾"的矛盾必须靠该提示暴露，不要在前端按终稿正文自动把清单改成完成。清单是会话累积的，旧清单未清掉时后续每轮都会再次触发，提示节点用 `todosNoticeEl` 复用改写文案（节点被 `clearErrorNotices` 清掉后自动重建），否则每轮会叠一条相同黄条。
 - **自动续跑进度判定**（`autocontinue.js` `maybeAutoContinue(data, runStats)`）：本轮有 edit/write/bash 等实质副作用工具**成功落地**（`runStats.sideEffectSuccess > 0`）视为有进展、不计无进展，避免"模型在干活但没标 todos"被误熔断。
 
 ## 运行态交互约定

@@ -148,13 +148,19 @@ GUI 客户端通过 `GET /v1/workspaces/{id}/events` 订阅 Server-Sent Events�
       "message_id": "最终消息ID",
       "text": "最终文本输出",
       "error": "错误信息（非空表示运行出错）",
-      "cancelled": false
+      "cancelled": false,
+      "empty_output": false,
+      "incomplete_todos": 0
     }
   }
 }
 ```
 
 **关联策略**：优先用 `run_id` 关联（当客户端发送消息时设置了 `run_id`），否则退化为 `session_id` 关联。
+
+> **`empty_output`**：本轮正常结束（无 error、未取消）但没有任何可用输出（正文与工具调用皆无）时为 `true`，客户端据此提示"模型未产生有效输出"，不要当成静默成功。
+
+> **`incomplete_todos`**：本轮正常结束时任务清单仍有未完成项的数量（`pending` / `in_progress` 计数，全部完成时为 0，字段使用 `omitempty`）。非 0 表示模型在正文里宣称完成、`todos` 却从未回写完成态——服务端未完成 todos nudge 用尽预算后结束本轮，会话里的 todos 就是这份未完成列表。桌面端据此提示"任务清单还有 N 项未完成，可发送继续让模型收尾"，不要用终稿正文覆盖面板状态。
 
 > **步数触顶**：当 `error` 包含 `max_steps_reached` 时，表示模型本轮用完了步数预算（64 步）仍在正常干活，任务可能未完成。这不是故障，客户端应提示用户可发送"继续"恢复任务（桌面端表现为"继续干活/终止查看原因"决策弹窗）。该 token 是前后端契约，服务端改文案不得移除。
 

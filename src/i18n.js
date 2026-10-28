@@ -466,6 +466,8 @@ const EN = {
   "任务未完成自动继续": "Auto-continue unfinished tasks",
   "任务清单": "Task List",
   "任务清单还有未完成项，请继续完成剩余的 todos；每完成一项立即用 todos 工具标记，全部完成后再结束。": "There are unfinished items in the task list. Please continue completing the remaining todos, marking each one with the todos tool as you finish, and only end when all are complete.",
+  "任务清单还有 ": "Task list still has ",
+  " 项未完成，本轮已结束；可发送“继续”让模型收尾": " unfinished item(s); this turn has ended. Send \"continue\" to let the model wrap up",
   "会话": "session",
   "会话「": "Session「",
   "保存": "Save",
