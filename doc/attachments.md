@@ -18,7 +18,7 @@
 ## PDF 附件（桌面端：分批转图片，`src/views/agent/pdf.js` + `pdf_batch.js` + `src/vendor/pdfjs`）
 
 - **方案**：不用系统内置 PDF 查看器（WebView2/WKWebView 的 PDF 组件不可脚本化、拿不到像素），改为内置 pdf.js 按批渲染 JPEG，复用现有图片附件管线（`send.js` base64 内联 → 主模型支持图片则当轮内联，否则服务端调 vision 识别）。服务端零改动；**无页数硬上限**。
-- **必须前端转换**：直接把 `application/pdf` 传给服务端会命中错误矩阵 #1"不支持"（`attachment_ingest.go` 只认 text mime 与 `image/*`）；且服务端 `view` 工具明确拒绝图片（`view.go`），模型无法自行取页 → 后续批次必须由客户端主动推送。
+- **必须前端转换**：直接把 `application/pdf` 传给服务端会命中错误矩阵 #1"不支持"（`attachment_ingest.go` 只认 text mime 与 `image/*`）；且服务端的 `view` 工具只能读图片文件本身、不能把 PDF 当图片读（`view.go`，PDF 会落到非 UTF-8 分支），模型无法自行取页 → 后续批次必须由客户端主动推送。
 - **三段式流程**：① 附加时只登记（`attach.js` `addPdfPending`：解析页数，预览显示 "文件 · N 页"，不渲染）；② 发送时只转换首批并随消息发出（`send.js`，消息正文自动附分批说明，>50 页弹确认卡）；③ 每批 run_complete 后由 `pdf_batch.js` 批次泵自动转换发送下一批，直到发完。
 - **批大小**：视觉主模型 `PDF_BATCH_VISION=10` 页/批；非视觉主模型 `PDF_BATCH_TEXT=5` 页/批（服务端单轮图片识别上限 `maxImagesPerTurn=5`，超出会被标注"未识别"），并扣除本轮其它图片附件数量；主模型能力取 `S.agentInfo.model.supports_images`，快照未就绪按 5 保守处理。
 - **安全阀**：总页数 > `PDF_CONFIRM_PAGES=50` 时发送前弹确认卡（显示份数/批次数）；批次数 > `PDF_MAX_BATCHES=100` 直接拒绝；单页最长边 2048px / JPEG q0.85。
