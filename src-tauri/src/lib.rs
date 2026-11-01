@@ -262,6 +262,7 @@ pub fn run() {
             agent::open_debug_log_dir,
             agent::read_attachment_file,
             agent::is_directory,
+            agent::check_git_repo,
             agent::save_attachment_file,
             agent::read_clipboard_files,
             agent::clipboard_read_text,

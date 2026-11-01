@@ -985,9 +985,27 @@ POST /v1/workspaces/{id}/agent/sessions/{sid}/summarize
 POST /v1/workspaces/{id}/agent/sessions/{sid}/undo
 ```
 
-撤销上一个 Agent turn 的操作（回滚文件变更）。
+撤销 Agent turn 的操作（回滚文件变更）。
 
-**响应**：`200 OK`（无响应体）
+**请求体**（可选）：
+
+```json
+{ "anchor": "<userMessageId>" }
+```
+
+- 带 `anchor`（某轮的起始 user 消息 ID）：回滚**该轮及其之后的所有轮次**（`coordinator.Undo` 的 anchor 分支）。
+- 不带 body 或 `anchor` 为空：只回滚**最后一轮**（旧行为，TUI 的 `ctrl+b` 走这条）。
+
+**响应**：`200 OK`（无响应体）；body 存在但不是合法 JSON 时 `400`（不静默退化成"回滚最后一轮"，否则会把用户指定的更早一轮撤错）。
+
+**语义与限制**（客户端依赖这些行为，改 admAgent 前先看）：
+
+- 一次调用回滚的粒度是「轮」：删掉这些轮产生的消息与 file-history 版本，并把整棵工作树还原到目标轮开始前的 git 快照（`git reset --hard` + `checkout-index` + `clean`）。
+- 目标轮没有文件快照（该轮没改文件 / 已被保留窗口淘汰 / 目录不是 git 仓库）时退化为**只回滚对话**：消息被删，文件原样保留。anchor 必须是本会话真实存在的 user 消息，否则返回 `ErrNothingToUndo`（防止按时间戳兜底删错行）。
+- 成功后该 anchor 及其之后的所有快照一并丢弃（`Snapshotter.RemoveFrom`）：工作树已经回到更早的状态，保留更新的快照会让后续撤销复活已回滚的文件。
+- 同工作目录还有 run 在飞时返回错误拒绝（`ErrUndoConcurrentSession`），因为回滚是整仓库的。
+- 每个会话保留的每轮快照数 = `options.undo_checkpoints`（默认 10，上限 100，`internal/undo` `DefaultMaxCheckpoints`）；淘汰会写日志 `Undo checkpoint evicted: retention window full`。
+- 桌面端每个对话容器上的撤销按钮调一次本接口（带 `anchor`），客户端实现见 `src/views/agent/undo.js`。
 
 ---
 

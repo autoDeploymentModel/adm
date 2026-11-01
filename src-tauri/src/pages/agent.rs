@@ -3412,6 +3412,55 @@ pub fn is_directory(path: String) -> bool {
     std::fs::metadata(&path).map(|m| m.is_dir()).unwrap_or(false)
 }
 
+/// 撤销能力探测所需的 git 状态。
+///
+/// `git_installed=false` 与 `is_repo=false` 是两回事，前端提示语要分开写：
+/// 前者是机器上没装 git，后者是装了但该目录（及其父目录）不是仓库。
+#[derive(Serialize)]
+pub struct GitRepoInfo {
+    pub git_installed: bool,
+    pub is_repo: bool,
+}
+
+/// 判断工作目录是否处于 git 仓库内。
+///
+/// admAgent 的「撤销」靠每轮开始前的 git 工作树快照回退文件改动（internal/undo），
+/// 非仓库目录根本不会采集快照，撤销只能删消息、文件改动会留在地上。桌面端据此在
+/// 确认弹窗里如实提示，避免用户以为文件也回退了。
+///
+/// 用 `git rev-parse --is-inside-work-tree` 而不是只看 `.git` 目录：工作目录可能是
+/// 仓库的子目录，`.git` 也可能是个文件（worktree / submodule）。
+#[tauri::command]
+pub fn check_git_repo(path: String) -> GitRepoInfo {
+    let dir = PathBuf::from(&path);
+    let not_repo = GitRepoInfo {
+        git_installed: true,
+        is_repo: false,
+    };
+    if !dir.is_dir() {
+        return not_repo;
+    }
+    match platform::create_hidden_command("git")
+        .arg("rev-parse")
+        .arg("--is-inside-work-tree")
+        .current_dir(&dir)
+        .output()
+    {
+        Ok(out) => GitRepoInfo {
+            git_installed: true,
+            is_repo: out.status.success()
+                && String::from_utf8_lossy(&out.stdout).trim() == "true",
+        },
+        // spawn 失败且 NotFound = 机器上没装 git（或不在 PATH 里）
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => GitRepoInfo {
+            git_installed: false,
+            is_repo: false,
+        },
+        // 其它错误（权限、路径异常等）按「有 git、但探测不到仓库」处理
+        Err(_) => not_repo,
+    }
+}
+
 /// 把前端传入的 base64 附件内容写入持久附件目录，返回磁盘绝对路径。
 /// 所有附件（文本/图片，不再区分大小）统一落盘传路径，由 coordinator 收集路径
 /// 注入 <system_info> 读取引导（文本→view、图片→vision），避免内联 base64 触发

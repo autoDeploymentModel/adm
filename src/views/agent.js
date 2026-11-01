@@ -20,6 +20,7 @@ import { showSettings, hideSettings, updateSettingsUI, saveSettings, showAddMode
 import { addPendingFiles, parseUriListPaths, addPastedPaths, looksLikeFilePath } from "./agent/attach.js";
 import { bindSkillSelectorEvents, initSkillSelector, clearAttachedSkillsAfterSend } from "./agent/skill_selector.js";
 import { bindCompactBtnEvents } from "./agent/compact.js";
+import { initUndo } from "./agent/undo.js";
 import { initMcpDialogUI } from "./agent/mcp_dialog.js";
 import { initPdfBatching, reconcilePdfBatching } from "./agent/pdf_batch.js";
 import { bindDecisionModeEvents, updateDecisionModeUI } from "./agent/decision_mode.js";
@@ -756,27 +757,9 @@ function bindEvents() {
     } catch (_) {}
   });
 
-  // 标题栏操作按钮
-  document.getElementById("agent-undo-btn").addEventListener("click", function() {
-    if (!S.currentConvId) return;
-    // 服务端 undo 是「整仓库回滚到本轮快照」（git reset --hard + checkout-index + clean），
-    // 不做会话隔离：同工作区有其它会话在运行时会连带回滚它们的改动/提交。
-    // 此处先拦下来（同目录多会话并行下尤其重要），等同工作区空闲后再撤销
-    if (S.activeRun || S.queuedRun) {
-      showWarning(_t("本会话正在运行，请先停止本轮后再撤销"));
-      return;
-    }
-    var concurrentOthers = (S.runs || []).filter(function(r) { return r.sessionId !== S.currentConvId; });
-    if (concurrentOthers.length > 0) {
-      showWarning(_t("同工作区其它会话正在运行，撤销会连带回滚它们的改动，请等其结束后再撤销"));
-      return;
-    }
-    showConfirm(_t("确定撤销上一轮对话？此操作会回退上一轮产生的消息与文件修改。"), function() {
-      api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent/sessions/" + S.currentConvId + "/undo")
-        .then(function() { selectConversation(S.currentConvId); })
-        .catch(function(e) { reportError(e, { prefix: _t("撤销失败: ") }); });
-    });
-  });
+  // 撤销入口已下沉到每个对话容器（.msg-round 标题栏上的 ↶ 按钮，见 agent/undo.js）：
+  // 撤销「某一轮及其之后」的记录与文件改动，由 undo.js 一次调用服务端 undo（带 anchor）完成。
+  initUndo({ refreshConversation: selectConversation });
 
   // Todo 固定面板：点击头部折叠/展开（状态存 S，重新渲染不丢）
   document.getElementById("agent-todos-header").addEventListener("click", function() {

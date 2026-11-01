@@ -4,6 +4,7 @@ import { S, store } from "./store.js";
 import { renderMarkdown, formatTime, splitSystemInfo, isFullyAtBottom } from "./utils.js";
 import { updateScrollBottomBtn, reportError } from "./ui.js";
 import { scheduleMessageOutline } from "./session.js";
+import { undoToRound, syncRoundUndoState } from "./undo.js";
 import { log } from "./log.js";
 import { appendDecisionCard, appendDecisionResult, buildDecisionRawBlock, decisionFromPart, decisionReplayFromText, getActiveDecisionMode, hasDecisionSyntax, parseDecisionResult, stripDecisionControlText, stripDecisionRequestText } from "./decision_mode.js";
 
@@ -483,6 +484,23 @@ function buildRoundNode(round) {
   title.className = "msg-round-title";
   header.appendChild(chevron);
   header.appendChild(title);
+  // 每轮撤销入口：撤销「这一轮及其之后」的所有轮次（一次调用服务端 undo，带 anchor）。
+  // 挂在 header 内但必须 stopPropagation，否则会连带触发 header 的展开/折叠。
+  // 前导轮（无 user 消息，只有本地错误气泡等）没有轮可撤销，不建按钮；
+  // 未落库的本地气泡（无服务端消息 id，如排队/折叠插入中的临时消息）同理——
+  // 服务端按 user 消息锚定撤销，没有 id 无法定位。
+  if (round.firstUserMsg && round.firstUserMsg.id != null) {
+    var undoBtn = document.createElement("button");
+    undoBtn.type = "button";
+    undoBtn.className = "msg-round-undo";
+    undoBtn.textContent = "↶";
+    undoBtn.title = _t("撤销这一轮对话");
+    undoBtn.addEventListener("click", function(e) {
+      e.stopPropagation();
+      undoToRound(div.getAttribute("data-user-msgid") || "");
+    });
+    header.appendChild(undoBtn);
+  }
   var body = document.createElement("div");
   body.className = "msg-round-body";
   header.addEventListener("click", function() {
@@ -537,6 +555,27 @@ function roundTitleText(round) {
   }
   text = String(text).replace(/\s+/g, " ").trim();
   return text || (m ? "" : _t("系统消息"));
+}
+
+// 供右侧「对话记录」面板使用的轮级索引（每轮 = 一个 .msg-round 容器）。
+// 只回传轮容器的标题与定位键，不再逐条列出 agent 消息：一次任务动辄几十条工具/思考
+// 消息，逐条列会把面板淹掉，而用户要跳转的粒度是「第几轮在聊什么」。
+// key 与 DOM 的 data-roundkey 一致，点击时按 key 直接定位轮容器。
+// 跳过无 user 消息的前导轮（只有本地错误气泡，没有标题可展示）。
+export function roundOutlineEntries(messages) {
+  var rounds = groupMessagesByRound(messages);
+  var out = [];
+  for (var i = 0; i < rounds.length; i++) {
+    var r = rounds[i];
+    if (!r.firstUserMsg) continue;
+    var user = r.firstUserMsg;
+    out.push({
+      key: r.roundKey,
+      title: roundTitleText(r) || _t("（无文字内容）"),
+      createdAt: user.created_at || user.updated_at || "",
+    });
+  }
+  return out;
 }
 
 function roundHasDecisionRequest(round) {
@@ -629,6 +668,9 @@ function applyRoundState(el, round, isLastRound) {
     var t = roundTitleText(round);
     if (titleEl.textContent !== t) titleEl.textContent = t;
   }
+  // 撤销按钮的可用性随运行态变化（本会话/同工作区其它会话运行中 → 禁用），
+  // 每次渲染都重算，避免按钮沿用上一个会话或上一轮的状态
+  syncRoundUndoState(el);
 }
 
 // 在指定容器（轮节点）内做消息级增量对齐：

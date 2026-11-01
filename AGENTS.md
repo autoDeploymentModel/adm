@@ -32,7 +32,7 @@
 | 文档 | 内容（什么时候读） |
 | --- | --- |
 | [`doc/frontend-architecture.md`](doc/frontend-architecture.md) | SPA 视图模块结构、样式/类型约定、Tauri IPC、多 workspace 并发与 Agent server 模式 |
-| [`doc/frontend-agent-conventions.md`](doc/frontend-agent-conventions.md) | Agent 视图错误处理、自动续跑、假完成检测、拖拽保护、同目录多会话并行（前台状态模型） |
+| [`doc/frontend-agent-conventions.md`](doc/frontend-agent-conventions.md) | Agent 视图错误处理、自动续跑、假完成检测、拖拽保护、每轮撤销入口、轮级对话记录大纲、同目录多会话并行（前台状态模型） |
 | [`doc/attachments.md`](doc/attachments.md) | 剪贴板粘贴（三平台差异）与 PDF 分批转图 |
 | [`doc/rust-backend.md`](doc/rust-backend.md) | Rust 命令地图、应用自升级、下载链路、VC++ / Vulkan 运行库预检、平台差异 |
 | [`doc/docker-image-models.md`](doc/docker-image-models.md) | 图片生成模型的 Docker 部署链路、取消与清理、模型页加载顺序 |
@@ -49,6 +49,7 @@
 
 - [`doc/admAgent-fact-block-and-recall-refs-plan.md`](doc/admAgent-fact-block-and-recall-refs-plan.md) — 确定性事实块 + 归档编号 `#N` + `recall` 区间/展开取回
 - [`doc/admAgent-parallel-sessions-file-guards.md`](doc/admAgent-parallel-sessions-file-guards.md) — 同目录多会话并行的服务端写保护
+- [`doc/admAgent-undo-anchor-plan.md`](doc/admAgent-undo-anchor-plan.md) — 每轮/跨轮撤销的服务端方案（anchor 参数、快照保留窗口、非 git 目录），**待审核，未落地**
 - [`doc/admAgent-patch-bash-allow-all.md`](doc/admAgent-patch-bash-allow-all.md) — `options.bash_allow_all`
 - [`doc/admAgent-patch-project-memory-sync.md`](doc/admAgent-patch-project-memory-sync.md) — `options.project_memory_sync`
 - [`doc/agent-decision-mode-server-plan.md`](doc/agent-decision-mode-server-plan.md) / [`doc/agent-decision-output-plan.md`](doc/agent-decision-output-plan.md) — 决策输出模式（服务端方案 / 前端 MVP 记录）

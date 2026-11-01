@@ -468,30 +468,6 @@ export const template = `
     text-overflow: ellipsis;
   }
 
-  .chat-header-actions {
-    display: flex;
-    gap: 4px;
-  }
-
-  .icon-btn {
-    background: rgba(255,255,255,0.08);
-    border: none;
-    color: var(--c-text-2);
-    height: 28px;
-    padding: 0 10px;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 12px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-    white-space: nowrap;
-    transition: all 0.15s;
-  }
-  .icon-btn:hover { background: rgba(255,255,255,0.15); color: #fff; }
-  .icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-
   /* 消息区（包裹层承载悬浮「回到底部」按钮的定位） */
   .msg-area-wrap {
     flex: 1;
@@ -572,6 +548,28 @@ export const template = `
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* 每轮撤销按钮：平时低调（不抢正文视线），悬停整条标题栏时提亮；不可用原因见 .msg-round-undo-blocked */
+  .msg-round-undo {
+    flex-shrink: 0;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid var(--c-border);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--c-text-3);
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0.5;
+    transition: opacity 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .msg-round-header:hover .msg-round-undo { opacity: 1; }
+  .msg-round-undo:hover:not(.msg-round-undo-blocked) { color: var(--c-text); border-color: var(--c-text-3); }
+  /* 不可用态只置灰、不设 disabled：禁用按钮收不到指针事件（点击无响应、title 也不弹），
+     用户会看到一个没有解释的死按钮；置灰后仍可点，原因由点击时的警告给出 */
+  .msg-round-undo-blocked,
+  .msg-round-header:hover .msg-round-undo-blocked { opacity: 0.35; cursor: not-allowed; }
   /* 轮内容体：消息的挂载点 */
   .msg-round-body {
     direction: ltr;
@@ -719,7 +717,7 @@ export const template = `
   .agent-outline-list::-webkit-scrollbar-track { background: var(--c-panel); }
   .agent-outline-list::-webkit-scrollbar-thumb { background: var(--c-border); border-radius: 3px; }
 
-  /* 单条消息大纲项：左侧角色色条 + 角色图标 + 预览文本 + 时间 */
+  /* 单条轮次大纲项：左侧色条 + 序号/时间 + 轮标题（每条 user 消息 = 一轮） */
   .outline-item {
     display: flex;
     align-items: stretch;
@@ -736,10 +734,8 @@ export const template = `
     flex-shrink: 0;
     border-radius: 0 2px 2px 0;
     margin-right: 8px;
-    background: transparent;
+    background: var(--c-accent);
   }
-  .outline-item.user .outline-item-bar { background: var(--c-accent); }
-  .outline-item.assistant .outline-item-bar { background: #6e7681; }
   .outline-item-body {
     flex: 1;
     min-width: 0;
@@ -754,12 +750,11 @@ export const template = `
     font-size: 10px;
     color: var(--c-text-4);
   }
-  .outline-item-role {
+  .outline-item-idx {
     font-weight: 600;
     color: var(--c-text-3);
   }
-  .outline-item.user .outline-item-role { color: var(--c-accent); }
-  .outline-item-preview {
+  .outline-item-title {
     font-size: 12px;
     color: var(--c-text-2);
     line-height: 1.4;
@@ -769,7 +764,6 @@ export const template = `
     overflow: hidden;
     word-break: break-word;
   }
-  .outline-item-preview.empty { color: var(--c-text-4); font-style: italic; }
 
   .agent-outline-empty {
     padding: 20px 12px;
@@ -783,8 +777,8 @@ export const template = `
     opacity: 0.6;
   }
 
-  /* 被大纲点击跳转到的消息节点闪烁高亮（短暂反馈，告知定位成功） */
-  .msg.flash-highlight {
+  /* 被大纲点击跳转到的轮容器闪烁高亮（短暂反馈，告知定位成功） */
+  .msg-round.flash-highlight {
     animation: agent-flash 1.2s ease-out;
   }
   @keyframes agent-flash {
@@ -1907,6 +1901,9 @@ export const template = `
     font-size: 13px;
     color: var(--c-text-2);
     line-height: 1.6;
+    /* 确认文案按纯文本渲染（textContent），多行提示（如撤销的"注意"段）靠 \n 分段，
+       必须保留换行；否则多段告警会挤成一段，用户容易略过风险说明 */
+    white-space: pre-line;
   }
   .permission-detail-box {
     background: var(--c-bg-deep);
@@ -2002,9 +1999,6 @@ export const template = `
       <div class="chat-header">
         <span class="chat-header-status" id="agent-header-status"></span>
         <span class="chat-header-title" id="agent-conv-title">${_t("选择或创建一个会话")}</span>
-        <div class="chat-header-actions">
-          <button class="icon-btn" id="agent-undo-btn" title="${_t("撤销上一轮对话")}" disabled><span>↶</span><span>${_t("撤销上一轮对话")}</span></button>
-        </div>
       </div>
 
       <!-- 消息列表 (滚动区域) -->

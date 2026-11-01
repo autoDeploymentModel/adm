@@ -5,10 +5,10 @@ import { api } from "./api.js";
 import { escapeHtml, formatTime } from "./utils.js";
 import { showError, showConfirm, showInfo, reportError, exitManualScrollMode, clearErrorNotices, updateContextUsage, updateStatusBar, updateSendButton, clearSendSafetyTimer } from "./ui.js";
 import { getErrorMessage } from "./error.js";
-import { renderMessages, renderTodos } from "./render.js";
+import { renderMessages, renderTodos, roundOutlineEntries } from "./render.js";
 import { resetPermissionState } from "./permission.js";
 import { log } from "./log.js";
-import { updateDecisionModeUI, stripDecisionControlText, clearDecisionMode, clearDecisionModes } from "./decision_mode.js";
+import { updateDecisionModeUI, clearDecisionMode, clearDecisionModes } from "./decision_mode.js";
 
 // 自动创建会话的连续失败计数：workspace 状态异常时（activeWsId 为 null、workspace 未注册），
 // store 各 setter 静默失败、currentConvId 恒为 null，loadConversations ↔ newConversation
@@ -257,7 +257,6 @@ async function doClearAllConversations(wsId, ids) {
       renderTodos([]);
       updateContextUsage();
       updateSendButton();
-      /** @type {HTMLButtonElement} */ (document.getElementById("agent-undo-btn")).disabled = true;
     }
   }
 
@@ -269,26 +268,16 @@ async function doClearAllConversations(wsId, ids) {
   showInfo(_t("已清除全部对话"));
 }
 
-// ===== 右侧「对话记录」大纲面板（增量渲染） =====
-// 列出当前会话 S.messages 中有文本内容的每条消息（带角色色条 + 预览文本 + 时间），
-// 点击项定位到对应消息节点并短暂闪烁高亮，方便长对话快速跳转。
-// 纯工具调用 / 思考流（无文本 part）的消息直接跳过，避免大纲被噪声淹没。
+// ===== 右侧「对话记录」大纲面板（轮级索引） =====
+// 只列「每个对话容器的标题」（一条 user 消息 = 一轮 = 一个 .msg-round 容器），
+// 不再逐条列 agent 消息：一轮里动辄几十条工具/思考消息，逐条列会把面板淹掉，
+// 而用户要跳转的粒度是「第几轮在聊什么」。点击项 → 定位到该轮容器并闪烁高亮。
 //
 // 旧实现每次全量重建（innerHTML 清空 + 逐条 innerHTML + 逐条监听），SSE 流式期间
 // 每个 delta 都会触发一次，是长会话下的主要渲染开销之一。现改为：
 //   1) scheduleMessageOutline 做 rAF 合并，单帧最多渲染一次；
-//   2) 按 data-msg-key 复用节点，仅就地更新变化的预览 / 时间 / 序号；
+//   2) 按 data-round-key 复用节点，仅就地更新变化的标题 / 时间 / 序号；
 //   3) 容器级事件委托，替代逐条 click 监听。
-// 预览文本按消息对象做 WeakMap 缓存：store 更新消息时对象整体替换，缓存自动失效。
-var OUTLINE_PREVIEW_CACHE = new WeakMap();
-
-function outlinePreviewOf(msg) {
-  var cached = OUTLINE_PREVIEW_CACHE.get(msg);
-  if (cached !== undefined) return cached;
-  var preview = getMessagePreview(msg);
-  OUTLINE_PREVIEW_CACHE.set(msg, preview);
-  return preview;
-}
 
 var outlineRenderScheduled = false;
 export function scheduleMessageOutline() {
@@ -315,7 +304,7 @@ function ensureOutlineDelegation(container) {
     var item = target ? target.closest(".outline-item") : null;
     if (!item || !container.contains(item)) return;
     setOutlinePanelOpen(false);
-    scrollToMessage(item.getAttribute("data-msg-key") || "", item);
+    scrollToRound(item.getAttribute("data-round-key") || "", item);
   });
 }
 
@@ -324,15 +313,8 @@ export function renderMessageOutline() {
   if (!container) return;
   ensureOutlineDelegation(container);
 
-  // 过滤：必须是带 id 的消息且能从 parts/content 抽到非空文本预览
-  var messages = S.messages || [];
-  var visible = [];
-  for (var i = 0; i < messages.length; i++) {
-    var m = messages[i];
-    if (!m || m.id === undefined || m.id === null) continue;
-    var preview = outlinePreviewOf(m);
-    if (preview) visible.push({ key: String(m.id), msg: m, preview: preview });
-  }
+  // 过滤：只取有 user 消息的轮（前导轮无标题可展示）
+  var visible = roundOutlineEntries(S.messages);
 
   // 同步 header 计数
   var countEl = document.getElementById("agent-outline-count");
@@ -384,97 +366,68 @@ export function renderMessageOutline() {
   });
 }
 
-// 构建大纲项：结构与旧版保持一致（bar + meta[role/time/#idx] + preview）
+// 构建大纲项：左侧色条 + meta（序号 · 时间）+ 轮标题（最多两行）
 function buildOutlineItem(item, idx) {
   var node = document.createElement("div");
   node.className = "outline-item";
-  node.setAttribute("data-msg-key", item.key);
+  node.setAttribute("data-round-key", item.key);
   var bar = document.createElement("span");
   bar.className = "outline-item-bar";
   var body = document.createElement("div");
   body.className = "outline-item-body";
   var meta = document.createElement("div");
   meta.className = "outline-item-meta";
-  var roleEl = document.createElement("span");
-  roleEl.className = "outline-item-role";
-  var timeEl = document.createElement("span");
   var idxEl = document.createElement("span");
-  idxEl.style.cssText = "margin-left:auto;color:var(--c-text-4);";
-  meta.appendChild(roleEl);
-  meta.appendChild(timeEl);
+  idxEl.className = "outline-item-idx";
+  var timeEl = document.createElement("span");
+  timeEl.style.cssText = "margin-left:auto;color:var(--c-text-4);";
   meta.appendChild(idxEl);
-  var previewEl = document.createElement("div");
-  previewEl.className = "outline-item-preview";
+  meta.appendChild(timeEl);
+  var titleEl = document.createElement("div");
+  titleEl.className = "outline-item-title";
   body.appendChild(meta);
-  body.appendChild(previewEl);
+  body.appendChild(titleEl);
   node.appendChild(bar);
   node.appendChild(body);
-  /** @type {any} */ (node)._adm = { roleEl: roleEl, timeEl: timeEl, idxEl: idxEl, previewEl: previewEl, roleText: "", rawTime: "", idx: -1, preview: null };
+  /** @type {any} */ (node)._adm = { idxEl: idxEl, timeEl: timeEl, titleEl: titleEl, rawTime: "", idx: -1, title: null };
   updateOutlineItem(node, item, idx);
   return node;
 }
 
-// 就地更新大纲项：只写变化的字段；.active 高亮类由 scrollToMessage 维护，不在此清除
+// 就地更新大纲项：只写变化的字段；.active 高亮类由 scrollToRound 维护，不在此清除
 function updateOutlineItem(node, item, idx) {
   var st = /** @type {any} */ (node)._adm;
-  var msg = item.msg;
-  var role = msg.role || "assistant";
-  var roleText = role === "user" ? "👤 " + _t("你") : "🤖 " + _t("Agent");
-  if (st.roleText !== roleText) {
-    st.roleText = roleText;
-    st.roleEl.textContent = roleText;
-    node.classList.remove("user", "assistant");
-    node.classList.add(role);
+  if (st.idx !== idx) {
+    st.idx = idx;
+    st.idxEl.textContent = "#" + (idx + 1);
   }
-  var rawTime = msg.created_at || msg.updated_at || "";
+  var rawTime = item.createdAt || "";
   if (st.rawTime !== rawTime) {
     st.rawTime = rawTime;
     var time = formatTime(rawTime);
     st.timeEl.textContent = time ? "· " + time : "";
     st.timeEl.style.display = time ? "" : "none";
   }
-  if (st.idx !== idx) {
-    st.idx = idx;
-    st.idxEl.textContent = "#" + (idx + 1);
-  }
-  if (st.preview !== item.preview) {
-    st.preview = item.preview;
-    st.previewEl.textContent = item.preview;
+  if (st.title !== item.title) {
+    st.title = item.title;
+    st.titleEl.textContent = item.title;
   }
 }
 
-// 从消息中提取前 ~50 字文本预览（按 parts 顺序查找首个 text part，回退 content）
-function getMessagePreview(msg) {
-  if (Array.isArray(msg.parts)) {
-    for (var i = 0; i < msg.parts.length; i++) {
-      var p = msg.parts[i];
-      if (p && p.type === "text" && p.data && p.data.text) {
-        var t = stripDecisionControlText(String(p.data.text)).replace(/\s+/g, " ").trim();
-        if (t) return t.slice(0, 60);
-      }
-    }
-  }
-  if (msg.content) {
-    var c = stripDecisionControlText(String(msg.content)).replace(/\s+/g, " ").trim();
-    if (c) return c.slice(0, 60);
-  }
-  return "";
-}
-
-// 滚动消息区到指定 msgKey 对应消息，并短暂闪烁高亮（用户感知「已跳转」）
-function scrollToMessage(msgKey, sourceItem) {
+// 滚动消息区到指定轮容器（roundKey = data-roundkey），展开并短暂闪烁高亮。
+// 折叠的轮先展开：否则滚过去只看得到标题条，等于没跳转。
+function scrollToRound(roundKey, sourceItem) {
   var area = document.getElementById("agent-msg-area");
   if (!area) return;
-  var target = area.querySelector('[data-msgid="' + cssEscape(msgKey) + '"]');
+  var target = area.querySelector('.msg-round[data-roundkey="' + cssEscape(roundKey) + '"]');
   if (!target) {
-    showError(_t("未找到对应消息（可能已被折叠或删除）"));
+    showError(_t("未找到对应轮次（可能已被删除）"));
     return;
   }
-  var round = target.closest(".msg-round");
-  if (round) {
-    round.classList.remove("msg-round-collapsed");
-    /** @type {any} */ (round)._admRoundOpen = true;
-  }
+  target.classList.remove("msg-round-collapsed");
+  /** @type {any} */ (target)._admRoundOpen = true;
+  // 轮内独立滚动：回到本轮开头，让用户从这轮的提问开始读
+  target.scrollTop = 0;
   // 退出手动滚动模式 + 跳到底部命令互斥状态，确保后续 scroll 事件判定为程序触发。
   // 注意：programmaticScroll 必须有界——早先在此置 true 后不复位，onAreaScroll 见到该标志
   // 会直接 return，导致跳转后用户的所有滚动都不再更新手动/自动模式（滚回底部也无法恢复
@@ -492,18 +445,7 @@ function scrollToMessage(msgKey, sourceItem) {
   setTimeout(function() {
     if (S.lastProgrammaticScroll === jumpTs) S.programmaticScroll = false;
   }, 500);
-  if (round) {
-    var roundBody = round.querySelector(":scope > .msg-round-body");
-    if (roundBody) {
-      var bodyTop = roundBody.getBoundingClientRect().top;
-      var targetTop = target.getBoundingClientRect().top;
-      var bodyHeight = roundBody.clientHeight;
-      var targetHeight = target.getBoundingClientRect().height;
-      var centerOffset = targetTop - bodyTop - (bodyHeight - targetHeight) / 2;
-      round.scrollTop += centerOffset;
-    }
-  }
-  // 闪烁高亮：复用模板内 .msg.flash-highlight 动画
+  // 闪烁高亮轮容器：复用模板内 .msg-round.flash-highlight 动画
   target.classList.remove("flash-highlight");
   // 强制重排，确保重新触发动画
   /** @type {any} */ (target).offsetWidth;
@@ -530,8 +472,8 @@ function cssEscape(s) {
   return String(s).replace(/[^a-zA-Z0-9_\-]/g, function(c) { return "\\" + c; });
 }
 
-// 同步 FAB 角标：与面板里展示的大纲项数一致（即只计有文本内容的消息），
-// 否则用户看到角标是「总消息数」、打开后却少几条，体感不一致。
+// 同步 FAB 角标：与面板里展示的大纲项数一致（面板按轮计数，故角标也是「轮数」），
+// 否则用户看到角标是「总消息数」、打开后却少很多条，体感不一致。
 // total 由 renderMessageOutline 传入（同一轮已统计），避免重复扫描 S.messages。
 function updateOutlineFabBadge(total) {
   var badge = document.getElementById("agent-outline-fab-badge");
@@ -698,9 +640,6 @@ export async function selectConversation(convId) {
     // 通知手动压缩按钮刷新可用性（消息数 / 当前会话已变化）
     document.dispatchEvent(new CustomEvent("agent-conversation-changed"));
     document.dispatchEvent(new CustomEvent("agent-messages-changed"));
-
-    // 启用操作按钮
-    /** @type {HTMLButtonElement} */ (document.getElementById("agent-undo-btn")).disabled = false;
   } catch (e) {
     console.error("[agent] 加载会话失败:", convId, e);
     reportError(e, { prefix: _t("加载会话失败: ") });
@@ -760,9 +699,6 @@ export async function newConversation() {
     renderTodos([]);
     document.getElementById("agent-conv-title").textContent = resp.title || _t("新会话");
     updateContextUsage();
-
-    // 启用操作按钮
-    /** @type {HTMLButtonElement} */ (document.getElementById("agent-undo-btn")).disabled = false;
   } catch (e) {
     reportError(e, { prefix: _t("创建会话失败: ") });
   }

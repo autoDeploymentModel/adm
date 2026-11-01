@@ -12,7 +12,7 @@
 | `model_list.rs` | `fetch_model_list`, `scan_local_models`, `download_model`, `start_model`, `stop_model`, `get_model_status` |
 | `docker_model.rs` | `check_docker_env`, `check_docker_image`, `get_docker_tasks`, `setup_docker_model`, `start_docker_model`, `stop_docker_model`, `delete_docker_image` |
 | `settings.rs` | `save_settings`（原子写入：`.tmp` + `rename`）, `load_settings`, `get_app_version`, `get_llamacpp_version` |
-| `agent.rs` | `start_agent_server`, `stop_agent_server`, `get_agent_server_status`, `agent_http_request`, `agent_subscribe_events`, `agent_unsubscribe_events`, `check_adm_agent`, `get_adm_agent_version`, `add/list/update/delete_cloud_provider`, `probe_models_endpoint`（请求云端模型的 OpenAI 兼容 `{base}/models`，10s 超时，返回模型 ID 列表；走 Rust 是为了绕开 WebView 的 CORS，同 `fetch_skill_store`） |
+| `agent.rs` | `start_agent_server`, `stop_agent_server`, `get_agent_server_status`, `agent_http_request`, `agent_subscribe_events`, `agent_unsubscribe_events`, `check_adm_agent`, `get_adm_agent_version`, `add/list/update/delete_cloud_provider`, `probe_models_endpoint`（请求云端模型的 OpenAI 兼容 `{base}/models`，10s 超时，返回模型 ID 列表；走 Rust 是为了绕开 WebView 的 CORS，同 `fetch_skill_store`）、`check_git_repo`（撤销能力探测，见下） |
 
 ## 关键注意事项（自升级 / 下载 / 检测）
 
@@ -20,6 +20,7 @@
 - **MTP 自动检测**：如果模型文件名包含 "mtp"（不区分大小写），`start_model` 会自动追加 `--spec-draft-n-max 2 --spec-type draft-mtp`。设置 `params.spec_type = "none"` 可禁用。
 - **VC++ 运行库检测（Windows）**：`check_vc_redist_installed`（`index.rs`）以 DLL 实检为准——`C:\Windows\System32` 或可执行文件同目录下必须同时存在 `vcruntime140.dll` / `vcruntime140_1.dll` / `msvcp140.dll`。**不要改回注册表判断或只查 `vcruntime140.dll`**：旧版 2015/2017 运行库同样写 `Installed=0x1`，会把缺 `vcruntime140_1.dll` 的机器误判为已安装。调用点：启动检测（`check_update`；网络失败时前端改走独立命令 `check_vc_redist`）、点「安装完成」后的复验，以及 `start_model` / `get_llamacpp_version` 拉起进程前的预检——缺失时直接返回错误、**不 spawn**（否则 Windows 加载器会弹「找不到 VCRUNTIME140_1.dll」系统错误框并把进程卡住，`spawn()` 本身不报错）。
 - **HuggingFace 镜像**：`download_model` 会自动将所有 `huggingface.co` 链接替换为 `hf-mirror.com`。
+- **撤销能力探测（`check_git_repo`）**：Agent 的「撤销」靠 admAgent 每轮开始前的 git 工作树快照回退文件改动，非 git 仓库（或机器没装 git）时服务端只能删消息、文件改动留在原地。`check_git_repo(path)` 在目标目录跑 `git rev-parse --is-inside-work-tree`，返回 `{git_installed, is_repo}`——两个字段必须分开：spawn 的 `NotFound` = 没装 git，装了但不是仓库 = 另一条提示语。**不要改成只看 `.git` 目录**：工作目录可能是仓库子目录，`.git` 也可能是文件（worktree / submodule）。前端 `undo.js` 按工作目录缓存结果，只在确认弹窗里加提示、不禁用撤销入口（对话记录仍能回滚）。
 - **断点续传**：使用 `.part` 后缀 + HTTP `Range` 头；`scan_part_files` 列出未完成的下载。
 - **硬件优先级**：`hwinfo` 插件数据覆盖 `sysinfo`。
 - **更新流程**：启动后延迟 3 秒 → 应用更新 → VC++ 运行库（仅 Windows）→ llamacpp 下载。admAgent 不再运行时下载/升级，随安装包内置（见下）。
