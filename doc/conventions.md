@@ -28,6 +28,7 @@
 | CI、打包、sidecar 分发与更新链路（`build.yml`、`prepare-agent-binary.mjs`、`tauri.conf.json` 打包项） | [build-and-release.md](build-and-release.md) |
 | 调试日志标记、工作边界与流程约定 | 本文件 |
 | HTTP API 端点 / 字段（`admAgent/internal/server`、`internal/proto`） | [server-api.md](server-api.md) |
+| agent 行为 eval（`admAgent/internal/eval`、`internal/cmd/eval.go`、`admAgent/scripts/eval.*`、fixture / 任务 JSON / 基线） | [admAgent-eval-harness-plan.md](admAgent-eval-harness-plan.md) |
 | 新增 / 删除 / 改名文档，或模块归属变化 | `AGENTS.md` 的「文档索引」「项目结构」 |
 
 规则：

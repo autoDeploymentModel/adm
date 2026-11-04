@@ -15,6 +15,7 @@
 - `go build ./...` — 编译检查
 - `go test ./internal/... -count=1` — 全量单测（Windows 上 `internal/shell` 的 shebang 测试依赖 /bin/bash、`internal/server` 与 `internal/backend`（`TestBackend_ReloadSkills`）偶发 TempDir 句柄/文件锁抖动，属环境问题可忽略——均可在未改动的 HEAD 上复现）
 - `go test ./internal/agent/ -run 'TestName' -count=1` — 单个测试
+- `scripts/eval.sh` / `scripts/eval.ps1` — agent 行为 eval（手动入口，**不接入构建链路**；退出码 0 通过 / 1 回归 / 2 跳过）。判分器自测：`go test ./internal/eval/ -count=1`
 - `build.ps1` — Windows 构建脚本；改完 Go 代码必须重新编译打包 sidecar 才在 ADM 里生效
 - 运行时日志：`%LOCALAPPDATA%\admAgent\cache\admAgent.log`（Windows）/ `~/.cache/admAgent/admAgent.log`（macOS、Linux）。单文件、每次启动截断重写（`GlobalLogPath()`），直接读内容为准；注意 Windows 目录列表可能显示 0 字节。panic 栈单独写同目录 `admAgent-panic.log`（只追加、超 8MB 轮转 `.prev`；回合 goroutine 的 recover 与 runtime fatal 都进这里），排查“对话突然中断 / 服务异常退出”先看它。排查“对话突然中断”类问题 grep `Loop step response|ending turn|nudg`：`text_bytes=0` 但 `output_tokens` 很大 = 模型输出全部漏进 reasoning（典型为 localModel 在 40k+ 上下文下退化）
 
@@ -42,6 +43,7 @@
 | [`doc/build-and-release.md`](doc/build-and-release.md) | CI、构建与发布、内置 admAgent 分发、Linux 打包/更新链路 |
 | [`doc/conventions.md`](doc/conventions.md) | 工作边界、工作目录功能归属、代码↔文档同步映射表（改动收尾必查）、调试日志格式与标记 |
 | [`doc/server-api.md`](doc/server-api.md) | admAgent HTTP API（服务端权威文档） |
+| [`doc/admAgent-eval-harness-plan.md`](doc/admAgent-eval-harness-plan.md) | agent 行为 eval：`admAgent eval` + `scripts/eval.{ps1,sh}`、任务/判分器定义、基线判定 |
 | `doc/llamacpp.txt` / `doc/llamacpp-macos.txt` | llama-server CLI 启动参数 |
 | `doc/model_list.json` | 模型清单 |
 
