@@ -82,6 +82,10 @@ GUI 客户端需根据运行平台选择合适的传输方式连接 server。
 | `500 Internal Server Error` | 其他未预期错误 |
 | `503 Service Unavailable` | 服务器正在关闭中 |
 
+### 请求体大小上限
+
+所有端点的请求体都经 `http.MaxBytesReader` 限制为 128 MiB（`internal/server` 的 `maxRequestBodyBytes`，包裹在 handler 链最内层）。超限时 `json.Decode` 报错，端点按普通请求体解析失败返回 `400`。**为什么**：附件是 base64 内联发出的，`encoding/json` 会把整个 body 读进内存，没有上限时一个 POST 就能把 daemon 内存打满。新增端点不需要单独处理，但不要在 handler 里 `r.Body` 上再套一层自己的 `MaxBytesReader` 覆盖这个值。
+
 ---
 
 ## SSE 事件流
@@ -92,7 +96,8 @@ GUI 客户端通过 `GET /v1/workspaces/{id}/events` 订阅 Server-Sent Events�
 
 - 需要查询参数 `client_id`（UUID 格式）
 - 响应头：`Content-Type: text/event-stream`、`Cache-Control: no-cache`、`Connection: keep-alive`
-- 每个事件格式：`data: {JSON}\n\n`
+- 每个事件格式：`data: {"JSON"}\n\n`
+- **写超时**：每条事件的写/`Flush` 都设 30s deadline（`sseWriteTimeout`）。写失败或 `Flush` 失败即结束该流并摘除挂载客户端，不会无限阻塞在 `Fprintf` 上。客户端崩死、休眠、socket 缓冲打满这些情况靠这条兜底，之前没有 deadline 时 handler 会永久挂住，`DetachClient` 永不执行，工作区留下一个幽灵挂载客户端。
 
 ### 事件信封结构
 
@@ -364,6 +369,8 @@ GET /v1/config
 返回全局服务器配置。
 
 **响应** `200 OK`：全局配置对象（`config.Config` 结构，详见配置文件格式）。
+
+> 返回的是 `ConfigStore.Config()` 里的 `*config.Config`，**不是** `ConfigStore` 本身——`ConfigStore` 的字段全部未导出且没有 `MarshalJSON`，直接编码只会得到 `{}`，而客户端解码 `{}` 不会报错，会拿到一份零值配置。新增配置端点时同样注意别把 store 直接往 `jsonEncode` 里塞。
 
 ---
 
@@ -687,6 +694,9 @@ PUT /v1/workspaces/{id}/sessions/{sid}
   "todos": [...]
 }
 ```
+
+- 请求体按 **`proto.Session`**（蛇形 `json` tag：`prompt_tokens`、`summary_message_id`、`todos` …）解析后转成 `session.Session` 落库。`session.Session` 本身没有 json tag，曾因直接解码它导致改名时把累计 token、成本、压缩摘要锚点、任务清单全部写成 0（`sessionFromProto` 就是为此加的）。
+- `{sid}` 是权威：请求体缺 `id` 时用路径参数补上，否则会更新到零值行。
 
 **响应** `200 OK`：更新后的 `Session` 对象
 

@@ -67,6 +67,7 @@
 - 不测单函数逻辑（那是 `go test ./internal/...`）。
 - 不测前端渲染、构建产物（那是 `pnpm typecheck` / CI 构建）。
 - 不做性能基准：步数/耗时/token 只作为过程指标记录，不单独判定性能回归。
+- 不判前缀大小：`prefix_tokens` / `tool_count`（每次请求都携带的系统提示 + 工具 schema）只作指标记录，闸门在单测 `TestPrefixBudget`（`internal/agent/prefix_budget_test.go`）——文本大小是确定性的，用 eval 判它是浪费模型调用；eval 只负责回答「这次改动有没有让行为翻转」。
 - 不评价本地模型表现（见上）。
 
 ## 1. 运行形态：手动脚本触发，一套全量，不设层级
@@ -80,7 +81,7 @@
 - 什么时候跑：改动完成后、发版前；以及换 provider / 换模型之后（必须重建基线，见 §7）。
 - 默认 `--runs 3`（6 题约 20–40 分钟）；只想快速冒烟可加 `--runs 1`（约 5–10 分钟），属同一条命令的参数差异，不构成层级。
 - **退出码语义**：`0` 通过；`1` 有回归（本次改动不放行，结论写进评审记录）；`2` 跳过（无云端模型 / 离线 / 缺 key，必须显式提示原因，不允许被当成通过）。
-- 报告落在 `out/eval/<provider>-<model>-<commit>.json` + `summary.md`，随评审记录留存，不入包。
+- 报告落在 `out/eval/<provider>-<model>-<commit>.json` + `summary.md`，随评审记录留存，不入包。报告里的指标：通过率/翻转、`steps`、`tokens`、`cost`、`prefix_tokens`、`tool_count`（后两项由 `eval.PrefixReporter` 可选接口提供，本地工作区 `workspace.AppWorkspace.PrefixStats` 实现，客户端模式为 0；基线文件同样记录这两个字段，但只记录、不判定）。
 
 ### 1.2 被测模型的解析规则（配置文件 → 云端）
 

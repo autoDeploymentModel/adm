@@ -37,7 +37,7 @@
 | [`doc/attachments.md`](doc/attachments.md) | 剪贴板粘贴（三平台差异）与 PDF 分批转图 |
 | [`doc/rust-backend.md`](doc/rust-backend.md) | Rust 命令地图、应用自升级、下载链路、VC++ / Vulkan 运行库预检、平台差异 |
 | [`doc/docker-image-models.md`](doc/docker-image-models.md) | 图片生成模型的 Docker 部署链路、取消与清理、模型页加载顺序 |
-| [`doc/admAgent-server.md`](doc/admAgent-server.md) | 服务端 loop 抖动恢复、压缩与事实块、系统提示词预算与提示词缓存、归档编号、决策模式、代理链路、配置词表 |
+| [`doc/admAgent-server.md`](doc/admAgent-server.md) | 服务端 loop 抖动恢复、压缩与事实块、系统提示词预算与提示词缓存、归档编号、决策模式、工具与权限边界（撤销清理的会话 ID 校验、bash 只读白名单、工作区包含性判断、符号链接、LSP 通知路径）、代理链路、配置词表 |
 | [`doc/admAgent-context-compaction-flow.md`](doc/admAgent-context-compaction-flow.md) | 压缩机制全流程：触发路径、参数派生、Summarize 13 步、取回通路、熔断与日志、审核风险点 |
 | [`doc/agent-settings.md`](doc/agent-settings.md) | Agent 设置项、推理强度与思考开关、云端模型 `can_reason`、开关写入链路 |
 | [`doc/build-and-release.md`](doc/build-and-release.md) | CI、构建与发布、内置 admAgent 分发、Linux 打包/更新链路 |
@@ -52,6 +52,7 @@
 - [`doc/admAgent-fact-block-and-recall-refs-plan.md`](doc/admAgent-fact-block-and-recall-refs-plan.md) — 确定性事实块 + 归档编号 `#N` + `recall` 区间/展开取回
 - [`doc/admAgent-parallel-sessions-file-guards.md`](doc/admAgent-parallel-sessions-file-guards.md) — 同目录多会话并行的服务端写保护
 - [`doc/admAgent-undo-anchor-plan.md`](doc/admAgent-undo-anchor-plan.md) — 每轮/跨轮撤销的服务端方案（anchor 参数、快照保留窗口、非 git 目录），**待审核，未落地**
+- [`doc/admAgent-prefix-budget-plan.md`](doc/admAgent-prefix-budget-plan.md) — 固定前缀（系统提示词 + 工具 schema）瘦身与预算守卫：bash 描述里的 git 剧本已搬进 skill、前缀预算单测与日志落地（8.9k），按窗口分档/MCP 延迟未做
 - [`doc/admAgent-patch-bash-allow-all.md`](doc/admAgent-patch-bash-allow-all.md) — `options.bash_allow_all`
 - [`doc/admAgent-patch-project-memory-sync.md`](doc/admAgent-patch-project-memory-sync.md) — `options.project_memory_sync`
 - [`doc/agent-decision-mode-server-plan.md`](doc/agent-decision-mode-server-plan.md) / [`doc/agent-decision-output-plan.md`](doc/agent-decision-output-plan.md) — 决策输出模式（服务端方案 / 前端 MVP 记录）
