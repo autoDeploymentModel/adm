@@ -9,7 +9,7 @@
 | 模块 | 关键命令 |
 |--------|-------------|
 | `index.rs` | `get_system_info`, `check_update`, `download_and_extract_llamacpp`, `reinstall_llamacpp`（设置页「重新安装」：先删 llamacpp 目录再重新下载，复用升级的下载/解压逻辑，不比较版本号） |
-| `model_list.rs` | `fetch_model_list`, `scan_local_models`, `download_model`, `start_model`, `stop_model`, `get_model_status` |
+| `model_list.rs` | `fetch_model_list`（远程清单 + 本地缓存 + 内容哈希比对，见下）, `get_cached_model_list`（只读磁盘缓存，首页冷启动秒开）, `scan_local_models`, `download_model`, `start_model`, `stop_model`, `get_model_status` |
 | `docker_model.rs` | `check_docker_env`, `check_docker_image`, `get_docker_tasks`, `setup_docker_model`, `start_docker_model`, `stop_docker_model`, `delete_docker_image` |
 | `settings.rs` | `save_settings`（原子写入：`.tmp` + `rename`）, `load_settings`, `get_app_version`, `get_llamacpp_version` |
 | `agent.rs` | `start_agent_server`, `stop_agent_server`, `get_agent_server_status`, `agent_http_request`, `agent_subscribe_events`, `agent_unsubscribe_events`, `check_adm_agent`, `get_adm_agent_version`, `add/list/update/delete_cloud_provider`, `probe_models_endpoint`（请求云端模型的 OpenAI 兼容 `{base}/models`，10s 超时，返回模型 ID 列表；走 Rust 是为了绕开 WebView 的 CORS，同 `fetch_skill_store`）、`check_git_repo`（撤销能力探测，见下） |
@@ -21,7 +21,7 @@
 - **VC++ 运行库检测（Windows）**：`check_vc_redist_installed`（`index.rs`）以 DLL 实检为准——`C:\Windows\System32` 或可执行文件同目录下必须同时存在 `vcruntime140.dll` / `vcruntime140_1.dll` / `msvcp140.dll`。**不要改回注册表判断或只查 `vcruntime140.dll`**：旧版 2015/2017 运行库同样写 `Installed=0x1`，会把缺 `vcruntime140_1.dll` 的机器误判为已安装。调用点：启动检测（`check_update`；网络失败时前端改走独立命令 `check_vc_redist`）、点「安装完成」后的复验，以及 `start_model` / `get_llamacpp_version` 拉起进程前的预检——缺失时直接返回错误、**不 spawn**（否则 Windows 加载器会弹「找不到 VCRUNTIME140_1.dll」系统错误框并把进程卡住，`spawn()` 本身不报错）。
 - **HuggingFace 镜像**：`download_model` 会自动将所有 `huggingface.co` 链接替换为 `hf-mirror.com`。
 - **撤销能力探测（`check_git_repo`）**：Agent 的「撤销」靠 admAgent 每轮开始前的 git 工作树快照回退文件改动，非 git 仓库（或机器没装 git）时服务端只能删消息、文件改动留在原地。`check_git_repo(path)` 在目标目录跑 `git rev-parse --is-inside-work-tree`，返回 `{git_installed, is_repo}`——两个字段必须分开：spawn 的 `NotFound` = 没装 git，装了但不是仓库 = 另一条提示语。**不要改成只看 `.git` 目录**：工作目录可能是仓库子目录，`.git` 也可能是文件（worktree / submodule）。前端 `undo.js` 按工作目录缓存结果，只在确认弹窗里加提示、不禁用撤销入口（对话记录仍能回滚）。
-- **断点续传**：使用 `.part` 后缀 + HTTP `Range` 头；`scan_part_files` 列出未完成的下载。
+- **远程模型清单的本地缓存**（`model_list.rs`）：`fetch_model_list` **每次都整包拉取**远程 `model.json`，对响应原文算哈希（标准库 `DefaultHasher`，`content_hash`）与缓存里的 `hash` 比对：一致 → 不碰磁盘；不一致 → 返回新列表并刷新数据目录下的 `model_list_cache.json`（`fetched_at` + `hash` + 解析后的 `models`）。**故意不用 `ETag`/`Last-Modified` 条件请求**：静态服务器的校验头是秒级 + 尺寸粒度，原地改文件若落在同一秒且字节数不变（改个模型名、调换行），服务端照样回 304，条件请求会永远看不到这次变更，补 TTL 强制重拉又等于把逻辑绕回来。用内容哈希则判定只看真实内容，一层就够。注意哈希算的是**原文**，纯格式调整（缩进/换行/键顺序）也会算一次更新并重写缓存——只多一次磁盘写，无副作用。两条兜底必须保留：远端解析出**空列表**时按异常处理、退回已有缓存（否则一次误发布的 `[]` 会把 last-known-good 冲掉，之后断网连兜底都没了），写入用进程内 `Mutex` 串行化（切页重挂载会让两个 `fetch_model_list` 并发收尾，`fs::write` 先截断再写、并发会互相截断成半截 JSON；不用 `.tmp`+`rename` 是因为 macOS 上 rename 在沙箱/权限场景会失败）。本模块的缓存日志统一走 `api_debug_log`（`dbg_log!` 在 release 包被编译掉，线上无法判断是刷新还是退回旧缓存）。联网失败 / 非 2xx / 解析失败时**有缓存就退回缓存**（静默，不弹错），无缓存才报错；有缓存时 HTTP 超时收到 10s（无缓存 30s），避免离线/弱网下首页白等。前端 `model_list.js` 先用 `get_cached_model_list` 画一版卡片，再等 `fetch_model_list` 的校验结果覆盖——不要把它合回单次 `fetch_model_list`，否则断网时首屏要等满超时才有内容。若远端前面挂了长缓存的 CDN，需要给 URL 加时间戳参数（`?_n=<ts>`）打穿缓存，否则拿到的是 CDN 的旧副本。
 - **硬件优先级**：`hwinfo` 插件数据覆盖 `sysinfo`。
 - **更新流程**：启动后延迟 3 秒 → 应用更新 → VC++ 运行库（仅 Windows）→ llamacpp 下载。admAgent 不再运行时下载/升级，随安装包内置（见下）。
 

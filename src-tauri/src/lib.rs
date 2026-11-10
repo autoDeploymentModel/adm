@@ -202,6 +202,7 @@ pub fn run() {
             model_list::scan_local_models,
             model_list::scan_part_files,
             model_list::fetch_model_list,
+            model_list::get_cached_model_list,
             model_list::download_model,
             model_list::start_model,
             model_list::stop_model,

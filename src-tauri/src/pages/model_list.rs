@@ -8,6 +8,7 @@ use crate::bail;
 use crate::dbg_log;
 use crate::pages::agent::api_debug_log;
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -161,30 +162,139 @@ pub async fn scan_part_files(app: tauri::AppHandle) -> Result<Vec<PartFileProgre
     Ok(result)
 }
 
+/// 远程模型清单地址
+const MODEL_LIST_URL: &str = "https://adm.tuduoduo.top/model.json";
+/// 远程模型清单的本地缓存（数据目录下的文件名）
+const MODEL_LIST_CACHE_FILE: &str = "model_list_cache.json";
+
+/// 本地缓存的远程模型清单：`hash` 是上次响应原文的哈希，用来判断远程内容有没有变。
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ModelListCache {
+    /// 写入时间（unix 秒）
+    pub fetched_at: u64,
+    /// 写入时响应原文的哈希；老版本缓存没有该字段，空串自然不匹配
+    #[serde(default)]
+    pub hash: String,
+    pub models: Vec<RemoteModel>,
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// 响应原文的哈希（标准库 DefaultHasher，不引入额外依赖）。
+/// 只做「和上次是不是同一份内容」的判定，不需要抗碰撞强度。
+fn content_hash(text: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn model_list_cache_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, AppError> {
+    Ok(config::get_data_dir(Some(app))?.join(MODEL_LIST_CACHE_FILE))
+}
+
+/// 读取本地缓存；文件缺失/损坏都当作没有缓存（下次联网成功会重写）
+fn load_model_list_cache(path: &std::path::Path) -> Option<ModelListCache> {
+    let text = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// 缓存写入串行化：首页刷新 + 切页重挂载可能让两个 `fetch_model_list` 并发收尾，
+/// `fs::write` 是先截断再写，两个并发写会互相截断留下半截 JSON（读侧只能当作无缓存）。
+/// 用进程内锁而不是 `.tmp` + `rename`：macOS 上 rename 在沙箱/权限场景会失败，
+/// 而这里只需要挡住自己进程内的并发，锁就够。
+static MODEL_LIST_CACHE_WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn save_model_list_cache(path: &std::path::Path, cache: &ModelListCache) {
+    match serde_json::to_string(cache) {
+        Ok(json) => {
+            let _lock = MODEL_LIST_CACHE_WRITE_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if let Err(e) = std::fs::write(path, json) {
+                api_debug_log(|| format!("[model_list] 写入模型列表缓存失败: {} ({:?})", e, path));
+            }
+        }
+        Err(e) => {
+            api_debug_log(|| format!("[model_list] 序列化模型列表缓存失败: {}", e));
+        }
+    }
+}
+
+/// 联网失败/服务端异常时的退路：有缓存就用缓存顶上，让首页照常可用
+fn cached_or_err(cached: Option<ModelListCache>, err: String) -> Result<Vec<RemoteModel>, AppError> {
+    match cached {
+        Some(c) if !c.models.is_empty() => {
+            api_debug_log(|| format!("[model_list] {}，退回本地缓存（{} 条）", err, c.models.len()));
+            Ok(c.models)
+        }
+        _ => Err(AppError::msg(err)),
+    }
+}
+
+/// 本地缓存里的模型列表（纯磁盘读取，不联网）：首页先用它秒开，再等下面的联网校验。
 #[tauri::command]
-pub async fn fetch_model_list() -> Result<Vec<RemoteModel>, AppError> {
+pub async fn get_cached_model_list(app: tauri::AppHandle) -> Result<Option<ModelListCache>, AppError> {
+    let path = model_list_cache_path(&app)?;
+    Ok(load_model_list_cache(&path))
+}
+
+/// 拉取远程模型清单：每次都整包拉取，内容的哈希变了才刷新本地缓存。
+/// 不用 `ETag`/`Last-Modified` 条件请求：静态服务器的校验头是秒级 + 尺寸粒度，
+/// 原地改文件（同秒、同字节数）时服务端仍会回 304，判定不可靠且要额外维护 TTL。
+/// 联网失败/服务端异常 → 有缓存则退回缓存，无缓存才报错。
+#[tauri::command]
+pub async fn fetch_model_list(app: tauri::AppHandle) -> Result<Vec<RemoteModel>, AppError> {
+    let cache_path = model_list_cache_path(&app)?;
+    let cached = load_model_list_cache(&cache_path);
+
+    // 有缓存时缩短超时：离线/网络差时首页已有缓存可看，不必白等 30s
+    let timeout = if cached.is_some() { 10 } else { 30 };
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(timeout))
         .build()
         .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
 
-    let response = client
-        .get("https://adm.tuduoduo.top/model.json")
-        .send()
-        .await
-        .map_err(|e| format!("获取模型列表失败: {}", e))?;
+    let response = match client.get(MODEL_LIST_URL).send().await {
+        Ok(r) => r,
+        Err(e) => return cached_or_err(cached, format!("获取模型列表失败: {}", e)),
+    };
 
     if !response.status().is_success() {
-        bail!("服务器返回错误状态码: {}", response.status());
+        return cached_or_err(cached, format!("服务器返回错误状态码: {}", response.status()));
     }
 
-    let text = response
-        .text()
-        .await
-        .map_err(|e| format!("读取响应文本失败: {}", e))?;
+    let text = match response.text().await {
+        Ok(t) => t,
+        Err(e) => return cached_or_err(cached, format!("读取响应文本失败: {}", e)),
+    };
 
-    let models: Vec<RemoteModel> = serde_json::from_str(&text)
-        .map_err(|e| format!("解析模型列表失败: {}", e))?;
+    let models: Vec<RemoteModel> = match serde_json::from_str(&text) {
+        Ok(m) => m,
+        Err(e) => return cached_or_err(cached, format!("解析模型列表失败: {}", e)),
+    };
+
+    // 远端发布异常（空列表）时保留上一次的有效缓存，避免冲掉 last-known-good
+    if models.is_empty() && cached.as_ref().is_some_and(|c| !c.models.is_empty()) {
+        return cached_or_err(cached, "远程模型列表为空".to_string());
+    }
+
+    // 哈希一致 = 远程没变，不碰磁盘
+    let hash = content_hash(&text);
+    if cached.as_ref().is_some_and(|c| c.hash == hash) {
+        return Ok(models);
+    }
+
+    api_debug_log(|| format!("[model_list] 远程模型列表有更新，已刷新本地缓存: {} 条", models.len()));
+    save_model_list_cache(
+        &cache_path,
+        &ModelListCache { fetched_at: unix_now(), hash, models: models.clone() },
+    );
 
     Ok(models)
 }

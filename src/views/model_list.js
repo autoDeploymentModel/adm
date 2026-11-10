@@ -1556,6 +1556,16 @@ async function init() {
   console.log("[model_list] init() 开始");
   const st = S();
 
+  // 冷启动秒开：先用磁盘缓存的上次远程列表画卡片，联网校验结果稍后覆盖
+  if (!(st.modelList || []).length) {
+    const cacheRes = await call("get_cached_model_list");
+    const cached = (cacheRes.ok && cacheRes.value && cacheRes.value.models) || [];
+    if (cached.length > 0) {
+      st.modelList = cached;
+      renderModelTable();
+    }
+  }
+
   await loadSystemInfo(st);
 
   // 首屏数据并行拉取：原先逐个 await 串行，总耗时等于各命令耗时之和
