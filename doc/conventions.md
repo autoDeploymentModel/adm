@@ -22,7 +22,7 @@
 | Agent 视图交互与状态（`src/views/agent/` 的 store / render / ui / sse / autocontinue / workspace 等） | [frontend-agent-conventions.md](frontend-agent-conventions.md) |
 | 剪贴板粘贴、PDF 附件（`attach.js`、`pdf.js`、`pdf_batch.js`、`src/vendor/pdfjs`、Rust 侧 `read_clipboard_files` / `clipboard_*`） | [attachments.md](attachments.md) |
 | `src-tauri/src/**`（除 docker 与构建链路：自升级、下载、运行库预检、平台差异） | [rust-backend.md](rust-backend.md) |
-| 图片模型的 docker 链路与模型页卡片流程（`docker_model.rs`、`model_list.js`） | [docker-image-models.md](docker-image-models.md) |
+| Docker 部署的模型（图片生成 / 文本生成语音）链路与模型页卡片流程（`docker_model.rs`、`model_list.js`） | [docker-image-models.md](docker-image-models.md) |
 | Agent 设置项与开关写入链路（`settings.rs` / `agent.rs` 的 `sync_*`、`settings_dialog.js`、`memory.js`、模型下拉） | [agent-settings.md](agent-settings.md) |
 | admAgent 服务端行为与前后端契约（loop / 压缩 / 事实块 / 归档编号 / 决策模式 / 代理 / 配置词表 / 新增 part 类型） | [admAgent-server.md](admAgent-server.md) |
 | CI、打包、sidecar 分发与更新链路（`build.yml`、`prepare-agent-binary.mjs`、`tauri.conf.json` 打包项） | [build-and-release.md](build-and-release.md) |

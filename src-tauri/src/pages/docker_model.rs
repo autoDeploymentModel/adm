@@ -3,8 +3,8 @@
 // 与 llama-server 模型（model_list.rs）并列的一套命令：
 //   1. 检查 Docker 环境（未安装则按平台自动下载 / 安装 Docker Desktop）
 //   2. 拉取 model_list.json 里 `model_images` 指定的镜像（带进度）
-//   3. 启动容器（宿主 64646 → 容器 8188，ComfyUI）
-//   4. 「查看模型」由前端用系统浏览器打开 http://127.0.0.1:64646
+//   3. 启动容器（规格由 model_type 决定，见 `DockerKind`）
+//   4. 「查看模型」由前端用系统浏览器打开 http://127.0.0.1:<kind.host_port()>
 //
 // 事件约定（复用既有事件名，前端 model_list 视图已处理）：
 //   docker-progress  { model_id, stage, progress, message }  长任务进度
@@ -31,10 +31,91 @@ use tauri::Manager;
 
 /// 图片生成模型对外端口（宿主）：0.0.0.0:64646 → 容器 8188
 pub const DOCKER_MODEL_PORT: u16 = 64646;
+/// 语音合成（TTS）模型对外端口（宿主）：0.0.0.0:50000 → 容器 50000
+pub const DOCKER_TTS_PORT: u16 = 50000;
 /// 用户主动取消 docker 长任务时的统一提示（前端据此按提示而非失败展示）
 const CANCELLED_MSG: &str = "已取消";
 /// 容器内 ComfyUI 端口（与镜像 entrypoint 一致）
 const CONTAINER_PORT: u16 = 8188;
+/// 容器内 TTS 服务端口（与镜像 entrypoint 一致）
+const TTS_CONTAINER_PORT: u16 = 50000;
+
+/// docker 模型的运行规格。不同镜像的对外端口、就绪探测路径、需要持久化的目录都不同
+/// （ComfyUI 走 64646→8188 + /opt/ComfyUI/*；CosyVoice 走 50000→50000 + /data + /health），
+/// 因此启动/对账都按 `model_type` 选规格，由前端把 `model_type` 传给命令（后端不持有模型清单）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum DockerKind {
+    /// 图片生成（ComfyUI）
+    Image,
+    /// 文本生成语音（CosyVoice 等 TTS 服务）
+    Tts,
+}
+
+impl DockerKind {
+    pub fn from_model_type(model_type: &str) -> Self {
+        let t = model_type.trim();
+        if t.contains("语音") || t.to_uppercase().contains("TTS") {
+            Self::Tts
+        } else {
+            Self::Image
+        }
+    }
+
+    /// 宿主端口：端口映射的宿主侧，也是「查看模型」打开的地址
+    pub fn host_port(&self) -> u16 {
+        match self {
+            Self::Image => DOCKER_MODEL_PORT,
+            Self::Tts => DOCKER_TTS_PORT,
+        }
+    }
+
+    /// 容器内端口（与镜像 entrypoint 一致）
+    fn container_port(&self) -> u16 {
+        match self {
+            Self::Image => CONTAINER_PORT,
+            Self::Tts => TTS_CONTAINER_PORT,
+        }
+    }
+
+    /// 宿主数据目录下的子目录（持久化挂载源）
+    fn data_subdir(&self) -> &'static str {
+        match self {
+            Self::Image => "comfyui",
+            Self::Tts => "cosyvoice",
+        }
+    }
+
+    /// (宿主子目录, 容器内路径)
+    fn mounts(&self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            // 生成结果 / 输入 / 用户配置持久化到应用数据目录
+            Self::Image => &[
+                ("output", "/opt/ComfyUI/output"),
+                ("input", "/opt/ComfyUI/input"),
+                ("user", "/opt/ComfyUI/user"),
+            ],
+            // 音色与生成结果（镜像内 /data 是持久化目录，run.sh 里用命名卷挂到这里）
+            Self::Tts => &[("data", "/data")],
+        }
+    }
+
+    /// 就绪探测路径（返回 200/302 即认为服务可用）
+    fn health_path(&self) -> &'static str {
+        match self {
+            Self::Image => "/",
+            Self::Tts => "/health",
+        }
+    }
+
+    /// 进度/日志里给用户看的服务名
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Image => "ComfyUI",
+            Self::Tts => "语音服务",
+        }
+    }
+}
+
 /// Docker Desktop 下载页（手动安装指引）
 const DOCKER_DESKTOP_HOME: &str = "https://www.docker.com/products/docker-desktop/";
 
@@ -475,8 +556,8 @@ pub fn prune_stopped_containers() -> usize {
     removed
 }
 
-/// 应用退出时清理：正在运行的图片生成容器需要停止（与 llama-server 一致，
-/// 避免退出后仍占用内存/显存与 64646 端口），进行中的 docker 子进程（拉镜像等）
+/// 应用退出时清理：正在运行的 docker 容器需要停止（与 llama-server 一致，
+/// 避免退出后仍占用内存/显存与端口），进行中的 docker 子进程（拉镜像等）
 /// 也要强杀 —— 它们是独立进程，不杀会在应用退出后继续在后台下载。幂等，可重复调用。
 pub fn cleanup_on_exit(state: &AppState) {
     kill_all_task_children(state);
@@ -498,7 +579,7 @@ fn has_nvidia_runtime(cli: &Path) -> bool {
         .unwrap_or(false)
 }
 
-// ===== 平台 / 显卡要求（图片生成模型仅 Windows + NVIDIA 可用）=====
+// ===== 平台 / 显卡要求（Docker 部署的模型仅 Windows + NVIDIA 可用）=====
 // Docker Desktop 的 GPU 直通依赖 WSL2 + nvidia-container-toolkit：macOS 无法把独显直通给
 // 容器、Linux 未适配、AMD / Intel / 核显没有对应镜像。不满足时必须在下载镜像前就拦住，
 // 否则用户会白下几十 GB 镜像，最后只看到容器启动失败的模糊报错。
@@ -516,7 +597,7 @@ enum NvidiaGpuState {
 pub fn requirement_reason() -> Option<String> {
     if !cfg!(target_os = "windows") {
         return Some(format!(
-            "图片生成模型目前仅支持 Windows + NVIDIA 显卡（当前系统：{}），macOS / Linux 暂不支持",
+            "Docker 部署的模型（图片生成 / 语音合成）目前仅支持 Windows + NVIDIA 显卡（当前系统：{}），macOS / Linux 暂不支持",
             platform_str()
         ));
     }
@@ -527,7 +608,7 @@ pub fn requirement_reason() -> Option<String> {
                 .to_string(),
         ),
         NvidiaGpuState::NoGpu => Some(
-            "未检测到 NVIDIA 显卡：图片生成模型需要 NVIDIA 显卡（不支持 AMD / Intel / 核显）"
+            "未检测到 NVIDIA 显卡：该模型需要 NVIDIA 显卡（不支持 AMD / Intel / 核显）"
                 .to_string(),
         ),
     }
@@ -878,11 +959,21 @@ fn image_exists(cli: &Path, image: &str) -> bool {
     docker_ok(cli, &["image", "inspect", image])
 }
 
-/// 等待 ComfyUI 就绪（容器内 8188 → 宿主 64646）
-fn wait_http_ready(app: &tauri::AppHandle, state: &AppState, cli: &Path, name: &str, model_id: &str, timeout_secs: u64) {
+/// 等待容器内服务就绪（宿主端口 → 容器端口按 `kind` 定）
+fn wait_http_ready(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    cli: &Path,
+    name: &str,
+    model_id: &str,
+    kind: DockerKind,
+    timeout_secs: u64,
+) {
     use std::io::{Read, Write};
     let start = Instant::now();
     let mut last_secs = u64::MAX;
+    let port = kind.host_port();
+    let label = kind.label();
     loop {
         // 容器已退出则直接放弃等待
         if container_state(cli, name) == Some(false) {
@@ -893,22 +984,23 @@ fn wait_http_ready(app: &tauri::AppHandle, state: &AppState, cli: &Path, name: &
         if task_cancelled(state, model_id) {
             return;
         }
-        let addr = format!("127.0.0.1:{}", DOCKER_MODEL_PORT);
+        let addr = format!("127.0.0.1:{}", port);
         if let Ok(mut stream) = std::net::TcpStream::connect_timeout(
             &addr.parse().unwrap_or_else(|_| "127.0.0.1:64646".parse().unwrap()),
             Duration::from_secs(3),
         ) {
             let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
             let req = format!(
-                "GET / HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
-                DOCKER_MODEL_PORT
+                "GET {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+                kind.health_path(),
+                port
             );
             if stream.write_all(req.as_bytes()).is_ok() {
                 let mut buf = [0u8; 256];
                 if let Ok(n) = stream.read(&mut buf) {
                     let head = String::from_utf8_lossy(&buf[..n]).to_string();
                     if head.contains(" 200") || head.contains(" 302") {
-                        set_progress(app, state, model_id, "start", 100, "ComfyUI 已就绪");
+                        set_progress(app, state, model_id, "start", 100, &format!("{} 已就绪", label));
                         return;
                     }
                 }
@@ -916,12 +1008,19 @@ fn wait_http_ready(app: &tauri::AppHandle, state: &AppState, cli: &Path, name: &
         }
         let secs = start.elapsed().as_secs();
         if secs > timeout_secs {
-            set_progress(app, state, model_id, "start", 99, "ComfyUI 启动较慢，仍在后台启动中，可稍后点击「查看模型」");
+            set_progress(
+                app,
+                state,
+                model_id,
+                "start",
+                99,
+                &format!("{} 启动较慢，仍在后台启动中，可稍后点击「查看模型」", label),
+            );
             return;
         }
         if secs / 5 != last_secs / 5 {
             last_secs = secs;
-            set_progress(app, state, model_id, "start", 95, &format!("正在等待 ComfyUI 就绪…（{}s）", secs));
+            set_progress(app, state, model_id, "start", 95, &format!("正在等待 {} 就绪…（{}s）", label, secs));
         }
         std::thread::sleep(Duration::from_secs(2));
     }
@@ -1010,7 +1109,9 @@ pub async fn prune_docker_containers(state: tauri::State<'_, AppState>) -> Resul
 pub async fn sync_docker_container(
     state: tauri::State<'_, AppState>,
     model_id: String,
+    model_type: String,
 ) -> Result<bool, AppError> {
+    let kind = DockerKind::from_model_type(&model_type);
     let name = container_name(&model_id);
     let name_probe = name.clone();
     // 有任务在进行中（可能正在 docker run/start）：不删容器，避免把刚创建的删掉
@@ -1040,7 +1141,7 @@ pub async fn sync_docker_container(
             *state.running_model_id.lock().unwrap_or_else(|e| e.into_inner()) = Some(model_id);
         }
         {
-            *state.running_port.lock().unwrap_or_else(|e| e.into_inner()) = Some(DOCKER_MODEL_PORT);
+            *state.running_port.lock().unwrap_or_else(|e| e.into_inner()) = Some(kind.host_port());
         }
     } else {
         // 容器不存在/已停止：清掉指向它的残留记录
@@ -1130,10 +1231,11 @@ pub async fn start_docker_model(
     state: tauri::State<'_, AppState>,
     model_id: String,
     image: String,
+    model_type: String,
 ) -> Result<(), AppError> {
     // 注册取消标志：等待引擎 / 启动容器期间用户可点「取消」中止
     let token = begin_docker_task(&state, &model_id);
-    let result = start_docker_model_inner(app, &state, model_id.clone(), image).await;
+    let result = start_docker_model_inner(app, &state, model_id.clone(), image, model_type).await;
     end_docker_task(&state, &model_id, token);
     result
 }
@@ -1143,7 +1245,9 @@ async fn start_docker_model_inner(
     state: &AppState,
     model_id: String,
     image: String,
+    model_type: String,
 ) -> Result<(), AppError> {
+    let kind = DockerKind::from_model_type(&model_type);
     {
         let pid = state.running_process.lock().map_err(|e| e.to_string())?;
         if pid.is_some() {
@@ -1154,7 +1258,7 @@ async fn start_docker_model_inner(
         let kind = state.running_kind.lock().map_err(|e| e.to_string())?.clone();
         let running_id = state.running_model_id.lock().map_err(|e| e.to_string())?.clone();
         if kind.as_deref() == Some("docker") && running_id.as_deref() != Some(model_id.as_str()) {
-            bail!("已有图片生成模型在运行中，请先关闭当前模型");
+            bail!("已有模型（Docker 部署）在运行中，请先关闭当前模型");
         }
     }
     if let Some(reason) = requirement_reason() {
@@ -1214,14 +1318,14 @@ async fn start_docker_model_inner(
                 set_progress(&app_a, &state, &mid, "start", 30, "正在创建并启动容器…");
             }
             let data_dir = config::get_data_dir(Some(&app_a))?;
-            let base = data_dir.join("comfyui");
+            let base = data_dir.join(kind.data_subdir());
             let mut args: Vec<String> = vec![
                 "run".into(),
                 "-d".into(),
                 "--name".into(),
                 name_a.clone(),
                 "-p".into(),
-                format!("{}:{}", DOCKER_MODEL_PORT, CONTAINER_PORT),
+                format!("{}:{}", kind.host_port(), kind.container_port()),
                 "--restart".into(),
                 "unless-stopped".into(),
             ];
@@ -1229,12 +1333,8 @@ async fn start_docker_model_inner(
                 args.push("--gpus".into());
                 args.push("all".into());
             }
-            // 生成结果 / 输入 / 用户配置持久化到应用数据目录
-            for (host, guest) in [
-                ("output", "/opt/ComfyUI/output"),
-                ("input", "/opt/ComfyUI/input"),
-                ("user", "/opt/ComfyUI/user"),
-            ] {
+            // 持久化目录挂载（图片模型：输出/输入/用户配置；语音模型：音色与生成结果 /data）
+            for (host, guest) in kind.mounts() {
                 let dir = base.join(host);
                 std::fs::create_dir_all(&dir)?;
                 args.push("-v".into());
@@ -1245,7 +1345,7 @@ async fn start_docker_model_inner(
             docker_output(&cli, &refs).map_err(|e| AppError::msg(format!("启动容器失败: {}", e)))?;
         }
 
-        wait_http_ready(&app_a, &state, &cli, &name_a, &mid, 300);
+        wait_http_ready(&app_a, &state, &cli, &name_a, &mid, kind, 300);
 
         // 用户取消启动：删掉刚起的容器，避免留下半启动的容器占显存
         if task_cancelled(&state, &mid) {
@@ -1266,11 +1366,11 @@ async fn start_docker_model_inner(
             *state.running_kind.lock().unwrap_or_else(|e| e.into_inner()) = Some("docker".into());
             *state.running_container.lock().unwrap_or_else(|e| e.into_inner()) = Some(name_a.clone());
             *state.running_model_id.lock().unwrap_or_else(|e| e.into_inner()) = Some(mid.clone());
-            *state.running_port.lock().unwrap_or_else(|e| e.into_inner()) = Some(DOCKER_MODEL_PORT);
+            *state.running_port.lock().unwrap_or_else(|e| e.into_inner()) = Some(kind.host_port());
         }
         clear_task(&state, &mid);
         app_a
-            .emit("model-started", serde_json::json!({ "model_id": &mid, "port": DOCKER_MODEL_PORT }))
+            .emit("model-started", serde_json::json!({ "model_id": &mid, "port": kind.host_port() }))
             .ok();
         Ok(())
     })

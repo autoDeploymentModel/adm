@@ -62,7 +62,7 @@ pub(crate) fn cleanup_processes(app: &tauri::AppHandle) {
     // server 不杀，由服务端在最后一个工作区被 teardown 时自行退出）
     agent::kill_agent_session(&state);
 
-    // 停止图片生成容器（docker 部署的模型；强杀进程时不会执行，改由启动时对账恢复）
+    // 停止 docker 部署的模型容器（图片生成 / 语音合成；强杀进程时不会执行，改由启动时对账恢复）
     crate::pages::docker_model::cleanup_on_exit(&state);
 }
 

@@ -1056,7 +1056,7 @@ pub async fn is_model_running(state: tauri::State<'_, AppState>) -> Result<bool,
 
 #[tauri::command]
 pub async fn get_model_status(state: tauri::State<'_, AppState>) -> Result<ModelStatus, AppError> {
-    // docker 部署的图片生成模型：状态来自容器
+    // docker 部署的模型（图片生成 / 语音合成）：状态来自容器
     let kind = state.running_kind.lock().map_err(|e| e.to_string())?.clone();
     if kind.as_deref() == Some("docker") {
         let container = state.running_container.lock().map_err(|e| e.to_string())?.clone();
@@ -1068,11 +1068,13 @@ pub async fn get_model_status(state: tauri::State<'_, AppState>) -> Result<Model
         if !running {
             crate::pages::docker_model::clear_running_docker(&state);
         }
+        // 端口按模型类型不同（图片 64646 / 语音 50000），以启动或对账时写入的 running_port 为准
+        let port = *state.running_port.lock().map_err(|e| e.to_string())?;
         return Ok(ModelStatus {
             running,
             model_id,
             pid: None,
-            port: if running { Some(crate::pages::docker_model::DOCKER_MODEL_PORT) } else { None },
+            port: if running { port } else { None },
         });
     }
 

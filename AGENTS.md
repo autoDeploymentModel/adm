@@ -36,7 +36,7 @@
 | [`doc/frontend-agent-conventions.md`](doc/frontend-agent-conventions.md) | Agent 视图错误处理、自动续跑、假完成检测、拖拽保护、每轮撤销入口、轮级对话记录大纲、同目录多会话并行（前台状态模型） |
 | [`doc/attachments.md`](doc/attachments.md) | 剪贴板粘贴（三平台差异）与 PDF 分批转图 |
 | [`doc/rust-backend.md`](doc/rust-backend.md) | Rust 命令地图、应用自升级、下载链路、VC++ / Vulkan 运行库预检、平台差异 |
-| [`doc/docker-image-models.md`](doc/docker-image-models.md) | 图片生成模型的 Docker 部署链路、取消与清理、模型页加载顺序 |
+| [`doc/docker-image-models.md`](doc/docker-image-models.md) | 图片生成 / 文本生成语音模型的 Docker 部署链路、按模型类型区分的端口与挂载、取消与清理、模型页加载顺序 |
 | [`doc/admAgent-server.md`](doc/admAgent-server.md) | 服务端 loop 抖动恢复、压缩与事实块、系统提示词预算与提示词缓存、归档编号、决策模式、工具与权限边界（撤销清理的会话 ID 校验、bash 只读白名单、工作区包含性判断、符号链接、LSP 通知路径）、代理链路、配置词表 |
 | [`doc/admAgent-context-compaction-flow.md`](doc/admAgent-context-compaction-flow.md) | 压缩机制全流程：触发路径、参数派生、Summarize 13 步、取回通路、熔断与日志、审核风险点 |
 | [`doc/agent-settings.md`](doc/agent-settings.md) | Agent 设置项、推理强度与思考开关、云端模型 `can_reason`、开关写入链路 |

@@ -121,7 +121,7 @@ const template = `
     gap: 6px;
   }
 
-  /* 平台/显卡不满足要求时的说明（图片生成模型仅 Windows + NVIDIA） */
+  /* 平台/显卡不满足要求时的说明（Docker 部署的模型仅 Windows + NVIDIA） */
   .model-card.card-unsupported {
     border-color: rgba(244, 67, 54, 0.35);
   }
@@ -240,7 +240,7 @@ const template = `
     border: 1px solid rgba(33, 150, 243, 0.3);
   }
 
-  /* 图片生成模型：容器启动 / 镜像下载进行中 */
+  /* docker 模型：容器启动 / 镜像下载进行中 */
   .status-starting {
     background: rgba(255, 152, 0, 0.15);
     color: #ff9800;
@@ -451,6 +451,7 @@ const template = `
     gap: 12px;
     padding: 0 20px 12px;
     flex-shrink: 0;
+    flex-wrap: wrap;
   }
 
   .model-tabs {
@@ -461,6 +462,8 @@ const template = `
     border: 1px solid var(--c-border);
     border-radius: 8px;
     flex-shrink: 0;
+    /* TAB 会随模型类型增加而变多，窄窗口下换行而不是溢出到窗口外 */
+    flex-wrap: wrap;
   }
 
   .model-tab {
@@ -490,6 +493,8 @@ const template = `
     <button type="button" class="model-tab" data-tab="text">${_t("纯文本模型")}</button>
     <button type="button" class="model-tab" data-tab="vision">${_t("多模态模型")}</button>
     <button type="button" class="model-tab" data-tab="image">${_t("图片生成模型")}</button>
+    <button type="button" class="model-tab" data-tab="tts">${_t("文字生成语音模型")}</button>
+    <button type="button" class="model-tab" data-tab="asr">${_t("语音识别模型")}</button>
   </div>
 </div>
 <main>
@@ -584,12 +589,29 @@ function escapeHtml(s) {
     .replace(/'/g, "&#39;");
 }
 
-// ===== 图片生成模型（docker 部署）=====
+// ===== 图片生成 / 语音合成（docker 部署）=====
 // model_list.json 里 model_images 有值的模型走 docker 流程：
-// 检查 Docker →（未安装）下载/安装 Docker Desktop → 拉镜像 → 启动容器（64646 → 8188）
+// 检查 Docker →（未安装）下载/安装 Docker Desktop → 拉镜像 → 启动容器
+// 具体端口 / 健康检查 / 挂载目录由后端按 model_type 决定（图片 64646→8188，语音 50000→50000）
 
 function isDockerModel(model) {
   return !!(model && model.model_images);
+}
+
+// 语音类模型（文本生成语音）：端口与就绪探测跟图片模型不同，后端按 model_type 归类
+function isTtsModel(model) {
+  const t = ((model && model.model_type) || "").toUpperCase();
+  return t.indexOf("语音") >= 0 || t.indexOf("TTS") >= 0;
+}
+
+// 后端拿不到端口时的兜底值（与 docker_model.rs 的 DockerKind::host_port 一致）
+function dockerDefaultPort(model) {
+  return isTtsModel(model) ? 50000 : 64646;
+}
+
+// docker 模型在卡片按钮上带的额外属性：启动/关闭/删除都需要镜像与类型
+function dockerAttrs(model) {
+  return ' data-model-image="' + escapeHtml(model.model_images || '') + '" data-model-type="' + escapeHtml(model.model_type || '') + '" data-docker="1"';
 }
 
 // 可取消的任务阶段：安装 Docker Desktop（install-desktop）会拉起安装程序，
@@ -599,7 +621,7 @@ function isDockerTaskCancellable(stage) {
   return DOCKER_CANCELLABLE_STAGES.indexOf(stage) >= 0;
 }
 
-// 启动阶段（等待引擎 / 创建并启动容器 / 等待 ComfyUI 就绪）
+// 启动阶段（等待引擎 / 创建并启动容器 / 等待服务就绪）
 function isDockerStarting(stage) {
   return stage === "start" || stage === "start-daemon";
 }
@@ -629,11 +651,12 @@ function getDockerState() {
   return st;
 }
 
-// 平台 / 显卡要求：图片生成模型目前仅 Windows + NVIDIA 可用（后端 requirement_reason 判定）。
-// 结果用于卡片置灰与点击提示；探测失败按"未知"处理（不置灰），真正的拦截在后端命令里。
+// 平台 / 显卡要求：Docker 部署的模型（图片生成 / 语音合成）仅 Windows + NVIDIA 可用
+// （后端 requirement_reason 判定）。结果用于卡片置灰与点击提示；探测失败按"未知"处理
+// （不置灰），真正的拦截在后端命令里。
 async function refreshDockerEnv() {
   const st = getDockerState();
-  // 没有图片生成模型时不必探测（探测要跑 docker info + nvidia-smi，1~2 秒子进程开销）
+  // 没有 docker 模型时不必探测（探测要跑 docker info + nvidia-smi，1~2 秒子进程开销）
   if (!(st.modelList || []).some(isDockerModel)) {
     st.dockerEnv = null;
     return null;
@@ -651,7 +674,7 @@ async function refreshDockerEnv() {
 function dockerBlockReason() {
   const env = S().dockerEnv;
   if (env && env.supported === false) {
-    return env.unsupported_reason || _t("当前设备不支持图片生成模型");
+    return env.unsupported_reason || _t("当前设备不支持该模型");
   }
   return "";
 }
@@ -666,20 +689,23 @@ function dockerFixPrompt(modelId, reason) {
   const env = st.dockerEnv || {};
   const model = (st.modelList || []).find(m => m.model_id === modelId);
   const image = (model && model.model_images) || "";
+  const tts = isTtsModel(model);
   // 关键验证命令带实际镜像名（AI 可直接照抄执行）；取不到镜像时退回占位符
   const verifyCmd = "docker run --rm --gpus all " + (image || _t("<目标镜像>")) + " nvidia-smi";
   const lines = [
-    _t("我在 ADM（Auto Deploy Model）里无法使用图片生成模型「") + modelId + _t("」（Docker 部署），卡片显示不可用，请帮我排查并修复运行环境。"),
+    _t("我在 ADM（Auto Deploy Model）里无法使用模型「") + modelId + _t("」（Docker 部署），卡片显示不可用，请帮我排查并修复运行环境。"),
     "",
     _t("【ADM 的检测结果】"),
-    _t("- 判定：") + (reason || _t("当前设备不支持图片生成模型")),
+    _t("- 判定：") + (reason || _t("当前设备不支持该模型")),
     _t("- 操作系统：") + (env.platform || _t("未知")),
     _t("- Docker 客户端：") + (env.installed ? (env.version || _t("已安装")) : _t("未安装")),
     _t("- Docker 引擎：") + (env.daemon_running ? _t("已就绪") : _t("未运行")),
   ];
   if (image) lines.push(_t("- 目标镜像：") + image);
   lines.push(
-    _t("- 期望结果：该模型在 ADM 里恢复可用，容器跑起来后 ComfyUI 监听 127.0.0.1:64646"),
+    tts
+      ? _t("- 期望结果：该模型在 ADM 里恢复可用，容器跑起来后语音服务监听 127.0.0.1:50000，/health 返回 200")
+      : _t("- 期望结果：该模型在 ADM 里恢复可用，容器跑起来后 ComfyUI 监听 127.0.0.1:64646"),
     "",
     _t("【要求】"),
     _t("1. 先诊断再改动：依次执行下面几条命令并原样贴出输出，据此判断问题卡在哪一层，不要跳过诊断直接改配置。"),
@@ -752,18 +778,18 @@ async function refreshDockerRunning() {
   const list = (st.modelList || []).filter(isDockerModel);
   for (const m of list) {
     try {
-      const running = await invoke()("sync_docker_container", { modelId: m.model_id });
+      const running = await invoke()("sync_docker_container", { modelId: m.model_id, modelType: m.model_type || "" });
       if (running) {
         if (st.runningModelId !== m.model_id) {
           st.runningModelId = m.model_id;
-          // 端口以后端为准（sync 已写入 running_port），取不到再回退默认值
+          // 端口以后端为准（sync 已按 model_type 写入 running_port），取不到再回退默认值
           try {
             const status = await invoke()("get_model_status");
-            st.runningModelPort = (status && status.port) || 64646;
+            st.runningModelPort = (status && status.port) || dockerDefaultPort(m);
           } catch (_) {
-            st.runningModelPort = 64646;
+            st.runningModelPort = dockerDefaultPort(m);
           }
-          showToast(_t("检测到图片生成模型仍在运行（上次未正常退出）"));
+          showToast(_t("检测到 docker 模型仍在运行（上次未正常退出）"));
         }
         return;
       }
@@ -831,6 +857,8 @@ const MODEL_TABS = [
   { key: "text",   types: ["文本生成", "纯文本模型", "纯文本"] },
   { key: "vision", types: ["视觉多模态理解", "多模态模型", "多模态"] },
   { key: "image",  types: ["文本生成图片", "图片生成模型", "文生图"] },
+  { key: "tts",    types: ["文本生成语音", "文本生成语音模型", "文字生成语音", "文字生成语音模型", "语音合成", "TTS"] },
+  { key: "asr",    types: ["语音识别", "语音识别模型", "语音转文字", "ASR"] },
 ];
 
 function getModelTab(modelType) {
@@ -893,7 +921,7 @@ function renderModelTable() {
 
   filteredList.forEach((model) => {
     const isDocker = isDockerModel(model);
-    // 图片生成模型仅 Windows + NVIDIA 可用：不支持时置灰（后端命令里还会再拦一次）
+    // docker 模型仅 Windows + NVIDIA 可用：不支持时置灰（后端命令里还会再拦一次）
     const dockerReason = isDocker ? dockerBlockReason() : "";
     const dockerBlocked = !!dockerReason;
     const available = isModelAvailable(model.need_ram) && !dockerBlocked;
@@ -925,7 +953,7 @@ function renderModelTable() {
     const safeModelId = escapeHtml(model.model_id);
     let downloadBtnHtml = "";
     if (isDocker) {
-      // 图片生成模型：downloaded = 本地已有镜像；dockerTask 存在 = 正在安装/下载
+      // docker 模型：downloaded = 本地已有镜像；dockerTask 存在 = 正在安装/下载
       if (dockerTask) {
         const pct = dockerTask.progress || 0;
         // 启动阶段统一显示「模型启动中」，具体阶段说明放到卡片提示行
@@ -942,7 +970,7 @@ function renderModelTable() {
       } else if (dockerBlocked) {
         downloadBtnHtml = '<button class="btn btn-download" disabled title="' + escapeHtml(dockerReason) + '">' + _t("下载") + '</button>';
       } else if (available) {
-        downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '" data-model-image="' + escapeHtml(model.model_images || '') + '" data-docker="1" id="dl-' + safeModelId + '">' + _t("下载") + '</button>';
+        downloadBtnHtml = '<button class="btn btn-download" data-model-id="' + safeModelId + '"' + dockerAttrs(model) + ' id="dl-' + safeModelId + '">' + _t("下载") + '</button>';
       } else {
         downloadBtnHtml = '<button class="btn btn-download" disabled>' + _t("下载") + '</button>';
       }
@@ -960,7 +988,7 @@ function renderModelTable() {
       downloadBtnHtml = '<button class="btn btn-download" disabled>' + _t("下载") + '</button>';
     }
 
-    const dockerAttr = isDocker ? ' data-model-image="' + escapeHtml(model.model_images || '') + '" data-docker="1"' : '';
+    const dockerAttr = isDocker ? dockerAttrs(model) : '';
     let actionsHtml = "";
     if (dockerBusy) {
       actionsHtml = '';
@@ -1164,7 +1192,7 @@ function goModel(modelId) {
   window.openUrl("http://127.0.0.1:" + port);
 }
 
-// ===== 图片生成模型（docker 部署）操作 =====
+// ===== 图片生成 / 语音合成（docker 部署）操作 =====
 
 async function handleDockerDownload(btn) {
   const modelId = btn.dataset.modelId;
@@ -1185,7 +1213,7 @@ async function handleDockerDownload(btn) {
     if (env && env.supported === false) {
       st.dockerEnv = env;
       renderModelTable();
-      showToast(env.unsupported_reason || _t("当前设备不支持图片生成模型"));
+      showToast(env.unsupported_reason || _t("当前设备不支持该模型"));
       return;
     }
     st.dockerEnv = env;
@@ -1257,7 +1285,9 @@ async function handleDockerCancel(btn) {
 async function handleDockerStart(btn) {
   const modelId = btn.dataset.startBtn;
   const image = btn.dataset.modelImage;
-  console.log("[model_list] 启动图片生成模型:", modelId);
+  const modelType = btn.dataset.modelType || "";
+  const model = (getDockerState().modelList || []).find(m => m.model_id === modelId) || null;
+  console.log("[model_list] 启动 docker 模型:", modelId);
   const blocked = dockerBlockReason();
   if (blocked) {
     showToast(blocked);
@@ -1272,7 +1302,7 @@ async function handleDockerStart(btn) {
   btn.textContent = _t("启动中...");
   btn.disabled = true;
   try {
-    await invoke()("start_docker_model", { modelId: modelId, image: image });
+    await invoke()("start_docker_model", { modelId: modelId, image: image, modelType: modelType });
     try {
       const status = await invoke()("get_model_status");
       if (status && status.running) {
@@ -1282,10 +1312,12 @@ async function handleDockerStart(btn) {
     } catch (_) {}
     // 启动任务结束，清掉残留的进度/取消按钮
     delete getDockerState().dockerTasks[modelId];
-    showToast(_t("已启动：请在 ComfyUI 左侧「工作流」中选择 adm-qwen-image-2.1-t2i（文生图）或 adm-qwen-image-2.1-image-edit（图生图）"));
+    showToast(isTtsModel(model)
+      ? _t("已启动：可在浏览器打开 http://127.0.0.1:50000 使用语音测试页")
+      : _t("已启动：请在 ComfyUI 左侧「工作流」中选择 adm-qwen-image-2.1-t2i（文生图）或 adm-qwen-image-2.1-image-edit（图生图）"));
     renderModelTable();
   } catch (e) {
-    console.error("[model_list] 启动图片生成模型失败:", e);
+    console.error("[model_list] 启动 docker 模型失败:", e);
     const dst = getDockerState();
     delete dst.dockerTasks[modelId];
     if (isCancelError(e)) {
@@ -1572,7 +1604,7 @@ async function init() {
   renderModelTable();
   console.log("[model_list] init() 完成, 模型数量:", st.modelList.length);
 
-  // 图片生成模型（docker）：运行要求（平台/显卡）+ 进行中的任务 + 本地是否已有镜像。
+  // docker 模型（图片生成 / 语音合成）：运行要求（平台/显卡）+ 进行中的任务 + 本地是否已有镜像。
   // 每个探测都要 spawn docker CLI 子进程（本机实测 ~1.5s，引擎启动/停止期间更慢），
   // 放在首屏渲染之后补，避免拖住整个列表的展示。
   await refreshDockerState();
@@ -1581,7 +1613,7 @@ async function init() {
 
 async function refreshDockerState() {
   const st = getDockerState();
-  // 列表里没有图片生成模型（docker）时整体跳过：这些探测都要 spawn docker CLI 子进程，
+  // 列表里没有 docker 模型时整体跳过：这些探测都要 spawn docker CLI 子进程，
   // 没有对应用户可见状态，纯属浪费
   if (!(st.modelList || []).some(isDockerModel)) {
     st.dockerEnv = null;

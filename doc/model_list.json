@@ -277,5 +277,18 @@
         "support_tools": true,
         "support_reasoning": true,
         "support_images": false
+    },
+    {
+        "model_id": "cosyvoice-tts",
+        "model_url": "",
+        "model_mmproj": "",
+        "model_images": "crpi-2210nfcb9oezh8zh.cn-shenzhen.personal.cr.aliyuncs.com/adm1/tts-q6:20261110",
+        "model_size": "2GB",
+        "model_type": "文本生成语音模型",
+        "model_description": "文本生成语音，TTS模型",
+        "need_ram": "8",
+        "support_tools": false,
+        "support_reasoning": false,
+        "support_images": false
     }
 ]
