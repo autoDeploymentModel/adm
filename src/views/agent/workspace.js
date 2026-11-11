@@ -29,6 +29,23 @@ export async function enableAutoCompact() {
 }
 
 // ===== 工作区切换 =====
+
+// 按当前状态池的会话重算标题栏文本（会话列表比 currentConv 新时以列表为准）。
+// currentConvId 为空时不动 DOM：此时 loadConversations 会自动选中/新建会话并自行写标题，
+// 这里抢先写占位文案会把「新会话」冲掉。
+function syncConvTitle() {
+  if (!S.currentConvId) return;
+  var titleEl = document.getElementById("agent-conv-title");
+  if (!titleEl) return;
+  var conv = null;
+  var list = S.conversations || [];
+  for (var i = 0; i < list.length; i++) {
+    if (list[i] && list[i].id === S.currentConvId) { conv = list[i]; break; }
+  }
+  if (!conv) conv = S.currentConv;
+  titleEl.textContent = (conv && conv.title) ? conv.title : _t("选择或创建一个会话");
+}
+
 // 多 workspace 架构：切换 tab 时保存当前 workspace 状态到状态池，
 // 恢复目标 workspace 状态。旧 workspace 的 agent run 在后台继续执行。
 export async function switchToWorkspace(wsId, wsPath) {
@@ -56,8 +73,11 @@ export async function switchToWorkspace(wsId, wsPath) {
     renderConversationList();
     updateContextUsage();
     updateStatusBar(S.isSending ? "busy" : "ready", wsPath || null, S.contextUsage.used);
+    // 标题栏必须按恢复后的会话重算：store 只恢复数据不改 DOM，
+    // 不重算会保留上一个工作区的会话标题（切回老工作区时标题栏停留旧工作区的对话记录）
+    syncConvTitle();
     // 刷新服务端数据：后台运行可能已更新会话标题、上下文用量、Agent 信息
-    loadConversations();
+    loadConversations().then(syncConvTitle);
     refreshAgentInfo();
     loadTools();
   } else {
