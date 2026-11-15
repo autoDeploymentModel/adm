@@ -116,6 +116,7 @@
     #home-btn,
     #settings-btn,
     #agent-btn,
+    #cloud-btn,
     #skills-btn {
       cursor: pointer;
       font-size: 13px;
@@ -142,6 +143,7 @@
     #home-btn:hover,
     #settings-btn:hover,
     #agent-btn:hover,
+    #cloud-btn:hover,
     #skills-btn:hover {
       color: var(--c-accent);
     }
@@ -149,6 +151,7 @@
     #home-btn.active,
     #settings-btn.active,
     #agent-btn.active,
+    #cloud-btn.active,
     #skills-btn.active {
       background: rgba(var(--c-accent-rgb), 0.20);
       color: var(--c-text-hi);
@@ -158,6 +161,7 @@
     #home-btn.active .btn-icon,
     #settings-btn.active .btn-icon,
     #agent-btn.active .btn-icon,
+    #cloud-btn.active .btn-icon,
     #skills-btn.active .btn-icon {
       color: var(--c-accent);
     }
@@ -389,6 +393,10 @@
         <span class="btn-icon">&#129302;</span>
         <span class="btn-text" data-i18n="Agent">Agent</span>
       </div>
+      <div id="cloud-btn" onclick="navigateTo('/cloud')">
+        <span class="btn-icon">&#9729;</span>
+        <span class="btn-text" data-i18n="云端模型">云端模型</span>
+      </div>
       <div id="skills-btn" onclick="navigateTo('/skills')">
         <span class="btn-icon">🧩</span>
         <span class="btn-text" data-i18n="技能管理">技能管理</span>
@@ -471,7 +479,7 @@
 
     // ===== 导航激活态 =====
     function setActiveNav(id) {
-      ["home-btn", "settings-btn", "agent-btn", "skills-btn"].forEach(function (b) {
+      ["home-btn", "settings-btn", "agent-btn", "cloud-btn", "skills-btn"].forEach(function (b) {
         const el = document.getElementById(b);
         if (el) el.classList.toggle("active", b === id);
       });
@@ -1179,10 +1187,11 @@
 
     // ===== 路由器 =====
     const routes = {
-      "/list":     { load: () => import("./views/model_list.js"),     nav: "home-btn" },
-      "/settings": { load: () => import("./views/settings.js"),       nav: "settings-btn" },
-      "/agent":    { load: () => import("./views/agent.js"),          nav: "agent-btn" },
-      "/skills":   { load: () => import("./views/skills.js"),         nav: "skills-btn" },
+      "/list":     { load: () => import("./views/model_list.js"),      nav: "home-btn" },
+      "/settings": { load: () => import("./views/settings.js"),        nav: "settings-btn" },
+      "/agent":    { load: () => import("./views/agent.js"),           nav: "agent-btn" },
+      "/cloud":    { load: () => import("./views/cloud_models.js"),    nav: "cloud-btn" },
+      "/skills":   { load: () => import("./views/skills.js"),          nav: "skills-btn" },
     };
 
     let currentView = null;

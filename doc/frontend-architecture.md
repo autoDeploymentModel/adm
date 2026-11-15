@@ -10,7 +10,8 @@
   所有前端源码在 `src/` 目录下，作为 `frontendDist` 原样提供。
 - **单窗口 SPA（单页应用）** + hash 路由：
   - `index.html`（外壳）含 `#view-root` 容器、底部硬件栏与导航。
-  - 4 个视图（`model_list` / `settings` / `agent` / `skills`）各自为独立 **ES 模块**（`src/views/*.js`），默认导出 `{ template, mount(root, params), unmount() }`。模型运行后「查看模型」直接用系统浏览器打开 WebUI（`window.openUrl`），不再有 chat 视图。
+  - 5 个视图（`model_list` / `settings` / `agent` / `cloud_models` / `skills`）各自为独立 **ES 模块**（`src/views/*.js`），默认导出 `{ template, mount(root, params), unmount() }`。模型运行后「查看模型」直接用系统浏览器打开 WebUI（`window.openUrl`），不再有 chat 视图。
+  - **云端模型管理**是独立视图 `src/views/cloud_models.js`，路由 `#/cloud`（底部导航「云端模型」，位于 Agent 右侧）：列出/增删改 admAgent.json 的 `providers`，并把变更热同步进运行中的 admAgent 服务端（`/config/set`、`/config/remove`、`/config/model`）。它不依赖 Agent 视图的 store，只依赖 Rust 命令与 `agent_http_request`；原 Agent 设置弹窗里的「云端模型管理」分组已移除。Agent 模型下拉底部的「+ 添加云端模型」入口改为跳转 `#/cloud?add=1`（自动打开添加弹窗）。列表读取失败时渲染错误态 + 「重试」，不得用空列表冒充「暂无云端模型」——否则用户会重复添加，同名 slug 在 Rust 侧直接覆盖已有 provider。
   - `agent` 视图已拆分：`src/views/agent.js` 为入口（init/bindEvents/生命周期），具体逻辑在 `src/views/agent/` 子模块（store/template/api/utils/ui/render/session/attach/send/sse/permission/tools/model/workspace/settings_dialog/undo）；跨模块共享状态由 `store.js` 统一管理（`store` 为写入入口，`S` 为只读视图，workspace 字段禁止直接写 `S`）。
   - `index.html` 通过动态 `import()` 异步加载视图模块，把 `template`（含 `<style>` 的 HTML 字符串）注入 `#view-root`，调用 `mount`/`unmount` 管理生命周期。
 - CSS/JS **内联**在每个视图模块的 `template` 字符串或模块函数内，保持零运行时依赖。

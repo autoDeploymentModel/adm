@@ -42,10 +42,10 @@ function getModelReadiness() {
   var p = S.providers.find(function(x) { return providerKey === x.key || providerKey.indexOf(x.key + "/") === 0; });
   if (!p) return null; // 内置 provider / 无法定位：交给服务端报错
   if (!p.base_url) {
-    return _t("云端模型「") + (p.name || p.key) + _t("」缺少接口地址（Base URL），请到设置中修改。");
+    return _t("云端模型「") + (p.name || p.key) + _t("」缺少接口地址（Base URL），请到「云端模型」页面修改。");
   }
   if (!p.api_key) {
-    return _t("云端模型「") + (p.name || p.key) + _t("」缺少 API Key，请到设置中填写。");
+    return _t("云端模型「") + (p.name || p.key) + _t("」缺少 API Key，请到「云端模型」页面填写。");
   }
   return null;
 }

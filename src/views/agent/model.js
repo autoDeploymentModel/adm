@@ -184,8 +184,8 @@ function isHiddenBuiltinModel(a, b, c) {
   return false;
 }
 
-// 下拉底部「添加云端模型」入口的回调：由 agent.js 注入
-// （settings_dialog.js 已 import 本模块，反向直接 import 会形成循环依赖）
+// 下拉底部「添加云端模型」入口的回调：由 agent.js 注入（云端模型管理已独立成页，
+// 回调里跳转 #/cloud?add=1；用注入而不是直接 import 可避免 model.js ↔ 视图入口循环依赖）
 var addCloudModelHandler = null;
 
 export function setAddCloudModelHandler(fn) {

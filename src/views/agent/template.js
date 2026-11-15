@@ -1640,57 +1640,6 @@ export const template = `
   .memory-action.del:hover { color: #e74c3c; border-color: #e74c3c; }
   .memory-textarea { resize: vertical; min-height: 56px; font-family: inherit; }
 
-  /* 云端模型管理 */
-  .provider-list {
-    margin-top: 8px;
-    /* 最多显示 3 个云端模型卡片（每张约 60px + 8px 间距），超出滚动 */
-    max-height: 196px;
-    overflow-y: auto;
-  }
-
-  .provider-card {
-    background: var(--c-bg-deep);
-    border: 1px solid var(--c-border);
-    border-radius: 8px;
-    padding: 10px 12px;
-    margin-bottom: 8px;
-  }
-
-  .provider-card-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 4px;
-  }
-
-  .provider-name {
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--c-text);
-  }
-
-  .provider-actions {
-    display: flex;
-    gap: 4px;
-  }
-
-  .provider-action-btn {
-    background: rgba(255,255,255,0.08);
-    border: none;
-    color: var(--c-text-2);
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 11px;
-    cursor: pointer;
-  }
-  .provider-action-btn:hover { background: rgba(255,255,255,0.15); }
-  .provider-action-btn.delete:hover { background: #3d1a1a; color: #ff6b6b; }
-
-  .provider-detail {
-    font-size: 11px;
-    color: var(--c-text-3);
-  }
-
   .btn-add-cloud {
     background: rgba(var(--c-accent-rgb), 0.1);
     border: 1px dashed var(--c-accent);
@@ -2197,13 +2146,6 @@ export const template = `
           </div>
         </div>
       </div>
-
-      <!-- 云端模型管理 -->
-      <div class="param-group">
-        <div class="param-group-title">${_t("云端模型管理")}</div>
-        <div class="provider-list" id="provider-list"></div>
-        <button class="btn-add-cloud" id="agent-add-cloud-btn">+ ${_t("添加云端模型")}</button>
-      </div>
     </div>
   </div>
 </div>
@@ -2244,34 +2186,6 @@ export const template = `
           <div class="memory-collapse-body" id="agent-memory-body"></div>
         </div>
         <button class="btn-add-cloud" id="agent-memory-add-btn" style="margin-top:6px;">+ ${_t("添加记忆")}</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- 模型添加/修改弹窗（标题与提交按钮文案由 settings_dialog.js 按模式切换） -->
-<div class="add-model-overlay" id="agent-add-model-overlay">
-  <div class="settings-modal" style="width:440px;">
-    <div class="settings-header">
-      <span class="settings-title" id="add-model-title">${_t("添加云端模型")}</span>
-      <button class="settings-close" id="agent-add-model-close">✕</button>
-    </div>
-    <div class="settings-body">
-      <div class="param-row" style="flex-direction:column;gap:6px;">
-        <input type="text" class="settings-input" id="add-model-baseurl" placeholder="${_t("API Base URL (如 https://api.example.com/v1)")}">
-        <input type="text" class="settings-input" id="add-model-apikey" placeholder="API Key">
-        <input type="text" class="settings-input" id="add-model-modelid" list="add-model-modelid-options" placeholder="${_t("模型ID (如 Big Pickle, 可下拉选择或手动填写)")}">
-        <datalist id="add-model-modelid-options"></datalist>
-        <div id="add-model-fetch-msg" style="font-size:12px;min-height:16px;line-height:16px;"></div>
-        <input type="text" class="settings-input" id="add-model-name" placeholder="${_t("模型名称 (可选, 默认使用模型ID)")}">
-        <div id="add-model-key-hint" style="font-size:12px;color:var(--c-text-2);line-height:16px;min-height:16px;"></div>
-        <input type="text" class="settings-input" id="add-model-ctx" placeholder="${_t("上下文大小 (如 256K, 1M)")}">
-        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--c-text-2);cursor:pointer;user-select:none;">
-          <input type="checkbox" id="add-model-images" style="cursor:pointer;"> ${_t("多模态模型（支持图片识别）")}
-        </label>
-        <div style="font-size:12px;color:var(--c-text-4);line-height:16px;">${_t("云端模型一律按支持思考写入；如需关闭，请在工具栏把推理强度设为「关闭」")}</div>
-        <div id="add-model-msg" style="font-size:12px;min-height:18px;line-height:18px;"></div>
-        <button class="settings-btn settings-btn-primary" id="add-model-submit" style="align-self:flex-start;">${_t("添加")}</button>
       </div>
     </div>
   </div>

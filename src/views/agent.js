@@ -16,7 +16,7 @@ import { syncModeToServer } from "./agent/permission.js";
 import { loadTools, activateToolsTab } from "./agent/tools.js";
 import { switchModel, refreshServerProviders, resolveAgentModel, updateModelDropdown, updateModelBtn, refreshAgentInfo, setAddCloudModelHandler } from "./agent/model.js";
 import { enableAutoCompact, updateWorkspaceSelector, toggleWorkDirDropdown, closeWorkDirDropdown, validateWorkDirs } from "./agent/workspace.js";
-import { showSettings, hideSettings, updateSettingsUI, saveSettings, showAddModelDialog, hideAddModelDialog, addModel, renderVisionModelSelect, updateProviderKeyHint, initModelIdFetch, BUILTIN_VISION_KEY } from "./agent/settings_dialog.js";
+import { showSettings, hideSettings, updateSettingsUI, saveSettings, renderVisionModelSelect, BUILTIN_VISION_KEY } from "./agent/settings_dialog.js";
 import { addPendingFiles, parseUriListPaths, addPastedPaths, looksLikeFilePath } from "./agent/attach.js";
 import { bindSkillSelectorEvents, initSkillSelector, clearAttachedSkillsAfterSend } from "./agent/skill_selector.js";
 import { bindCompactBtnEvents } from "./agent/compact.js";
@@ -571,12 +571,11 @@ function bindEvents() {
     }
   }
 
-  // 云端模型管理
-  document.getElementById("agent-add-cloud-btn").addEventListener("click", showAddModelDialog);
-
-  // 模型下拉最底部的「+ 添加云端模型」入口（与上面按钮同一逻辑；
-  // 经 model.js 的注入回调，避免 model.js ↔ settings_dialog.js 循环依赖）
-  setAddCloudModelHandler(showAddModelDialog);
+  // 云端模型管理已独立成页（底部导航「云端模型」）：模型下拉底部的「+ 添加云端模型」
+  // 入口直接跳转过去并自动打开添加弹窗（Agent 运行中由路由拦截，不离开本页）
+  setAddCloudModelHandler(function() {
+    location.hash = "#/cloud?add=1";
+  });
 
   // 模型下拉
   document.getElementById("agent-model-btn").addEventListener("click", function(e) {
@@ -609,17 +608,6 @@ function bindEvents() {
 
   // 技能下拉（用户/项目技能，选中后随下一条消息发送）
   bindSkillSelectorEvents();
-
-  // 模型添加
-  document.getElementById("agent-add-model-close").addEventListener("click", hideAddModelDialog);
-  document.getElementById("add-model-submit").addEventListener("click", addModel);
-  // 名称/模型ID 输入时同步展示派生出的 providers 键（同名冲突会标红，避免静默覆盖）
-  ["add-model-name", "add-model-modelid"].forEach(function(id) {
-    var el = document.getElementById(id);
-    if (el) el.addEventListener("input", updateProviderKeyHint);
-  });
-  // baseurl/apikey 变化时拉取 /models 候选列表（datalist）
-  initModelIdFetch();
 
   // MCP 管理（MCP tab 添加按钮 + 列表点击编辑 + 添加/修改弹窗）
   initMcpDialogUI();
