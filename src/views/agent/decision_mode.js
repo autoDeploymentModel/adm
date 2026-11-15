@@ -112,6 +112,8 @@ export function bindDecisionModeEvents() {
     var skillDropdown = document.getElementById("agent-skill-dropdown");
     if (modelDropdown) modelDropdown.classList.remove("show");
     if (skillDropdown) skillDropdown.classList.remove("show");
+    var reasoningDropdown = document.getElementById("agent-reasoning-dropdown");
+    if (reasoningDropdown) reasoningDropdown.classList.remove("show");
     dropdown.classList.toggle("show");
   });
   var items = dropdown.querySelectorAll("[data-decision-mode]");

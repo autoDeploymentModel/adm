@@ -407,6 +407,8 @@ export function bindSkillSelectorEvents() {
     // 互斥：关闭其它下拉
     var modelDd = document.getElementById("agent-model-dropdown");
     if (modelDd) modelDd.classList.remove("show");
+    var reasoningDd = document.getElementById("agent-reasoning-dropdown");
+    if (reasoningDd) reasoningDd.classList.remove("show");
     dd.classList.toggle("show", willShow);
     if (willShow) {
       // 首次打开若还没拉取过则拉一次，否则只是重渲染（高亮已附加状态）

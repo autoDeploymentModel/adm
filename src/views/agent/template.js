@@ -1113,6 +1113,11 @@ export const template = `
   .decision-mode-option.selected::before { content: '●'; color: var(--c-accent); }
   .decision-mode-hint { color: var(--c-text-4); font-size: 11px; }
 
+  /* 推理强度选择器（模型选择右侧；原 Agent 设置→模型配置里的下拉） */
+  .toolbar-reasoning-selector { position: relative; }
+  .reasoning-icon { font-size: 12px; }
+  .reasoning-dropdown { min-width: 130px; }
+
   .decision-card {
     margin: 10px 0;
     border: 1px solid rgba(var(--c-accent-rgb), 0.38);
@@ -1998,6 +2003,20 @@ export const template = `
             <div class="model-dropdown" id="agent-model-dropdown">
             </div>
           </div>
+          <!-- ①b 推理强度下拉（原 Agent 设置→模型配置里的控件，移到模型选择右侧） -->
+          <div class="toolbar-reasoning-selector">
+            <button class="model-current toolbar-reasoning-btn" id="agent-reasoning-btn" title="${_t("推理强度")}：${_t("选「关闭」不启用模型思考（向支持该参数的模型发送 reasoning_effort: none）")}">
+              <span class="reasoning-icon">🧠</span>
+              <span id="agent-reasoning-name">medium</span>
+              <span class="dropdown-arrow">▾</span>
+            </button>
+            <div class="model-dropdown reasoning-dropdown" id="agent-reasoning-dropdown">
+              <div class="model-item reasoning-option" data-reasoning="off" role="option" aria-selected="false">${_t("关闭推理")}</div>
+              <div class="model-item reasoning-option" data-reasoning="low" role="option" aria-selected="false">low</div>
+              <div class="model-item reasoning-option" data-reasoning="medium" role="option" aria-selected="false">medium</div>
+              <div class="model-item reasoning-option" data-reasoning="high" role="option" aria-selected="false">high</div>
+            </div>
+          </div>
           <div class="toolbar-decision-selector">
             <button class="model-current toolbar-decision-mode-btn" id="agent-decision-mode-btn" title="${_t("选择普通对话或 Choice / Bool / Score 决策输出模式；决策轮由服务端关闭推理，不改变你设置的推理强度")}" aria-pressed="false" disabled>
               <span class="decision-mode-icon">◇</span>
@@ -2120,18 +2139,6 @@ export const template = `
       <!-- 模型配置 -->
       <div class="param-group">
         <div class="param-group-title">${_t("模型配置")}</div>
-        <div class="param-row">
-          <div class="param-label">${_t("推理强度")}</div>
-          <div class="param-input">
-            <select class="settings-select" id="settings-reasoning-effort">
-              <option value="off">${_t("关闭推理")}</option>
-              <option value="low">low</option>
-              <option value="medium" selected>medium</option>
-              <option value="high">high</option>
-            </select>
-            <div class="param-desc">${_t("选「关闭」不启用模型思考（向支持该参数的模型发送 reasoning_effort: none）")}</div>
-          </div>
-        </div>
         <div class="param-row">
           <div class="param-label">${_t("采样温度")}</div>
           <div class="param-input">

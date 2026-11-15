@@ -6,7 +6,7 @@ import { template } from "./agent/template.js";
 import { S, invoke, listen, store } from "./agent/store.js";
 import { log, setLogEnabled } from "./agent/log.js";
 import { api } from "./agent/api.js";
-import { generateUUID, isFullyAtBottom, autoResize, $input, applyReasoningSetting } from "./agent/utils.js";
+import { generateUUID, isFullyAtBottom, autoResize, $input } from "./agent/utils.js";
 import { updateStatusBar, updateContextUsage, updateSendButton, exitManualScrollMode, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showInfo, showConfirm, showCopyPasteMenu, updateScrollBottomBtn, reportError, showInitProgress, hideInitProgress } from "./agent/ui.js";
 import { loadConversations, selectConversation, newConversation, clearAllConversations, toggleOutlinePanel, setOutlinePanelOpen, renderConversationList } from "./agent/session.js";
 import { syncWorkingIndicator, onAreaScroll, scrollChatToBottom, beginSelectGuard, endSelectGuard, resetSelectGuard } from "./agent/render.js";
@@ -24,6 +24,7 @@ import { initUndo } from "./agent/undo.js";
 import { initMcpDialogUI } from "./agent/mcp_dialog.js";
 import { initPdfBatching, reconcilePdfBatching } from "./agent/pdf_batch.js";
 import { bindDecisionModeEvents, updateDecisionModeUI } from "./agent/decision_mode.js";
+import { bindReasoningSelectorEvents, updateReasoningUI } from "./agent/reasoning.js";
 import { initProjectMemoryUI } from "./agent/memory.js";
 
 // ===== 初始化 =====
@@ -210,6 +211,7 @@ async function _doInit(seq) {
   updateModelDropdown();
   updateSettingsUI();
   updateDecisionModeUI();
+  updateReasoningUI();
   if (seq !== S.initSeq) return;
 
   // 异步加载用户技能列表（不阻塞 init 主体；首屏渲染已含空态占位）
@@ -519,8 +521,9 @@ function bindEvents() {
     });
   }
 
-  // 设置项即时生效：任一字段变更立即应用并持久化（无保存/取消按钮）
-  ["settings-debug-logging", "settings-reasoning-effort", "settings-temperature", "settings-vision-model", "settings-allow-all-tools", "settings-concurrent-sessions"].forEach(function(id) {
+  // 设置项即时生效：任一字段变更立即应用并持久化（无保存/取消按钮）。
+  // 推理强度已移到工具栏模型选择右侧（reasoning.js 自行处理改值+推送）
+  ["settings-debug-logging", "settings-temperature", "settings-vision-model", "settings-allow-all-tools", "settings-concurrent-sessions"].forEach(function(id) {
     $input(id).addEventListener("change", applySettings);
   });
 
@@ -535,11 +538,6 @@ function bindEvents() {
 
   // 从所有设置弹窗字段读取并保存（即时生效，弹窗保持打开）
   async function applySettings() {
-    // 思考开关与推理强度已合并为单个下拉：选「关闭」只翻 thinking_enabled，
-    // 档位本身保留，切回具体强度时恢复用户原来的选择。
-    var reasoning = applyReasoningSetting($input("settings-reasoning-effort").value, S.settings.agent_reasoning_effort);
-    S.settings.agent_thinking_enabled = reasoning.enabled;
-    S.settings.agent_reasoning_effort = reasoning.effort;
     var tempVal = $input("settings-temperature").value;
     S.settings.agent_temperature = tempVal ? parseFloat(tempVal) : null;
     S.settings.agent_vision_model = $input("settings-vision-model").value || BUILTIN_VISION_KEY;
@@ -586,18 +584,22 @@ function bindEvents() {
       updateModelDropdown();
       renderVisionModelSelect();
     });
-    // 互斥：打开模型下拉时关闭技能下拉
+    // 互斥：打开模型下拉时关闭技能/决策/推理强度下拉
     var skillDd = document.getElementById("agent-skill-dropdown");
     if (skillDd) skillDd.classList.remove("show");
     var decisionDd = document.getElementById("agent-decision-mode-dropdown");
     if (decisionDd) decisionDd.classList.remove("show");
+    var reasoningDd = document.getElementById("agent-reasoning-dropdown");
+    if (reasoningDd) reasoningDd.classList.remove("show");
     document.getElementById("agent-model-dropdown").classList.toggle("show");
   });
   var closeToolbarDropdowns = function() {
     var dd = document.getElementById("agent-model-dropdown");
     var decisionDd = document.getElementById("agent-decision-mode-dropdown");
+    var reasoningDd = document.getElementById("agent-reasoning-dropdown");
     if (dd) dd.classList.remove("show");
     if (decisionDd) decisionDd.classList.remove("show");
+    if (reasoningDd) reasoningDd.classList.remove("show");
   };
   document.addEventListener("click", closeToolbarDropdowns);
   S.unlisteners.push(function() {
@@ -605,6 +607,7 @@ function bindEvents() {
   });
 
   bindDecisionModeEvents();
+  bindReasoningSelectorEvents();
 
   // 技能下拉（用户/项目技能，选中后随下一条消息发送）
   bindSkillSelectorEvents();
