@@ -14,6 +14,7 @@
 - **假完成/静默停止检测**（`sse.js` `detectFakeCompletion`）：本轮有 edit/write/multiedit/bash/lsp 等副作用工具调用、但工具调用总数 ≤4、且 prompt 含操作动词（部署/修复/重构…）时，`showWarning` 提示"任务可能未完整执行"（服务端重试耗尽后 run_complete 无 error 静默结束的兜底）。
 - **任务清单未完成提示**（`sse.js` run_complete 收尾）：`action.kind === "ok"` 且 `run_complete.incomplete_todos > 0` 时弹常驻 `showNotice(..., "warn", true)`「任务清单还有 N 项未完成，本轮已结束；可发送"继续"让模型收尾」。`todos` 面板按会话快照渲染（`renderTodos`），服务端未回写完成态时面板就是 0/N——这类"终稿说做完了、清单还全没勾"的矛盾必须靠该提示暴露，不要在前端按终稿正文自动把清单改成完成。清单是会话累积的，旧清单未清掉时后续每轮都会再次触发，提示节点用 `todosNoticeEl` 复用改写文案（节点被 `clearErrorNotices` 清掉后自动重建），否则每轮会叠一条相同黄条。
 - **自动续跑进度判定**（`autocontinue.js` `maybeAutoContinue(data, runStats)`）：本轮有 edit/write/bash 等实质副作用工具**成功落地**（`runStats.sideEffectSuccess > 0`）视为有进展、不计无进展，避免"模型在干活但没标 todos"被误熔断。
+- **工具卡状态跟随结果**（`render.js` 的 `toolStatusSuffix`）：`is_error` 的 tool_result 到达后摘要显示「(失败)」并标红，而不是「(已完成)」。旧版只看 `finished`，于是被 `stale_read` 守卫拒绝的编辑卡片写着"已完成"、正文却是红色错误，用户只能自己判断哪一半是真的。
 
 ## 运行态交互约定
 

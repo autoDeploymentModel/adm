@@ -56,11 +56,37 @@
 - 回归测试：`internal/filetracker/service_test.go`（写入记录/覆盖顺序/相对路径同一身份/TTL 过期/空入参）
   与 `internal/agent/tools/parallel_note_test.go`（提示命中与抑制、`write`/`edit` 工具端到端记录）。
 
+## P3 — 读后写守卫改为「读后校验」（已实现）
+
+- 问题：`edit`/`multiedit`/`write` 在 `os.ReadFile` 之前比较 `os.Stat().ModTime()` 与本会话读记录
+  （`read_files.read_at`，秒级），mtime 前进即整单拒绝；`read_files` 里没有该文件时直接 `errMustReadFile`。
+  `gofmt -w` / `sed -i` / IDE 保存等**绕过编辑工具**的写入不更新读记录，于是模型刚格式化过的文件下一次
+  编辑必被拒；同类误伤还有「模型刚从 grep 看到锚点、没 view 就直接改」。两者都要 view + 重试两步，且每次
+  拒绝还计入 `consecutiveToolFailures`（3 次 nudge、5 次结束回合）。
+- 实现（`internal/agent/tools/staleread.go`，接入 `edit.go` 的 `replaceContent`/`deleteContent`、
+  `multiedit.go`、`write.go`）：
+  - 判断挪到读入当前内容之后，零额外 I/O；读记录与 mtime 都只是**代理**，真正的先决条件是锚点精确匹配；
+  - 本会话**从未读过**或 mtime 前进，但 `old_string` 仍**精确唯一匹配**当前内容（多远编辑按顺序模拟；
+    不容错/模糊匹配，避免改到模型没看过的区域）→ 照常写入，结果尾部附 `Note:`（未读 / 已过期两种文案，
+    提醒其余区域仍需重读）；
+  - 锚点不匹配且从未读过 → `must_read: ` 前缀 + `<actual_file_content>` 当前内容；锚点不匹配且读过 →
+    `stale_read: ` 前缀 + 当前内容（整文件时同时 `RecordRead` 刷新读记录，重试一步即可；超过
+    `fileContentSnippet` 上限则提示先 view）。内容**只在工作区内回传**：边界与 view 一致（解析符号链接
+    后 `filepath.Rel`），工作区外只给文案——守卫先于权限请求执行，回传内容等于无提示越界读取；
+  - `write` 无锚点可验，未读与过期都硬拒，但同样回传当前内容并在整文件时刷新读记录；
+  - `bash` 成功后 stat 最近 20 个已读文件，被命令改动的在结果尾部列出（`<read_files_changed>`），把
+    问题暴露在发生的那一步，而不是下一次编辑。
+- 熔断与日志：`stale_read` / `must_read` 是稳定分类键——前者不计入连续失败熔断（外部写入不是工具缺陷），
+  后者照常计数（锚点对不上是模型自身的输出错误）；`Loop tool result` 对两者都记 `error_kind` + `error_text`。
+- 回归测试：`internal/agent/tools/staleread_test.go`（精确锚点判定、apply / reject 两条路径、多远编辑
+  批量原子性、write 拒绝后可一步重试、bash 提示）。
+
 ## 明确不覆盖的部分（残余风险）
 
 - `bash`（`sed -i` / `cat >` / `rm` / `git checkout` / 格式化工具）、`download`、MCP 工具都不登记写入，
-  无法拦截同目录并发写入；只能依靠模型「先读后写」的纪律、上面的软提示，以及
-  桌面端「并发上限 3 + 默认提示『多个会话改同一文件可能相互覆盖』」降低概率。
+  无法拦截同目录并发写入。P3 之后这类写入会在 bash 结果里列出被改的已读文件，且编辑锚点仍精确匹配时
+  直接应用；但 `download`/MCP 工具仍无提示，只能依靠模型「先读后写」的纪律、上面的软提示，以及桌面端
+  「并发上限 3 + 默认提示『多个会话改同一文件可能相互覆盖』」降低概率。
 - `lsp_replace_symbol` / `lsp_rename` 通过 LSP workspace edit 写文件，同样不取 P1 的锁
   （LSP 侧自行应用编辑；同一文件的并发 LSP 编辑不在本次范围内）。
 

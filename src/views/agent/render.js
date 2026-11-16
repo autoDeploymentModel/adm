@@ -8,6 +8,12 @@ import { undoToRound, syncRoundUndoState } from "./undo.js";
 import { log } from "./log.js";
 import { appendDecisionCard, appendDecisionResult, buildDecisionRawBlock, decisionFromPart, decisionReplayFromText, getActiveDecisionMode, hasDecisionSyntax, parseDecisionResult, stripDecisionControlText, stripDecisionRequestText } from "./decision_mode.js";
 
+// 工具卡状态后缀：结果出错时不再显示「已完成」——否则摘要写着完成、正文却是红色报错。
+function toolStatusSuffix(finished, failed) {
+  if (!finished) return _t(" (执行中)");
+  return failed ? _t(" (失败)") : _t(" (已完成)");
+}
+
 // ===== 渲染调度（rAF 合并）=====
 // SSE 流式 message updated 每个 delta 都会到达；逐个同步渲染时单帧内可能渲染多次。
 // 用脏标记 + requestAnimationFrame 把一帧内的多次请求合并为最多一次渲染；
@@ -922,9 +928,10 @@ function updateMessageNode(el, msg, callResultMap, allowDecision, decisionCardKe
       case "tool_call":
         var ts = pe.firstElementChild; // summary
         if (ts) {
-          ts.textContent = "🔧 " + (d.name || "tool") + (d.finished !== false ? _t(" (已完成)") : _t(" (执行中)"));
           var rp = map[String(d.id)] || null;
-          if (rp && rp.data && rp.data.is_error) ts.style.color = "#ff6b6b";
+          var failed = !!(rp && rp.data && rp.data.is_error);
+          ts.textContent = "🔧 " + (d.name || "tool") + toolStatusSuffix(d.finished !== false, failed);
+          if (failed) ts.style.color = "#ff6b6b";
         }
         // 输入区按 class 查找（后面可能还有合并的结果区，不能用 lastElementChild）
         var ti = pe.querySelector(":scope > .msg-tool-input");
@@ -1124,10 +1131,11 @@ function buildPartElement(part, partIdx, role, msgKey, msgEl, thinkingOpen, resu
       if (partData.id) toolDetails.setAttribute("data-call-id", String(partData.id)); // 跨消息配对合并结果用
       var toolSummary = document.createElement("summary");
       var finished = partData.finished !== false;
-      toolSummary.textContent = "🔧 " + (partData.name || "tool") + (finished ? _t(" (已完成)") : _t(" (执行中)"));
+      var failed = !!(resultPart && resultPart.data && resultPart.data.is_error);
+      toolSummary.textContent = "🔧 " + (partData.name || "tool") + toolStatusSuffix(finished, failed);
       toolSummary.style.cssText = "cursor:pointer;font-size:12px;color:var(--c-text-3);";
       // 结果已合并：出错时摘要标红提示，展开即见红色错误输出
-      if (resultPart && resultPart.data && resultPart.data.is_error) toolSummary.style.color = "#ff6b6b";
+      if (failed) toolSummary.style.color = "#ff6b6b";
       toolDetails.appendChild(toolSummary);
       var toolInput = document.createElement("div");
       toolInput.className = "msg-tool-input";
