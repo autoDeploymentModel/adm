@@ -2088,6 +2088,10 @@ export const template = `
     <span class="status-item" id="agent-status-workdir">${_t("工作区: --")}</span>
     <span class="status-separator">·</span>
     <span class="status-item" id="agent-status-tokens">Token: 0</span>
+    <span class="status-separator">·</span>
+    <span class="status-item" id="agent-status-toolcalls">${_t("工具调用: ")}0</span>
+    <span class="status-separator">·</span>
+    <span class="status-item" id="agent-status-rounds">${_t("交互轮次: ")}0</span>
   </div>
 </div>
 

@@ -521,6 +521,8 @@ const EN = {
   "就绪": "Ready",
   "工作区: ": "Workspace: ",
   "工作区: --": "Workspace: --",
+  "工具调用: ": "Tool calls: ",
+  "交互轮次: ": "Model turns: ",
   "工具": "Tools",
   "已加载": "Loaded",
   "已把文件夹路径插入输入框: ": "Folder path inserted into input: ",

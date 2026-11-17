@@ -2,7 +2,7 @@
 import { t as _t } from "../../i18n.js";
 import { S, store } from "./store.js";
 import { renderMarkdown, formatTime, splitSystemInfo, isFullyAtBottom } from "./utils.js";
-import { updateScrollBottomBtn, reportError } from "./ui.js";
+import { updateScrollBottomBtn, reportError, updateSessionStats } from "./ui.js";
 import { scheduleMessageOutline } from "./session.js";
 import { undoToRound, syncRoundUndoState } from "./undo.js";
 import { log } from "./log.js";
@@ -229,6 +229,7 @@ export function renderMessages() {
     scheduleMessageOutline();
     // 消息列表变化通知（空消息场景也要派发，否则手动压缩按钮无法根据 hasContent=0 切到禁用态）
     document.dispatchEvent(new CustomEvent("agent-messages-changed"));
+    updateSessionStats();
     logRenderPerf(perfT0, 0);
     return;
   }
@@ -313,6 +314,8 @@ export function renderMessages() {
   scheduleMessageOutline();
   // 消息列表变化通知（如手动压缩按钮：消息数影响按钮启用条件）
   document.dispatchEvent(new CustomEvent("agent-messages-changed"));
+  // 底部状态栏的工具调用/交互轮次统计：消息列表是唯一数据源，渲染后顺手刷新
+  updateSessionStats();
   logRenderPerf(perfT0, S.messages.length);
 }
 

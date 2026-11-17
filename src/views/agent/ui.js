@@ -278,6 +278,35 @@ export function updateContextUsage() {
   }
 }
 
+// ===== 会话统计（工具调用次数 / 模型交互轮次）=====
+// 口径直接来自当前会话已加载的完整消息列表（`GET /sessions/{sid}/messages` 返回全量，
+// 压缩前的历史也仍在列表里），不依赖服务端字段：
+// - 工具调用 = `tool_call` part 数（`shell_command` 是用户 `!` 命令、`decision` 是决策结果，都不计）
+// - 交互轮次 = assistant 消息数（服务端每个 step 落库一条 assistant 消息，一步即一次模型请求）
+// 由 renderMessages 末尾调用：流式期间增量渲染经 rAF 合并后也会触发，计数随消息增长实时刷新。
+// 只在文本变化时写 DOM，避免每帧无谓的样式/布局失效。
+export function updateSessionStats() {
+  var toolEl = document.getElementById("agent-status-toolcalls");
+  var roundEl = document.getElementById("agent-status-rounds");
+  if (!toolEl && !roundEl) return;
+  var toolCalls = 0;
+  var rounds = 0;
+  var msgs = S.messages || [];
+  for (var i = 0; i < msgs.length; i++) {
+    var m = msgs[i];
+    if (!m || !Array.isArray(m.parts)) continue;
+    if (m.role === "assistant") rounds++;
+    for (var j = 0; j < m.parts.length; j++) {
+      var p = m.parts[j];
+      if (p && p.type === "tool_call") toolCalls++;
+    }
+  }
+  var toolText = _t("工具调用: ") + toolCalls;
+  var roundText = _t("交互轮次: ") + rounds;
+  if (toolEl && toolEl.textContent !== toolText) toolEl.textContent = toolText;
+  if (roundEl && roundEl.textContent !== roundText) roundEl.textContent = roundText;
+}
+
 // ===== 底部状态栏 =====
 export function updateStatusBar(state, workdir, tokens) {
   var stateEl = document.getElementById("agent-status-state");
