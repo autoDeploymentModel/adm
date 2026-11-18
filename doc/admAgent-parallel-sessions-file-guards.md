@@ -73,11 +73,13 @@
     `stale_read: ` 前缀 + 当前内容（整文件时同时 `RecordRead` 刷新读记录，重试一步即可；超过
     `fileContentSnippet` 上限则提示先 view）。内容**只在工作区内回传**：边界与 view 一致（解析符号链接
     后 `filepath.Rel`），工作区外只给文案——守卫先于权限请求执行，回传内容等于无提示越界读取；
-  - `write` 无锚点可验，未读与过期都硬拒，但同样回传当前内容并在整文件时刷新读记录；
+  - `write` 无锚点可验，未读与过期都硬拒，但同样回传当前内容并在整文件时刷新读记录；拒绝文案单独说明「全量覆盖、没有 old_string 可校验」，`write.md` 也提示新建文件（含 go:embed 占位）直接用 `write` 而非 bash 重定向（bash 创建的文件没有读记录，首写必被拒一次）；
   - `bash` 成功后 stat 最近 20 个已读文件，被命令改动的在结果尾部列出（`<read_files_changed>`），把
     问题暴露在发生的那一步，而不是下一次编辑。
-- 熔断与日志：`stale_read` / `must_read` 是稳定分类键——前者不计入连续失败熔断（外部写入不是工具缺陷），
-  后者照常计数（锚点对不上是模型自身的输出错误）；`Loop tool result` 对两者都记 `error_kind` + `error_text`。
+- 熔断与日志：`stale_read` / `must_read` 是稳定分类键——`stale_read` 不计入连续失败熔断（外部写入不是工具缺陷）；
+  `must_read` 在 `edit`/`multiedit` 照常计数（锚点对不上是模型自身的输出错误），`write` 的 `must_read` 不计入
+  （全量覆盖无锚点，文件常由 bash/其他会话先创建，拒绝后重试一步即成功）；`Loop tool result` 对两者都记
+  `error_kind` + `error_text`。
 - 回归测试：`internal/agent/tools/staleread_test.go`（精确锚点判定、apply / reject 两条路径、多远编辑
   批量原子性、write 拒绝后可一步重试、bash 提示）。
 
