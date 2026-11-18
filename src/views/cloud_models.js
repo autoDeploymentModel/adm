@@ -952,9 +952,7 @@ function bindEvents() {
   document.getElementById("cloud-add-btn").addEventListener("click", openAddDialog);
   document.getElementById("cloud-model-close").addEventListener("click", closeDialog);
   document.getElementById("cloud-model-submit").addEventListener("click", submitModel);
-  document.getElementById("cloud-model-overlay").addEventListener("click", function(e) {
-    if (e.target === document.getElementById("cloud-model-overlay")) closeDialog();
-  });
+  // 弹窗只能通过标题栏「✕」关闭：不绑定遮罩点击关闭，避免填表时误点半透明背景丢失已输入内容
   // 名称/模型ID 输入时同步展示派生出的 providers 键（同名冲突标红，避免静默覆盖）
   ["cloud-model-name", "cloud-model-modelid"].forEach(function(id) {
     var el = document.getElementById(id);
