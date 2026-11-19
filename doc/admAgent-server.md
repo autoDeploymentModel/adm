@@ -65,6 +65,7 @@
 - **manifest**：`internal/lsp/managed/catalog.json` 随二进制嵌入，版本 pin 死；manifest 提供 runtime、package、入口、filetypes、root markers、license/source/guide，与 powernap 同名时 manifest 覆盖入口，powernap 只补缺省字段。
 - **运行时选择**：`options.lsp_runtime_preference=system|managed`（默认 system）；P0 使用系统 Node/Python/Go，托管 runtime 下载在 P2。`options.lsp_managed_runtime=ask|auto|off` 控制下载策略；桌面端自动修复触发已移除，只保留手动修复。
 - **API**：`GET /v1/lsp/catalog`、`POST /v1/lsp/doctor`、`POST /v1/lsp/install|fix|uninstall`、`GET /v1/lsp/jobs[...]`、`POST /v1/lsp/jobs/{id}/cancel`，以及按名称 `POST /v1/workspaces/{id}/lsps/{lsp}/start|restart`；显式 `start|restart` 绕过 `auto_lsp`、root markers 与不可用冷却；`GET /lsps` 的 `LSPClientInfo` 增加 reason/fix/guide/runtime/server_version/managed。
+- **fix 判定**：托管目录有 active 版本、或系统 PATH 已能解析到 manifest 入口（`exec.LookPath` 命中）时不下发 `fix`；`GET /v1/lsp/catalog` 同样跳过已在 PATH 上的服务器。否则系统安装（如 `~/go/bin/gopls`）会被误判为 `missing_package`，在已连接的客户端旁边显示「安装」。
 - **发现**：`lsp.NewManager` 同时加载 powernap、用户配置与 `state.json` 中的托管安装；托管安装不写用户配置，`TrackConfigured`/面板包含托管项；安装后可 `StartByName` 强制刷新。
 - **安全**：安装/修复端点只接受 manifest 内 name/version（修复另允许当前 active / previous 版本）；命令用 `exec.Command` 参数数组，不拼 shell；安装目录 0700；下载/日志不写代理凭据。默认仅本机访问，非 loopback 需 token（P0 未实现 token，沿用现有 server 访问边界）。
 - **CLI**：`admAgent lsp list|doctor|install|repair|uninstall|jobs|cancel`，与 API 共用 `internal/lsp/managed`。

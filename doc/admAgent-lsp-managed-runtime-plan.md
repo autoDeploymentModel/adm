@@ -602,6 +602,7 @@ Windows：`%LOCALAPPDATA%\admAgent\cache\lsp`；macOS/Linux：`$XDG_CACHE_HOME/a
 
 - `reason` 取值见 5.4；`fix.kind` 取 `install_runtime` / `install_server` / `upgrade_runtime` / `upgrade_server` / `reinstall` / `rollback` / `retry` / `open_log` / `none`。
 - `fix` 只描述“可执行动作”，不带客户端本地规则：桌面端有 `fix` 就按 `kind` 展示按钮，没有就只展示 `error`。
+- 后续变更（已落地）：`fix` 只在托管未安装且系统 PATH 也解析不到入口时下发（系统安装的 gopls 不再被判成 `missing_package`）；桌面端对 `state=1/2`（启动中/已连接）不再展示 `install_server`。见 [admAgent-server.md](admAgent-server.md) LSP 托管安装与 [frontend-agent-conventions.md](frontend-agent-conventions.md)。
 - `guide` 是无法自动修复时的安装指引（URL/命令/说明），由 manifest 提供；桌面端不再本地维护 `LSP_GUIDES`。
 - `managed` 表示 server 包是否来自托管安装；runtime 的系统/托管来源看 `runtime.source`。
 - `open_log`/`none` 是 UI 动作，不产生 job；`install_*`/`upgrade_*`/`reinstall`/`rollback`/`retry` 才可提交 `/fix`；`repair` 是 `reinstall` 同一 pin 的别名。

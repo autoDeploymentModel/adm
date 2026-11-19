@@ -176,11 +176,19 @@ export async function loadTools() {
         // 未安装的托管服务器（state=0 + fix.kind=install_server）也能一键安装。
         var fixable = isLspFixable(lspName, l.fix);
         var fixKind = "";
+        // 启动中/已连接视为已在运行：不展示「安装」，也不展示安装指引。
+        // catalog 兜底或用户自定义 command 的旧响应仍可能带 install_server/reason，
+        // 但服务器已经在跑就不需要再装。
+        var running = l.state === 1 || l.state === 2;
         if (fixable) {
           fixKind = (l.fix && l.fix.kind) || "";
           if (!fixKind) {
             var ft = fixTarget(lspName);
             fixKind = (ft && ft.fix && ft.fix.kind) || "";
+          }
+          if (running && fixKind === "install_server") {
+            fixable = false;
+            fixKind = "";
           }
         }
         lspTools.push({
@@ -191,7 +199,7 @@ export async function loadTools() {
           errorText: l.error || "",
           fixable: fixable,
           fixKind: fixKind,
-          guide: !fixable && (isErr || l.reason) ? guideFor(lspName, l.guide) : null,
+          guide: !fixable && !running && (isErr || l.reason) ? guideFor(lspName, l.guide) : null,
           aiInstall: isErr,
         });
       });
