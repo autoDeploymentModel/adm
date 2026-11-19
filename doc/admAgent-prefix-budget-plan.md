@@ -3,6 +3,7 @@
 > 状态：**P0 + P1 已落地**（T1/T2/T3/T4/T5/T6，见文末「实施结果」）；P2 分档、P3 MCP 延迟未做，留待实测数据决定
 > 范围：`admAgent/` 服务端（系统提示词 + 工具目录 + eval），不涉及桌面端 `src/`、`src-tauri/`
 > 关联文档：[`admAgent-server.md`](admAgent-server.md)（系统提示词预算与提示词缓存）、[`admAgent-eval-harness-plan.md`](admAgent-eval-harness-plan.md)
+> 后续变更：`admAgent/` 只读约束已于 2026-11-19 放开，见 `AGENTS.md` 硬规则 2 / `doc/conventions.md`。
 > 背景：参考 Anthropic《Building agents: When to fold subagents into your main agent loop》的结论——先量化、一次只改一处、只保留站得住的改动；不要为了"架构正确"引入新机制。
 
 ## 1. 问题（已实测，不是推测）

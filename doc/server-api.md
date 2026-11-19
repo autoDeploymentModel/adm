@@ -249,6 +249,8 @@ LSP 客户端状态或诊断变更通知。
 |----|------|
 | `state_changed` | LSP 服务器状态变更 |
 | `diagnostics_changed` | 诊断信息变更 |
+| `install_progress` | 托管 LSP 安装/修复进度 |
+| `job_finished` | 托管 LSP 安装/修复结束 |
 
 `LSPEvent.state` 为整数类型（`lsp.ServerState`），取值见 [LSP 接口](#61-列出-lsp-客户端)。
 
@@ -1227,6 +1229,13 @@ GET /v1/workspaces/{id}/lsps
 | `name` | string | LSP 客户端名称 |
 | `state` | int | LSP 服务器状态（整数，见下表） |
 | `error` | string | 错误信息（无错误时为空字符串） |
+| `error_type` | string | 兼容分类：`not_installed` / `startup_failed` |
+| `reason` | string | 可修复原因（`missing_runtime` / `missing_package` / `version_mismatch` / `permission` / `network` / `checksum_failed` / `install_failed` / `unsupported_platform` / `license_blocked` / `disk_space` / `startup_failed`） |
+| `fix` | object | 建议动作：`kind` / `server` / `runtime` / `version` / `source` / `license` / `requires_confirm` |
+| `guide` | object | 无法自动修复时的指引：`url` / `command` / `note` |
+| `runtime` | object | 实际 runtime：`kind` / `version` / `source`（system/managed）/ `path` |
+| `server_version` | string | 已安装或系统使用的 server 版本 |
+| `managed` | bool | 是否来自 admAgent 托管安装 |
 | `diagnostic_count` | int | 诊断信息数量 |
 | `connected_at` | string | 连接时间（ISO 8601） |
 
@@ -1288,6 +1297,100 @@ POST /v1/workspaces/{id}/lsps/stop
 停止工作区内所有 LSP 服务器。
 
 **响应**：`200 OK`（无响应体）
+
+---
+
+### 6.5 托管 LSP 目录
+
+```
+GET /v1/lsp/catalog?workspace_id={id}
+```
+
+返回 curated manifest、license、平台、体积、当前安装版本与建议动作。`workspace_id` 可选，用于选择该 workspace 的 `lsp_install_dir`。
+
+```json
+{
+  "servers": [
+    {
+      "name": "vtsls",
+      "display_name": "TypeScript / JavaScript",
+      "runtime": {"kind": "node", "version": "24.15.0", "source": "system", "path": "C:\\Program Files\\nodejs\\node.exe", "compatible": true},
+      "version": "0.3.0",
+      "license": "MIT",
+      "source": "https://github.com/yioneko/vtsls",
+      "auto_install": true,
+      "large": false,
+      "experimental": false,
+      "active_version": "0.3.0",
+      "previous_version": "",
+      "available_on_host": true,
+      "fix": {"kind": "install_server", "server": "vtsls", "version": "0.3.0", "requires_confirm": true}
+    }
+  ]
+}
+```
+
+### 6.6 环境诊断
+
+```
+POST /v1/lsp/doctor
+```
+
+请求体可选：`{"workspace_id":"ws_..."}`。响应包含 runtime、PATH、安装目录可写性、代理（脱敏）与问题列表；不修改环境。代理为生效值：配置的 `agent_proxy` 优先，未配置时回退 `HTTP(S)_PROXY` 环境变量。
+
+### 6.7 安装 / 修复 / 卸载
+
+```
+POST /v1/lsp/install
+POST /v1/lsp/fix
+POST /v1/lsp/uninstall
+```
+
+安装请求（`managed.InstallRequest`）：
+
+```json
+{
+  "workspace_id": "ws_...",
+  "target": "server",
+  "name": "vtsls",
+  "version": "0.3.0",
+  "install_runtime": false,
+  "confirm": false
+}
+```
+
+`confirm=false` 返回 `plan`（含 `plan_id`、source、license、steps、expires_at），不创建 job；`confirm=true` 返回 `202` 与 `job`。版本必须等于 manifest pin，任意版本会被拒绝。
+
+修复请求（`managed.FixRequest`）的 `action` 支持 `install_server` / `upgrade_server` / `reinstall` / `repair`（=同 pin 重装）/ `rollback` / `retry`；`install_runtime` / `upgrade_runtime` 当前返回 `422`，托管运行时下载在 P2。`version` 省略时使用当前 active 版本（无则 manifest pin）；显式传值只允许 manifest pin 或当前 active 版本（`rollback` 取 previous 版本），其余版本会被拒绝。
+
+卸载请求（`managed.UninstallRequest`）删除指定版本；`version` 只允许当前 active 或 previous 版本，其余（含路径分隔符等任意字符串）返回 `400`。active 版本存在 previous 时必须先 rollback；卸载 previous 版本会同步清空 `previous_version`，不会留下指向已删除目录的回滚目标。
+
+冲突时返回 `409`，`X-Existing-Job` 指向正在运行的 job；计划过期或计划不一致返回 `409`。
+
+### 6.8 安装 Job
+
+```
+GET  /v1/lsp/jobs?workspace_id={id}
+GET  /v1/lsp/jobs/{job_id}?workspace_id={id}
+POST /v1/lsp/jobs/{job_id}/cancel?workspace_id={id}
+```
+
+`GET /v1/lsp/jobs`：
+
+```json
+{"jobs": [{"job_id":"lspjob_...","name":"vtsls","target":"server","action":"install_server","status":"running","phase":"install","percent":45,"message":"installing"}]}
+```
+
+`GET /v1/lsp/jobs/{job_id}` 返回单个 job，`failed` 时带 `reason`、`fix` 与最多 32KB 的 `log_tail`（代理凭据/token 已脱敏）。job 只存在于 server 进程内；重启后未完成 job 标失败。
+
+### 6.9 按名称启动 / 重启
+
+```
+POST /v1/workspaces/{id}/lsps/{lsp}/start
+POST /v1/workspaces/{id}/lsps/{lsp}/restart
+```
+
+按名称启动/重启单个 LSP，替代桌面端伪造 `__lsp_start__.<ext>` 路径。显式请求绕过 `options.auto_lsp`、root markers 与 30s 不可用冷却（只保留 server 自身 `disabled` 检查），安装/修复后立即启动不会被自动启动门禁静默拦下。响应 `200 OK`（无响应体）。
 
 ---
 

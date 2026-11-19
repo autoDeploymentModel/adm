@@ -22,7 +22,7 @@
 ## 硬规则（违反会返工）
 
 1. **先确认改动目标**：桌面端 = `src/` + `src-tauri/`，TUI / 服务端 = `admAgent/`；未经明确指示不混改两端。
-2. **`admAgent/` 目录只读**：需要结论先搜源码；确认是 admAgent 的问题时，列出问题与改动点交给用户审核，不要直接改。
+2. **`admAgent/` 可修改**：改前先搜源码确认现状；行为/契约改动必须同步文档，并跑 `go build ./...` 与相关 `go test`。
 3. **改完 Go 代码必须重新编译并推送 sidecar**（`admAgent/build.ps1` → `pnpm agent:push`）才在 ADM 里生效。
 4. 前端改动跑 `pnpm typecheck`；仓库没有 linter / formatter / 测试框架，不要新增。
 5. **代码改动必须同步更新对应文档**：同一次改动里改完，映射表见 [`doc/conventions.md`](doc/conventions.md#文档同步更新强制)；行为/契约变了而文档没跟，视为改动未完成。
@@ -55,6 +55,7 @@
 - [`doc/admAgent-prefix-budget-plan.md`](doc/admAgent-prefix-budget-plan.md) — 固定前缀（系统提示词 + 工具 schema）瘦身与预算守卫：bash 描述里的 git 剧本已搬进 skill、前缀预算单测与日志落地（8.9k），按窗口分档/MCP 延迟未做
 - [`doc/admAgent-patch-bash-allow-all.md`](doc/admAgent-patch-bash-allow-all.md) — `options.bash_allow_all`
 - [`doc/admAgent-patch-project-memory-sync.md`](doc/admAgent-patch-project-memory-sync.md) — `options.project_memory_sync`
+- [`doc/admAgent-lsp-managed-runtime-plan.md`](doc/admAgent-lsp-managed-runtime-plan.md) — 现行 LSP 实现（powernap 目录、自动启动、诊断、8 个工具）+ 运行时托管/按 server 安装方案：**P0 核心、安装进度 SSE、Node 托管 runtime、桌面 API 切换已落地**；离线 pack / API token 未做
 - [`doc/agent-decision-mode-server-plan.md`](doc/agent-decision-mode-server-plan.md) / [`doc/agent-decision-output-plan.md`](doc/agent-decision-output-plan.md) — 决策输出模式（服务端方案 / 前端 MVP 记录）
 
 ## 项目结构

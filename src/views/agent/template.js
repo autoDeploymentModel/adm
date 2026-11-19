@@ -305,21 +305,6 @@ export const template = `
   }
   .tool-fix-btn:hover { color: var(--c-text); border-color: var(--c-text-4); }
   .tool-fix-btn:disabled { opacity: 0.6; cursor: default; }
-  /* LSP 页底部：启动失败自动修复开关 */
-  .tools-autofix {
-    display: none;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 12px;
-    font-size: 11px;
-    color: var(--c-text-3);
-    border-top: 1px solid var(--c-border);
-    cursor: pointer;
-    flex-shrink: 0;
-    user-select: none;
-  }
-  .tools-autofix input { margin: 0; accent-color: var(--c-accent); }
-
   /* ③ 底部: 设置 (不滚动) */
   .sidebar-footer {
     flex-shrink: 0;
@@ -1932,10 +1917,6 @@ export const template = `
           <div class="skeleton-tool-item"><span class="skeleton-dot"></span><div class="skeleton-line"></div></div>
           <div class="skeleton-tool-item"><span class="skeleton-dot"></span><div class="skeleton-line"></div></div>
         </div>
-        <label class="tools-autofix" id="agent-lsp-autofix-row">
-          <input type="checkbox" id="agent-lsp-autofix">
-          <span>${_t("启动失败时自动安装修复")}</span>
-        </label>
       </div>
 
       <!-- ③ 底部: 设置 (不滚动) -->

@@ -707,7 +707,7 @@ function onToolStatusSSEEvent(ev) {
   if (ev.eventType === "lsp_event") {
     var d = ev.actualData || {};
     if (d.type === "diagnostics_changed") return;
-    if (d.type === "state_changed") onLspStateEvent(d.name, d.state, d.error, d.error_type);
+    if (d.type === "state_changed") onLspStateEvent(d.name, d.state, d.error, d.error_type, d.reason, d.fix, d.guide);
   }
   scheduleLoadTools();
 }

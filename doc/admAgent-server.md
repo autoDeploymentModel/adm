@@ -53,3 +53,16 @@
   2. Rust `settings.rs:37` 调用 `agent.rs` `sync_agent_proxy`：`write_agent_proxy`（`agent.rs:640`）把 `{enabled,url}` 写入 admAgent.json 顶层 `agent_proxy`（原子写，值未变返回 false 跳过）→ 有变更时对当前 active workspace `POST /v1/workspaces/{ws}/config/set` 触发服务端**磁盘全量重载**（10s 超时，失败仅记日志退回直连）。
   3. admAgent `ConfigStore.setConfig` 把代理同步到进程级 `httpproxy`（`internal/config/store.go:100-105`）；`httpproxy.ProxyFunc()` 作为 `Transport.Proxy` 回调**每次请求实时读取**状态，热重载即刻生效、无需重建 client/重启 server；本地/私网地址（127.0.0.1、LAN GPU 盒）自动绕过（`internal/httpproxy/proxy.go:50-81`）。
   4. **生效范围**：LLM 客户端（`llm/client.go:107`）+ Agent 网络工具 fetch/web_fetch/download/web_search/sourcegraph/agentic_fetch（全部经 `SharedHTTPTransport`，`tools/fetch_helpers.go:38-48`）；**MCP HTTP/SSE 传输不走**（`mcp/init.go:538-581` 用 `http.DefaultTransport`，只认 `HTTP_PROXY` 环境变量）。注意：面板文案"仅影响 LLM 请求"比实际范围窄，工具类请求同样走代理。
+
+
+## LSP 托管安装（服务端）
+
+- **状态与修复 API 化**：LSP 状态、`reason`/`fix`/`guide`、安装、修复、回滚、卸载、job 进度统一由 `admAgent` 提供；桌面端只消费 API/SSE，不执行 `npm -g`/`pip`，不 patch `admAgent.json`。
+- **目录与锁**：默认 `<GlobalCacheDir()>/lsp`，可用 `lsp_install_dir` 覆盖；安装按 `servers/<name>/<version>/` 隔离，`state.json` 由 `.locks/state.lock` 跨进程串行化并原子写；安装命令本身由 `.locks/<name>.lock` 串行化。
+- **manifest**：`internal/lsp/managed/catalog.json` 随二进制嵌入，版本 pin 死；manifest 提供 runtime、package、入口、filetypes、root markers、license/source/guide，与 powernap 同名时 manifest 覆盖入口，powernap 只补缺省字段。
+- **运行时选择**：`options.lsp_runtime_preference=system|managed`（默认 system）；P0 使用系统 Node/Python/Go，托管 runtime 下载在 P2。`options.lsp_managed_runtime=ask|auto|off` 控制下载策略；桌面端自动修复触发已移除，只保留手动修复。
+- **API**：`GET /v1/lsp/catalog`、`POST /v1/lsp/doctor`、`POST /v1/lsp/install|fix|uninstall`、`GET /v1/lsp/jobs[...]`、`POST /v1/lsp/jobs/{id}/cancel`，以及按名称 `POST /v1/workspaces/{id}/lsps/{lsp}/start|restart`；显式 `start|restart` 绕过 `auto_lsp`、root markers 与不可用冷却；`GET /lsps` 的 `LSPClientInfo` 增加 reason/fix/guide/runtime/server_version/managed。
+- **发现**：`lsp.NewManager` 同时加载 powernap、用户配置与 `state.json` 中的托管安装；托管安装不写用户配置，`TrackConfigured`/面板包含托管项；安装后可 `StartByName` 强制刷新。
+- **安全**：安装/修复端点只接受 manifest 内 name/version（修复另允许当前 active / previous 版本）；命令用 `exec.Command` 参数数组，不拼 shell；安装目录 0700；下载/日志不写代理凭据。默认仅本机访问，非 loopback 需 token（P0 未实现 token，沿用现有 server 访问边界）。
+- **CLI**：`admAgent lsp list|doctor|install|repair|uninstall|jobs|cancel`，与 API 共用 `internal/lsp/managed`。
+- **已知未完成**：离线 pack、API token、自动修复触发；SSE、单主过滤、桌面切换与 Node 托管 runtime 已接入。

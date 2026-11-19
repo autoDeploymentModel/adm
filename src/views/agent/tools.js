@@ -2,9 +2,7 @@
 import { t as _t } from "../../i18n.js";
 import { S, invoke } from "./store.js";
 import { api } from "./api.js";
-import { showInfo } from "./ui.js";
-import { $input } from "./utils.js";
-import { ensureFixTargets, isLspFixable, fixTarget, guideFor, runLspFix, runAiInstall, isLspAutoFixEnabled, setLspAutoFixEnabled, onLspStateEvent } from "./lsp_fix.js";
+import { ensureFixTargets, isLspFixable, fixTarget, guideFor, runLspFix, runAiInstall, onLspStateEvent } from "./lsp_fix.js";
 
 // ===== 工具列表 =====
 // 分别调用 /skills、/mcp/states、/lsps 三个端点，外加工作区详情获取 skill 状态快照
@@ -169,12 +167,22 @@ export async function loadTools() {
         var l = lspStates[key];
         var lspName = l.name || key;
         var isErr = l.state === 3;
-        // 状态事件先派发（drive 自动安装开关），再决定是否展示：
+        // 状态事件先派发（用于启动失败提示），再决定是否展示：
         // error_type=not_installed 仅表示未安装，不作为故障展示/计数。
-        if (isErr) onLspStateEvent(lspName, l.state, l.error, l.error_type);
+        if (isErr) onLspStateEvent(lspName, l.state, l.error, l.error_type, l.reason, l.fix, l.guide);
         if (l.error_type === "not_installed") return;
         var st = lspStateMap[l.state] || { label: l.state || _t("未知"), color: "gray" };
-        var fixable = isErr && isLspFixable(lspName);
+        // 修复/安装入口由服务端返回的 fix 决定，不再要求 state==3：
+        // 未安装的托管服务器（state=0 + fix.kind=install_server）也能一键安装。
+        var fixable = isLspFixable(lspName, l.fix);
+        var fixKind = "";
+        if (fixable) {
+          fixKind = (l.fix && l.fix.kind) || "";
+          if (!fixKind) {
+            var ft = fixTarget(lspName);
+            fixKind = (ft && ft.fix && ft.fix.kind) || "";
+          }
+        }
         lspTools.push({
           name: lspName,
           status: st.label,
@@ -182,7 +190,8 @@ export async function loadTools() {
           title: l.error || "",
           errorText: l.error || "",
           fixable: fixable,
-          guide: isErr && !fixable ? guideFor(lspName) : null,
+          fixKind: fixKind,
+          guide: !fixable && (isErr || l.reason) ? guideFor(lspName, l.guide) : null,
           aiInstall: isErr,
         });
       });
@@ -198,7 +207,6 @@ export function renderToolsList() {
   var container = document.getElementById("agent-tools-list");
   var countEl = document.getElementById("agent-tools-count");
   if (!container) return;
-  ensureAutoFixToggle();
 
   // 添加 MCP 按钮仅在 MCP tab 显示
   var addBtn = document.getElementById("agent-mcp-add-btn");
@@ -236,7 +244,8 @@ export function renderToolsList() {
     if (tool.fixable) {
       var fixBtn = document.createElement("button");
       fixBtn.className = "tool-fix-btn";
-      fixBtn.textContent = _t("修复");
+      var fixLabel = tool.fixKind === "install_server" ? _t("安装") : _t("修复");
+      fixBtn.textContent = fixLabel;
       var ft = fixTarget(tool.name);
       if (ft && ft.command) fixBtn.title = ft.command + (ft.requires ? "（需要 " + ft.requires + "）" : "");
       fixBtn.addEventListener("click", function(e) {
@@ -245,7 +254,7 @@ export function renderToolsList() {
         fixBtn.textContent = _t("修复中…");
         runLspFix(tool.name).then(function() {
           fixBtn.disabled = false;
-          fixBtn.textContent = _t("修复");
+          fixBtn.textContent = fixLabel;
         });
       });
       item.appendChild(fixBtn);
@@ -279,21 +288,6 @@ export function renderToolsList() {
   });
 }
 
-// 绑定「启动失败自动修复」开关（DOM 随视图重建，用 dataset 标记避免重复绑定）
-function ensureAutoFixToggle() {
-  var row = document.getElementById("agent-lsp-autofix-row");
-  if (!row || row.dataset.bound) return;
-  var box = $input("agent-lsp-autofix");
-  if (!box) return;
-  row.dataset.bound = "1";
-  box.checked = isLspAutoFixEnabled();
-  box.addEventListener("change", function() {
-    setLspAutoFixEnabled(!!box.checked);
-    showInfo(box.checked ? _t("LSP 启动失败时将自动安装修复") : _t("LSP 启动失败时仅提示，不自动安装"));
-  });
-  row.style.display = S.toolsTab === "lsp" ? "flex" : "none";
-}
-
 // 切换工具 tab（Skill / LSP / MCP）并重绘列表；供 tab 点击与外部流程（如保存 MCP 后）调用
 export function activateToolsTab(tab) {
   S.toolsTab = tab;
@@ -303,7 +297,5 @@ export function activateToolsTab(tab) {
       t.classList.toggle("active", t.getAttribute("data-tab") === tab);
     });
   }
-  var autoRow = document.getElementById("agent-lsp-autofix-row");
-  if (autoRow) autoRow.style.display = tab === "lsp" ? "flex" : "none";
   renderToolsList();
 }
