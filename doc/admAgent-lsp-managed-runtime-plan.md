@@ -665,8 +665,9 @@ Windows：`%LOCALAPPDATA%\admAgent\cache\lsp`；macOS/Linux：`$XDG_CACHE_HOME/a
 - `install.version` 可省略，缺省用 manifest 的 pin；显式传值必须落在 manifest 的允许版本内，server 拒绝任意版本。`target` 缺省 `server`；`install_runtime=false` 时不自动下载 runtime，只返回 `fix.kind=install_runtime`。
 - `workspace_id` 可选，仅用于把进度事件路由到该 workspace；省略时只能轮询 `/v1/lsp/jobs/{job_id}`。
 - 同一 server 同时只允许一个安装/修复 job。相同 `(action, version)` 的重复请求幂等复用现有 job（200，`deduplicated: true`）；不同版本/动作返回 `409 Conflict`，带 `existing_job_id` 与 `Retry-After`。server 按 server 名加锁（含跨进程文件锁），job 结束/失败后释放，不排队多个安装。
-- workspace 关闭不取消全局安装 job；job 继续执行，事件丢弃，之后可用 `GET /v1/lsp/jobs/{job_id}` 查询结果。
+- workspace 关闭不取消全局安装 job；job 继续执行，事件丢弃，之后可用 `GET /v1/lsp/jobs/{job_id}` 查询结果。**job ctx 必须脱离 HTTP 请求 ctx**（`startInstallJob`/`startRollbackJob`/`startUninstallJob` 一律 `context.WithCancel(context.Background())`）：202 返回后 `r.Context()` 立即取消，若派生请求 ctx，后台安装会立刻变 `canceled`（表现为「修复失败：canceled」）；取消只走显式 `POST /v1/lsp/jobs/{job_id}/cancel`。
 - job 状态：`queued` → `running` → `succeeded` / `failed` / `canceled`；`failed` 带 `reason`、`fix`、日志尾段（≤32KB，脱敏代理凭据/token）。`GET /v1/lsp/jobs/{job_id}` 返回 `job_id`、`name`、`target`、`action`、`status`、`phase`、`percent`、`message`、`started_at`、`finished_at`、`error`、`reason`、`fix`、`log_tail`。
+- **镜像回退与重试**（`install.go` 的 `npmInstall`/`pipInstall`、`runtime.go` 的 `nodeDistMirrors`）：npm/pip 安装首次尊重用户自己的配置（.npmrc / pip.conf / env），失败（且非 job 被取消）后用公共镜像重试一次（npm `--registry https://registry.npmmirror.com`，pip `-i https://pypi.tuna.tsinghua.edu.cn/simple`），两次都失败返回首次错误（用户配置环境的真实报错，避免镜像域名噪音）；重试 phase=`retry` 写进 job 进度与日志。托管 Node 下载与 SHASUMS256.txt 校验和按 `nodeDistMirrors`（nodejs.org → npmmirror）顺序取包，校验和仍按官方值比对。单测锁定：`TestNpmInstallRetriesWithMirror` / `TestNpmInstallNoRetryAfterCancel` / `TestInstallJobDetachedFromRequestContext`。
 - job 是 server 进程内资源，不跨重启持久化；重启时终止遗留子进程、清理 stale `.tmp`/锁，未完成 job 标失败并回滚 `state.json`，避免写入假成功。
 - 可观测性：每个 job 记录 `job_id`、`name`、`action`、phase 切换、耗时、退出码、resolved command/URL（脱敏）；`options.debug_lsp` 打开时额外输出 PATH 与完整命令。
 - HTTP 状态码：预览 `200`；创建 job `202 Accepted`；重复 job 复用 `200`；`400` 参数/计划非法，`404` workspace/server/job 不存在，`409` job 冲突/计划过期或变化，`422` 平台或许可证不允许安装，`429` 冷却中（带 `Retry-After`），`500` 未预期错误。

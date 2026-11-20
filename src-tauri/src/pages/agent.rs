@@ -2960,19 +2960,20 @@ pub async fn agent_http_request(
         format!("HTTP 请求失败: {}", e)
     })?;
 
-    // 无响应体的状态码直接返回空 JSON 对象
-    // 202 Accepted: /agent 发送消息（fire-and-forget）
+    // 202 Accepted：/agent 发送消息（fire-and-forget，无 body）与 /v1/lsp/fix 等
+    // 异步 job 接口（带 job JSON body）。有 body 就解析返回（前端要靠 job_id 轮询
+    // 进度），空 body / 解析失败回落空对象，兼容 fire-and-forget 调用方。
     // 204 No Content: 删除等操作
     if status == 202 || status == 204 {
         api_debug_log(|| format!("HTTP < {} {} {} ({}ms)", status, method.to_uppercase(), path, started.elapsed().as_millis()));
-        return Ok(serde_json::json!({}));
+        return Ok(decode_success_body(status, &bytes));
     }
 
     // 对于 200 OK，尝试解析 JSON；如果解析失败（空 body），返回空对象
     // 这适用于 /agent/update 等成功但无 body 的接口
     if status == 200 {
         // 成功响应不 dump body（GET /messages 等会打一大坡）；只记非 GET 的一行状态+耗时。
-        let result = serde_json::from_slice(&bytes).unwrap_or(serde_json::json!({}));
+        let result = decode_success_body(status, &bytes);
         if !is_get {
             api_debug_log(|| format!("HTTP < 200 {} {} ({}ms)", method.to_uppercase(), path, started.elapsed().as_millis()));
         }
@@ -2990,6 +2991,48 @@ pub async fn agent_http_request(
         api_log_snippet(&snippet, 300)
     ));
     bail!("HTTP {} {} {}: {}", status, method.to_uppercase(), path, snippet);
+}
+
+/// 成功状态码（200/202）的响应体解码：有 body 就解析返回，空 body / 解析失败
+/// 回落空对象。202 带 body 是 /v1/lsp/fix 等异步 job 接口的前后端契约（前端靠
+/// job_id 轮询进度），历史 bug 曾把 202 一律丢成 `{}`，此处用单测锁定。
+fn decode_success_body(status: u16, bytes: &[u8]) -> serde_json::Value {
+    if (status == 200 || status == 202) && !bytes.is_empty() {
+        if let Ok(v) = serde_json::from_slice(bytes) {
+            return v;
+        }
+    }
+    serde_json::json!({})
+}
+
+#[cfg(test)]
+mod agent_http_tests {
+    use super::decode_success_body;
+
+    #[test]
+    fn accepted_job_body_is_passed_through() {
+        let body = br#"{"job_id":"lspjob_1","status":"queued"}"#;
+        let v = decode_success_body(202, body);
+        assert_eq!(v.get("job_id").and_then(|x| x.as_str()), Some("lspjob_1"));
+    }
+
+    #[test]
+    fn accepted_empty_body_falls_back_to_empty_object() {
+        assert_eq!(decode_success_body(202, b""), serde_json::json!({}));
+        assert_eq!(decode_success_body(204, b""), serde_json::json!({}));
+    }
+
+    #[test]
+    fn accepted_garbage_body_falls_back_to_empty_object() {
+        assert_eq!(decode_success_body(202, b"not json"), serde_json::json!({}));
+    }
+
+    #[test]
+    fn ok_body_is_parsed() {
+        let v = decode_success_body(200, br#"{"servers":[]}"#);
+        assert!(v.get("servers").is_some());
+        assert_eq!(decode_success_body(200, b""), serde_json::json!({}));
+    }
 }
 
 /// 读取 workspace 的跨会话项目记忆（project_memory.json）。

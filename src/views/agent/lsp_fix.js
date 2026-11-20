@@ -7,7 +7,8 @@ import { t as _t } from "../../i18n.js";
 import { S } from "./store.js";
 import { api } from "./api.js";
 import { log } from "./log.js";
-import { showInfo, showWarning, reportError } from "./ui.js";
+import { showInfo, showWarning, showError, reportError } from "./ui.js";
+import { getErrorMessage } from "./error.js";
 import { loadTools, renderToolsList } from "./tools.js";
 import { sendMessageWithText } from "./send.js";
 
@@ -19,6 +20,10 @@ var catalog = null;
 var catalogLoading = null;
 var fixInFlight = {};
 var lastNoticeAt = {};
+
+export function isFixInFlight(name) {
+  return !!fixInFlight[name];
+}
 
 export function ensureFixTargets() {
   if (catalog) return Promise.resolve(catalog);
@@ -120,14 +125,19 @@ export async function runLspFix(name) {
       reportError(new Error("missing job_id"), { prefix: name + _t(" 修复失败：") });
       return false;
     }
-    var job = await waitLspJob(wsId, jobResp.job_id);
+    var job = await waitLspJob(wsId, jobResp.job_id, name);
     if (!job) {
       showWarning(name + _t(" 安装仍在后台进行，完成后会自动刷新"));
       return false;
     }
     if (job.status !== "succeeded") {
+      // 安装失败的原因（npm/pip 输出、网络错误等）是用户排查的唯一线索，
+      // 不能走 reportError——中文界面会把英文细节整段丢弃，只剩"操作失败，任务中断"。
+      // 与 index.html 应用升级失败的处理一致：直接展示原始错误文本，并附 job
+      // 日志尾行（单行拼接，消息区不支持多行渲染）。
       var msg = job.error || job.reason || _t("安装任务失败");
-      reportError(new Error(msg), { prefix: name + _t(" 修复失败：") });
+      var tail = logTailLines(job.log_tail, 3);
+      showError(name + _t(" 修复失败：") + getErrorMessage(msg) + (tail ? "｜" + tail : ""));
       return false;
     }
     await startLspByName(wsId, name);
@@ -162,7 +172,7 @@ async function startLspByName(wsId, name) {
   }
 }
 
-async function waitLspJob(wsId, jobId) {
+async function waitLspJob(wsId, jobId, name) {
   var deadline = Date.now() + JOB_TIMEOUT_MS;
   while (Date.now() < deadline) {
     try {
@@ -170,12 +180,41 @@ async function waitLspJob(wsId, jobId) {
       if (job && (job.status === "succeeded" || job.status === "failed" || job.status === "canceled")) {
         return job;
       }
+      // 轮询期间把 phase 进度刷到「安装/修复」按钮上（列表可能被 SSE 重绘，
+      // 每次按 data-lsp-name 重查，重绘后也能继续更新）。
+      if (job && job.status === "running") {
+        var label = job.message || _t("安装中...");
+        if (job.percent) label += " " + job.percent + "%";
+        updateFixButton(name, label);
+      }
     } catch (e) {
       log.debug("LSP", "读取安装 job 失败: " + e);
     }
     await new Promise(function(resolve) { setTimeout(resolve, JOB_POLL_MS); });
   }
   return null;
+}
+
+function updateFixButton(name, text) {
+  var escaped = window.CSS && window.CSS.escape ? window.CSS.escape(name) : name;
+  var btn = document.querySelector('#agent-tools-list .tool-fix-btn[data-lsp-name="' + escaped + '"]');
+  if (btn && btn instanceof HTMLButtonElement) {
+    btn.textContent = text;
+    btn.disabled = true;
+  }
+}
+
+// 取 job 日志尾的非空行（跳过 "$ npm ..." 命令回显行），单行拼接通用于消息区
+function logTailLines(logTail, max) {
+  if (!logTail) return "";
+  var lines = String(logTail).trim().split("\n");
+  var out = [];
+  for (var i = lines.length - 1; i >= 0 && out.length < max; i--) {
+    var line = lines[i].trim();
+    if (!line || line.charAt(0) === "$") continue;
+    out.unshift(line);
+  }
+  return out.join(" | ");
 }
 
 async function waitLspSettled(wsId, name, timeoutMs) {

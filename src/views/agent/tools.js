@@ -2,7 +2,7 @@
 import { t as _t } from "../../i18n.js";
 import { S, invoke } from "./store.js";
 import { api } from "./api.js";
-import { ensureFixTargets, isLspFixable, fixTarget, guideFor, runLspFix, runAiInstall, onLspStateEvent } from "./lsp_fix.js";
+import { ensureFixTargets, isLspFixable, fixTarget, guideFor, runLspFix, runAiInstall, onLspStateEvent, isFixInFlight } from "./lsp_fix.js";
 
 // ===== 工具列表 =====
 // 分别调用 /skills、/mcp/states、/lsps 三个端点，外加工作区详情获取 skill 状态快照
@@ -252,8 +252,16 @@ export function renderToolsList() {
     if (tool.fixable) {
       var fixBtn = document.createElement("button");
       fixBtn.className = "tool-fix-btn";
+      // data-lsp-name：lsp_fix.js 轮询进度时按名称重查按钮刷新文案（列表重绘后仍可定位）
+      fixBtn.setAttribute("data-lsp-name", tool.name);
       var fixLabel = tool.fixKind === "install_server" ? _t("安装") : _t("修复");
       fixBtn.textContent = fixLabel;
+      // 安装/修复进行中列表被重绘时，新按钮必须直接回到进行中态，
+      // 否则看起来可以再点（fixInFlight 会拦住重复 job，但按钮态不能误导）
+      if (isFixInFlight(tool.name)) {
+        fixBtn.disabled = true;
+        fixBtn.textContent = _t("修复中…");
+      }
       var ft = fixTarget(tool.name);
       if (ft && ft.command) fixBtn.title = ft.command + (ft.requires ? "（需要 " + ft.requires + "）" : "");
       fixBtn.addEventListener("click", function(e) {
