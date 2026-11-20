@@ -270,17 +270,21 @@ export function renderMessages() {
     if (el) delete existingRounds[round.roundKey];
     if (!el) el = buildRoundNode(round);
     applyRoundState(el, round, roundIdx === rounds.length - 1);
-    var decisionRequest = roundHasDecisionRequest(round);
-    // 决策结果轮：只保留本轮最后一张结果卡片。
-    // 本轮仍在跑（尚无结果）时用哨兵值提前隐藏全部过程输出，否则会先闪一段正文/工具过程
-    // 再被卡片替换；跑完仍未产出有效结果时回落为 null，照常展示全部内容便于排查。
-    var decisionCardKey = null;
-    if (decisionRequest) {
-      var lastCardKey = roundLastDecisionResultKey(round);
-      var roundRunning = roundIdx === rounds.length - 1 && !!S.activeRun && S.activeRun.sessionId === S.currentConvId;
-      decisionCardKey = lastCardKey || (roundRunning ? DECISION_PENDING_KEY : null);
+    // 折叠轮只保留标题条：正文按需渲染（展开时由 header 点击 / 大纲跳转触发
+    // renderMessages 补建），历史长会话默认全部折叠时不再逐条建消息 DOM
+    if (!el.classList.contains("msg-round-collapsed")) {
+      var decisionRequest = roundHasDecisionRequest(round);
+      // 决策结果轮：只保留本轮最后一张结果卡片。
+      // 本轮仍在跑（尚无结果）时用哨兵值提前隐藏全部过程输出，否则会先闪一段正文/工具过程
+      // 再被卡片替换；跑完仍未产出有效结果时回落为 null，照常展示全部内容便于排查。
+      var decisionCardKey = null;
+      if (decisionRequest) {
+        var lastCardKey = roundLastDecisionResultKey(round);
+        var roundRunning = roundIdx === rounds.length - 1 && !!S.activeRun && S.activeRun.sessionId === S.currentConvId;
+        decisionCardKey = lastCardKey || (roundRunning ? DECISION_PENDING_KEY : null);
+      }
+      alignMessagesInContainer(getRoundBody(el), round.items, decisionRequest, decisionCardKey);
     }
-    alignMessagesInContainer(getRoundBody(el), round.items, decisionRequest, decisionCardKey);
     var expected = area.children[pos];
     if (expected !== el) area.insertBefore(el, expected || null);
     pos++;
@@ -519,6 +523,12 @@ function buildRoundNode(round) {
     var ref = /** @type {any} */ (div);
     ref._admRoundOpen = willOpen;
     div.classList.toggle("msg-round-collapsed", !willOpen);
+    // 折叠轮的正文按需渲染：展开时补建本轮正文（保留当前滚动位置，
+    // 避免被自动钉底拽走；折叠只隐藏、不销毁已渲染内容）
+    if (willOpen) {
+      S.manualScrollMode = true;
+      renderMessages();
+    }
   });
   // 容器内空白区域右键 → 折叠当前轮：仅命中轮容器/body 自身的空白（padding、消息间隙），
   // 右键消息气泡、header 等子元素不触发；已折叠则放行默认菜单

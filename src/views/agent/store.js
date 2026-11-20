@@ -41,6 +41,9 @@ class WorkspaceState {
     this.currentConvId = null;
     this.currentConv = null;
     this.messages = [];
+    // 会话列表分页状态：convsComplete = 列表已全部加载（无「加载更多」可点）。
+    // 默认 true：未走分页加载路径（新建会话 / 本地过滤）时视为已加载完
+    this.convsComplete = true;
     this.isSending = false;
     this.activeRun = null;
     this.queuedRun = null;
@@ -91,6 +94,7 @@ class WorkspaceState {
       currentConvId: this.currentConvId,
       currentConv: this.currentConv ? _frozenObj(this.currentConv) : null,
       messages: _frozen(this.messages),
+      convsComplete: this.convsComplete,
       isSending: this.isSending,
       // 运行引用字段：浅拷贝隔离（不可冻结，见文件头注释）
       activeRun: this.activeRun ? Object.assign({}, this.activeRun) : null,
@@ -111,6 +115,7 @@ class WorkspaceState {
     this.currentConvId = snap.currentConvId || null;
     this.currentConv = snap.currentConv ? Object.assign({}, snap.currentConv) : null;
     this.messages = snap.messages ? snap.messages.slice() : [];
+    this.convsComplete = snap.convsComplete !== false;
     this.isSending = snap.isSending || false;
     this.activeRun = snap.activeRun ? Object.assign({}, snap.activeRun) : null;
     this.queuedRun = snap.queuedRun ? Object.assign({}, snap.queuedRun) : null;
@@ -171,6 +176,7 @@ class Store {
     S.currentConvId = ws.currentConvId;
     S.currentConv = ws.currentConv ? _frozenObj(ws.currentConv) : null;
     S.messages = _frozen(ws.messages);
+    S.convsComplete = ws.convsComplete;
     S.isSending = ws.isSending;
     // 运行引用字段：保持内部引用共享（collectRunStats 原地累计、ui.js === 同一性比较）
     S.activeRun = ws.activeRun;
@@ -222,6 +228,35 @@ class Store {
     var ws = this.workspaces.get(wsId);
     if (!ws) return;
     ws.conversations = list;
+    this.workspacesObj[wsId] = ws.snapshot();
+    if (wsId === this.activeWsId) this.bindToS();
+  }
+
+  // 分页加载首页：替换列表并记录是否已到底（complete = 返回数 < 页大小）
+  setConversationsPage(wsId, list, complete) {
+    var ws = this.workspaces.get(wsId);
+    if (!ws) return;
+    ws.conversations = list;
+    ws.convsComplete = !!complete;
+    this.workspacesObj[wsId] = ws.snapshot();
+    if (wsId === this.activeWsId) this.bindToS();
+  }
+
+  // 分页加载下一页：按 id 去重后追加到列表尾部。
+  // 本页无新增（旧版服务端忽略 limit/offset，或数据漂移导致整页重复）时视为
+  // 无法继续前进，强制标记已到底，避免调用方按「返回数 < 页大小」误判后反复重发
+  appendConversations(wsId, list, complete) {
+    var ws = this.workspaces.get(wsId);
+    if (!ws) return;
+    var seen = {};
+    ws.conversations.forEach(function(c) { seen[c.id] = true; });
+    var merged = ws.conversations.slice();
+    (list || []).forEach(function(c) {
+      if (c && c.id && !seen[c.id]) { merged.push(c); seen[c.id] = true; }
+    });
+    if ((list || []).length > 0 && merged.length === ws.conversations.length) complete = true;
+    ws.conversations = merged;
+    ws.convsComplete = !!complete;
     this.workspacesObj[wsId] = ws.snapshot();
     if (wsId === this.activeWsId) this.bindToS();
   }
@@ -619,6 +654,8 @@ export const S = {
   currentConvId: null,
   currentConv: null,
   messages: Object.freeze([]),
+  // 会话列表分页状态（bindToS 同步；true = 已到底，无加载入口）
+  convsComplete: true,
   isSending: false,
   activeRun: null,
   queuedRun: null,

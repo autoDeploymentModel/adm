@@ -619,6 +619,15 @@ GET /v1/workspaces/{id}/events?client_id={client_id}
 GET /v1/workspaces/{id}/sessions
 ```
 
+**查询参数**（分页，可选）：
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `limit` | int | 页大小；缺省 / 0 返回全部会话 |
+| `offset` | int | 页偏移（按 `updated_at DESC`）；仅在 `limit` > 0 时生效 |
+
+分页时按 `updated_at DESC, rowid DESC` 排序返回一页；返回数小于 `limit` 即已到底。不带参数时行为与旧版一致（全量，`updated_at DESC`）。
+
 **响应** `200 OK`：`Session[]`
 
 ```json
@@ -745,6 +754,20 @@ GET /v1/workspaces/{id}/sessions/{sid}/history
 ```
 GET /v1/workspaces/{id}/sessions/{sid}/messages
 ```
+
+**查询参数**（分页，可选）：
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `limit` | int | 页大小；缺省 / 0 返回全部消息（旧行为） |
+| `before` | string | 消息 ID 游标：仅返回严格早于该消息（插入序）的最多 `limit` 条 |
+
+分页语义（长会话按需加载）：
+
+- `?limit=N`（无 `before`）：返回最近 `N` 条，升序；
+- `?limit=N&before={msgId}`：返回早于游标消息的最多 `N` 条，升序；返回数小于 `limit` 即已到底；
+- 游标消息不存在（如被撤销删除）时退化为「最近 N 条」，可能与已持有消息重叠，调用方按 id 去重；
+- 不带参数：全量升序（与旧版一致，TUI / SDK 不受影响）。
 
 **响应** `200 OK`：`Message[]`
 

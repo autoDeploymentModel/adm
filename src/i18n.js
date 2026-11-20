@@ -368,6 +368,7 @@ const EN = {
   "会话列表": "Sessions",
   "暂无会话": "No sessions",
   "加载更多": "Load more",
+  "加载更多会话…": "Load more sessions…",
   "自动续跑": "Auto Continue",
   "推理强度": "Reasoning Effort",
   "选择模型": "Select Model",

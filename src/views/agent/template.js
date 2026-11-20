@@ -154,6 +154,17 @@ export const template = `
     gap: 6px;
   }
 
+  /* 会话列表分页哨兵：滚动到底 / 点击补拉下一页 */
+  .conv-load-more {
+    padding: 10px 12px;
+    text-align: center;
+    font-size: 12px;
+    color: var(--c-text-3);
+    cursor: pointer;
+    border-bottom: 1px solid var(--c-raise-2);
+  }
+  .conv-load-more:hover { color: var(--c-accent); background: var(--c-raise); }
+
   /* 会话项悬停操作按钮 */
   .conv-item-actions {
     display: none;

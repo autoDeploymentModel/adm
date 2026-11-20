@@ -5,7 +5,7 @@ import { api } from "./api.js";
 import { getErrorMessage, classifyError, friendlyError, ERROR_STEP_CAP, ERROR_CANCEL } from "./error.js";
 import { updateSendButton, updateStatusBar, startSendSafetyTimer, clearSendSafetyTimer, showError, showWarning, showInfo, showNotice, reportError, updateContextUsage } from "./ui.js";
 import { renderMessages, renderTodos, scheduleRenderMessages } from "./render.js";
-import { loadConversations, refreshMessages, renderConversationList, selectConversation, syncWxFollowSession } from "./session.js";
+import { loadConversations, refreshMessages, refreshConversationMeta, renderConversationList, selectConversation, syncWxFollowSession } from "./session.js";
 import { handlePermissionRequest, resetPermissionState } from "./permission.js";
 import { loadTools } from "./tools.js";
 import { onLspStateEvent } from "./lsp_fix.js";
@@ -128,7 +128,8 @@ function scheduleRunCompleteFallbackCheck(wsId, sessionId, runId) {
     updateSendButton();
     // 其它会话可能仍在并行运行，只有全部结束才切回就绪
     if (!S.isSending) updateStatusBar("ready", null, S.contextUsage.used);
-    loadConversations();
+    // 定向刷新该会话元数据（token/消息数/时间），不再整表重拉
+    refreshConversationMeta(sessionId);
     if (S.currentConvId === sessionId) verifyDecisionRun(sessionId, fallbackDecisionMode);
     else refreshMessages();
     refreshAgentInfo();
@@ -457,7 +458,8 @@ function onRunCompleteSSEEvent(ev, ctx) {
     console.log("[agent] 其它会话运行完成，仅刷新列表: session=" + (sid || "").slice(0, 8));
     onPdfBatchRunComplete(sid, classifyRunComplete(actualData, false).kind, actualData.run_id || "", false);
     renderConversationList();
-    loadConversations();
+    // 定向刷新该会话元数据（token/消息数/时间），不再整表重拉
+    refreshConversationMeta(sid);
     updateSendButton();
     // 本工作区已无任何运行在飞时才切回就绪
     if (!S.isSending) {
@@ -527,8 +529,9 @@ function onRunCompleteSSEEvent(ev, ctx) {
     else todosNoticeEl = showNotice(todosMsg, "warn", true);
   }
   maybeReloadPendingModel();
-  // 运行完成后刷新会话列表和消息
-  loadConversations();
+  // 运行完成后定向刷新该会话元数据（token/消息数/时间），不再整表重拉；
+  // 消息对账走 verifyDecisionRun / refreshMessages（整表重拉，轮正文懒渲染）
+  refreshConversationMeta(sid || (S.currentConvId || ""));
   if (S.currentConvId) {
     var completedStats = ctx.prevRunStats;
     var completedDecisionSession = sid || (completedStats && completedStats.sessionId) || "";

@@ -18,6 +18,12 @@ var autoCreateStrikes = 0;
 // 一键清除是否进行中：期间禁用「清除全部」按钮，防重复点击后对已删会话再次 DELETE
 var clearAllInFlight = false;
 
+// 会话列表分页大小：首次只拉一页，滚动到底部时增量加载，避免多会话工作区下
+// 全量拉取 + 全量渲染越来越慢。消息列表不分页：一次全量加载、按轮懒渲染正文
+var CONV_PAGE_SIZE = 100;
+// 会话列表「加载更多」在飞标记
+var loadMoreConvsInFlight = false;
+
 // 同步当前会话 ID 给微信 Bridge（跟随模式下微信消息以此为目标会话）；fire-and-forget
 export function syncWxFollowSession() {
   try {
@@ -33,12 +39,12 @@ export async function loadConversations(restoreCurrent) {
     return;
   }
 
-  // GET /v1/workspaces/{id}/sessions → 返回 Session[] (直接数组)
+  // GET /v1/workspaces/{id}/sessions?limit=N → 返回 Session[] (直接数组，取最近一页)
   // 瞬时失败（如重新挂载时服务端正忙）重试 2 次；失败时保留旧列表不清空，并明确报错
   var resp = null, lastErr = null;
   for (var attempt = 1; attempt <= 3; attempt++) {
     try {
-      resp = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions");
+      resp = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions?limit=" + CONV_PAGE_SIZE);
       lastErr = null;
       break;
     } catch (e) {
@@ -58,20 +64,20 @@ export async function loadConversations(restoreCurrent) {
     console.error("[agent] 会话列表响应格式异常:", JSON.stringify(resp).substring(0, 200));
     list = [];
   }
-  store.setConversations(S.serverInfo.workspace_id, list);
+  // 返回数 < 页大小 → 已到底；恰好等于页大小时可能还有更多，滚动到底再补拉
+  store.setConversationsPage(S.serverInfo.workspace_id, list, list.length < CONV_PAGE_SIZE);
   renderConversationList();
   console.log("[agent] 会话列表加载完成，共", S.conversations.length, "个, currentConvId:", S.currentConvId, "restore:", !!restoreCurrent);
 
   // restoreCurrent：重新挂载后 currentConvId 是上次残留的模块级状态，DOM 已被重置，
-  // 必须重新 selectConversation 才能渲染聊天区；若该会话已被删除则清空回退到默认逻辑
+  // 必须重新 selectConversation 才能渲染聊天区。列表只加载了首页，不能在本地
+  // 列表上判存在性（排在第一页之外的会话会被误判为已删除）——直接选中即可，
+  // 会话真被删除时 selectConversation 的 404 分支会清理并回退到默认逻辑
   if (restoreCurrent && S.currentConvId) {
-    var stillExists = S.conversations.some(function(c) { return c.id === S.currentConvId; });
-    if (stillExists) {
-      await selectConversation(S.currentConvId);
-      return;
-    }
-    console.warn("[agent] 残留的 currentConvId 已不存在，回退默认选择:", S.currentConvId);
-    store.setCurrentConvId(S.serverInfo.workspace_id, null);
+    await selectConversation(S.currentConvId);
+    // 会话已被删除且工作区没有其它会话：保持旧行为，自动建一个可用会话
+    if (!S.currentConvId && S.conversations.length === 0) await newConversation();
+    return;
   }
 
   // 自动选中或创建会话：确保 currentConvId 始终有效，否则发送按钮无反应
@@ -95,6 +101,52 @@ export async function loadConversations(restoreCurrent) {
     }
   }
 }
+
+// 会话列表分页：滚动到底部 / 点击哨兵时补拉下一页（updated_at DESC 偏移分页，
+// 新建会话插到顶部会使偏移漂移，appendConversations 按 id 去重兜底）
+export async function loadMoreConversations() {
+  if (loadMoreConvsInFlight || !S.serverInfo || !S.serverInfo.workspace_id) return;
+  if (S.convsComplete || (S.conversations || []).length === 0) return;
+  loadMoreConvsInFlight = true;
+  try {
+    var resp = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions?limit=" + CONV_PAGE_SIZE + "&offset=" + S.conversations.length);
+    var list = Array.isArray(resp) ? resp : [];
+    store.appendConversations(S.serverInfo.workspace_id, list, list.length < CONV_PAGE_SIZE);
+    renderConversationList();
+  } catch (e) {
+    console.error("[agent] 加载更多会话失败:", e);
+  } finally {
+    loadMoreConvsInFlight = false;
+  }
+}
+
+// 定向刷新单条会话元数据（run_complete 收尾用）：只 GET 该会话并就地更新
+// 列表项 + 当前会话快照，替代整表重拉，避免长列表下每轮收尾全量拉取
+export async function refreshConversationMeta(convId) {
+  if (!convId || !S.serverInfo || !S.serverInfo.workspace_id) return;
+  var wsId = S.serverInfo.workspace_id;
+  try {
+    var conv = await api("GET", "/v1/workspaces/" + wsId + "/sessions/" + convId);
+    var wsState = store.workspaces.get(wsId);
+    if (!wsState) return;
+    var idx = wsState.conversations.findIndex(function(c) { return c.id === convId; });
+    var newList = wsState.conversations.slice();
+    if (idx === -1) {
+      // 不在已加载列表（后台会话 / 超出首页）：刚更新过，插到顶部
+      newList.unshift(conv);
+    } else {
+      newList[idx] = Object.assign({}, newList[idx], conv);
+      // updated_at 变化后按更新时间重排（刚完成的会话浮到顶部，与服务端排序一致）
+      newList.sort(function(a, b) { return (b.updated_at || 0) - (a.updated_at || 0); });
+    }
+    store.setConversations(wsId, newList);
+    if (wsState.currentConvId === convId) store.setCurrentConv(wsId, conv);
+    if (wsId === S.activeWsId) renderConversationList();
+  } catch (_) {}
+}
+
+// 消息分页已移除：消息一次全量加载，默认只渲染每轮标题（折叠态），
+// 展开某轮时才渲染该轮正文（见 render.js 的轮渲染逻辑）。
 
 export function renderConversationList() {
   const container = document.getElementById("agent-conv-list");
@@ -150,6 +202,14 @@ export function renderConversationList() {
 
     frag.appendChild(item);
   });
+  // 分页未到底时在列表尾部挂「加载更多」哨兵（点击 / 滚动到底自动触发）
+  if (!S.convsComplete) {
+    var more = document.createElement("div");
+    more.className = "conv-load-more";
+    more.id = "agent-conv-load-more";
+    more.textContent = _t("加载更多会话…");
+    frag.appendChild(more);
+  }
   container.innerHTML = "";
   container.appendChild(frag);
 
@@ -166,6 +226,11 @@ function ensureConvListDelegation(container) {
   container.addEventListener("click", function(e) {
     var target = e.target instanceof Element ? e.target : null;
     if (!target) return;
+    // 「加载更多」哨兵：点击补拉下一页
+    if (target.id === "agent-conv-load-more" || (target.closest && target.closest("#agent-conv-load-more"))) {
+      loadMoreConversations();
+      return;
+    }
     var btn = target.closest(".conv-action-btn");
     if (btn) {
       e.stopPropagation();
@@ -181,6 +246,11 @@ function ensureConvListDelegation(container) {
       if (convId) selectConversation(convId);
     }
   });
+  // 滚动接近底部时自动补拉下一页（与点击哨兵共用在飞标记，不会重复请求）
+  container.addEventListener("scroll", function() {
+    if (S.convsComplete) return;
+    if (container.scrollTop + container.clientHeight >= container.scrollHeight - 60) loadMoreConversations();
+  });
 }
 
 // ===== 一键清除所有对话（当前工作区） =====
@@ -190,22 +260,47 @@ function ensureConvListDelegation(container) {
 export function clearAllConversations() {
   if (clearAllInFlight || !S.serverInfo || !S.serverInfo.workspace_id) return;
   var wsId = S.serverInfo.workspace_id;
-  var ids = (S.conversations || [])
-    .map(function(c) { return c.id; })
-    .filter(function(id) { return id !== undefined && id !== null && id !== ""; });
-  if (ids.length === 0) {
+  if ((S.conversations || []).length === 0 && S.convsComplete) {
     showInfo(_t("当前没有可清除的对话"));
     return;
   }
-  showConfirm(_t("确定清除全部对话？共 ") + ids.length + _t(" 个会话，删除后不可恢复"), function() {
-    doClearAllConversations(wsId, ids);
+  showConfirm(_t("确定清除全部对话？删除后不可恢复"), function() {
+    doClearAllConversations(wsId);
   });
 }
 
-async function doClearAllConversations(wsId, ids) {
-  log.debug("SESSION", "clearAllConversations ws=" + wsId.slice(0, 8) + " count=" + ids.length);
+async function doClearAllConversations(wsId) {
+  log.debug("SESSION", "clearAllConversations ws=" + wsId.slice(0, 8));
   clearAllInFlight = true;
   renderConversationList();
+  var wsState = store.workspaces.get(wsId);
+  if (!wsState) { clearAllInFlight = false; return; }
+  // 分页加载下本地列表可能只是前几页：先逐页补拉到底，拿到完整 id 清单再删
+  if (!wsState.convsComplete) {
+    try {
+      var complete = false;
+      while (!complete) {
+        var offset = wsState.conversations.length;
+        var page = await api("GET", "/v1/workspaces/" + wsId + "/sessions?limit=" + CONV_PAGE_SIZE + "&offset=" + offset);
+        if (!Array.isArray(page)) page = [];
+        var prevLen = wsState.conversations.length;
+        if (page.length > 0) store.appendConversations(wsId, page, page.length < CONV_PAGE_SIZE);
+        // 本页无新增（旧版服务端忽略 limit/offset，或并发增删导致分页漂移）：
+        // 无法继续前进，按已加载清单收尾，避免同一请求无限重发
+        complete = page.length < CONV_PAGE_SIZE || wsState.conversations.length === prevLen;
+      }
+    } catch (e) {
+      console.error("[agent] 补拉会话列表失败，按已加载清单清除:", e);
+    }
+  }
+  var ids = (wsState.conversations || [])
+    .map(function(c) { return c.id; })
+    .filter(function(id) { return id !== undefined && id !== null && id !== ""; });
+  if (ids.length === 0) {
+    clearAllInFlight = false;
+    showInfo(_t("当前没有可清除的对话"));
+    return;
+  }
   var deleted = {};
   var failed = 0;
   for (var i = 0; i < ids.length; i++) {
@@ -426,6 +521,11 @@ function scrollToRound(roundKey, sourceItem) {
   }
   target.classList.remove("msg-round-collapsed");
   /** @type {any} */ (target)._admRoundOpen = true;
+  // 折叠轮的正文按需渲染：展开后先把本轮内容补渲染出来（节点按 roundkey 复用，
+  // 渲染期间保持滚动位置），再按后续流程滚动定位
+  S.manualScrollMode = true;
+  renderMessages();
+  target = area.querySelector('.msg-round[data-roundkey="' + cssEscape(roundKey) + '"]') || target;
   // 轮内独立滚动：回到本轮开头，让用户从这轮的提问开始读
   target.scrollTop = 0;
   // 退出手动滚动模式 + 跳到底部命令互斥状态，确保后续 scroll 事件判定为程序触发。
@@ -620,7 +720,8 @@ export async function selectConversation(convId) {
     document.getElementById("agent-conv-title").textContent = S.currentConv.title || _t("会话");
 
     // 单独获取消息列表（合并保留折叠插入的 _fold 等待气泡：消息在服务端尚未
-    // 创建，直接覆盖会被抹掉；setMessagesKeepPending 按内容去重后合并回来）
+    // 创建，直接覆盖会被抹掉；setMessagesKeepPending 按内容去重后合并回来）。
+    // 消息一次全量加载：默认只渲染每轮标题（折叠态），展开某轮时才渲染其正文
     var msgs = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions/" + convId + "/messages");
     if (!Array.isArray(msgs)) msgs = msgs.messages || [];
     store.setMessagesKeepPending(S.serverInfo.workspace_id, msgs, convId);
@@ -704,13 +805,17 @@ export async function newConversation() {
   }
 }
 
-// 刷新当前会话的消息列表（合并保留本地待落库的临时气泡，见 selectConversation 说明）
+// 刷新当前会话的消息列表（合并保留本地待落库的临时气泡，见 selectConversation 说明）。
+// 消息不分页：整表重拉后按轮懒渲染正文，历史轮默认保持折叠态
 export async function refreshMessages() {
   if (!S.currentConvId || !S.serverInfo) return;
+  var convId = S.currentConvId;
   try {
-    var msgs = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions/" + S.currentConvId + "/messages");
+    var msgs = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions/" + convId + "/messages");
+    // 等待期间用户可能已切走：结果属于旧会话，丢弃（否则会覆盖新会话的消息列表）
+    if (S.currentConvId !== convId) return;
     if (!Array.isArray(msgs)) msgs = msgs.messages || [];
-    store.setMessagesKeepPending(S.serverInfo.workspace_id, msgs, S.currentConvId);
+    store.setMessagesKeepPending(S.serverInfo.workspace_id, msgs, convId);
     renderMessages();
   } catch (_) {}
 }
