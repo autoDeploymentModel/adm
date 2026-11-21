@@ -159,3 +159,5 @@
 **待审核决策点的选择**：① PR 流程并入 `git-commit` skill（不新建 skill）；② `<project_structure>` 做成配置项 `options.project_tree_depth`（默认 2），保留回退手段；③ P2 阈值与核心集未定（未做）；④ 本轮直接实施。
 
 **已知风险**：`internal/agent/testdata/TestCoderAgent/**` 是逐字节匹配请求体的 vcr 录制（`charm.land/x/vcr` 的 customMatcher），任何提示词/工具描述改动都会让它在**非 Windows** 上失配——本次改动前后都会（基线本就落后于 bash.md.tpl 的多轮修改），录新 cassette 需要真实密钥，因此按"已有历史偏差"处理，未重新录制。
+
+**后续补记（2026-11）**：HEAD 实测量化已是 sys=3,231 + tool=5,911 = **9,142 tok（25 工具）**，距 9,200 只剩 58 tok。随后落地的一轮策略/准确性修正——`<lsp>` 段门控与工具注册同源（`config.LSPToolsEnabled()`）、bash 描述改成写实的 Windows 内置命令集、日期改 ISO-8601、git 仓库探测改用 `rev-parse --is-inside-work-tree` 且在 Go 里截断 status（不再 `| head`）、`task.md.tpl` 的调用方契约——实测 9,216 tok，故 `prefixBudgetTokens` 按实测调到 **9,400**。闸门语义不变：再塞回一段 1.3k tok 的剧本仍会失败。回归守卫新增 `TestCoderPromptLSPPolicyMatchesToolGating` / `TestCoderPromptDateIsISO` / `TestCoderPromptDetectsGitInSubdirectory`（`internal/agent/prompt_flags_test.go`）与 `TestFirstLines`（`internal/agent/prompt/prompt_test.go`）。
