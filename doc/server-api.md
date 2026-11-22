@@ -804,7 +804,7 @@ GET /v1/workspaces/{id}/agent
   "model": {
     "id": "gpt-4o",
     "name": "GPT-4o",
-    "context_window": 128000,
+    "ctx_size": 128000,
     "supports_images": true,
     "can_reason": false
   },
@@ -814,6 +814,8 @@ GET /v1/workspaces/{id}/agent
   }
 }
 ```
+
+> `model` 是 `config.ModelInfo`，窗口/输出键已统一为 `ctx_size` / `output_tokens` / `provider_max_output_tokens`；`context_window` / `default_max_tokens` / `max_output_tokens` 只在服务端从旧版 admAgent.json 读入该模型时作为**遗留字段**一并出现（内置 `admAgent/adm-models` 等内存构造的模型只有新键）。客户端读取窗口时必须新键优先、旧键兜底（桌面端见 `src/views/agent/utils.js` 的 `modelContextWindow`）。
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -2034,9 +2036,9 @@ interface AgentInfo {
 interface ModelInfo {
   id: string;
   name?: string;
-  context_window?: number;
-  default_max_tokens?: number;
-  max_output_tokens?: number;
+  ctx_size?: number; // 上下文窗口（旧键 context_window 仅遗留配置才出现）
+  output_tokens?: number; // 输出预算（旧键 default_max_tokens）
+  provider_max_output_tokens?: number; // provider 硬上限（旧键 max_output_tokens）
   default_reasoning_effort?: string;
   reasoning_levels?: string[];
   supports_images?: boolean;

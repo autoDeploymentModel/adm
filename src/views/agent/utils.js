@@ -141,6 +141,16 @@ export function formatTokens(n) {
   return String(n || 0);
 }
 
+// 服务端 ModelInfo 的上下文窗口已统一词表为 ctx_size；context_window 只在"从
+// 旧版 admAgent.json 读入、旧键仍在内存里"的模型上出现（内置 adm-models 由
+// displayModelFor 在内存构造，只有 ctx_size）。只认旧键会让内置模型窗口读成 0，
+// 模型下拉不显示窗口、顶部用量沿用上一个模型的 max —— 必须新键优先、旧键兜底。
+/** @param {any} m @returns {number} */
+export function modelContextWindow(m) {
+  if (!m) return 0;
+  return Number(m.ctx_size || m.context_window || 0) || 0;
+}
+
 export function parseContextSize(s) {
   s = s.trim().toUpperCase();
   if (!s) return 0;

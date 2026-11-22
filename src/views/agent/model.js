@@ -2,7 +2,7 @@
 import { t as _t } from "../../i18n.js";
 import { S, invoke, store } from "./store.js";
 import { api } from "./api.js";
-import { escapeHtml, formatTokens, slugifyModelId, getRequestReasoningEffort, normalizeReasoningEffort } from "./utils.js";
+import { escapeHtml, formatTokens, slugifyModelId, getRequestReasoningEffort, normalizeReasoningEffort, modelContextWindow } from "./utils.js";
 import { reportError, updateContextUsage } from "./ui.js";
 import { log } from "./log.js";
 
@@ -23,6 +23,9 @@ export async function reloadAgentConfig() {
 // ===== 模型切换 =====
 // 切换模型：保存设置 → 通知服务端重新加载 → 刷新 agentInfo → 更新 UI
 export async function switchModel(providerKey, displayName, ctxLen) {
+  // 调用方没带窗口时自行反查（设置项即时生效等入口只有 providerKey）：服务端
+  // ModelInfo 用 ctx_size，旧键 context_window 仅历史配置才有，见 modelContextWindow
+  if (!ctxLen) ctxLen = contextWindowForKey(providerKey);
   log.info("MODEL", "switchModel provider=" + providerKey + " name=" + displayName + " ctxLen=" + (ctxLen || "?"));
   S.settings.agent_default_provider = providerKey;
   if (ctxLen && S.serverInfo && S.serverInfo.workspace_id) store.setContextUsage(S.serverInfo.workspace_id, S.contextUsage.used, ctxLen, S.contextUsage.estimated);
@@ -87,8 +90,9 @@ export async function refreshAgentInfo() {
     var info = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent");
     if (seq !== S.agentInfoSeq) return null; // 已有更新的请求，丢弃旧响应
     store.setAgentInfo(S.serverInfo.workspace_id, info);
-    if (info && info.model && info.model.context_window) {
-      store.setContextUsage(S.serverInfo.workspace_id, S.contextUsage.used, info.model.context_window, S.contextUsage.estimated);
+    var ctxLen = modelContextWindow(info && info.model);
+    if (ctxLen) {
+      store.setContextUsage(S.serverInfo.workspace_id, S.contextUsage.used, ctxLen, S.contextUsage.estimated);
       updateContextUsage();
     }
     updateModelBtn();
@@ -170,6 +174,28 @@ export function resolveAgentModel(providerKey) {
   return { provider: providerKey, model: slugifyModelId(p ? p.name : providerKey) };
 }
 
+// 按 providerKey（"local" / "provider/model" / 云端 provider key）反查上下文窗口：
+// 运行中优先用 /providers 已确认快照（含内置 admAgent/adm-models），离线态回退
+// 磁盘 provider 列表（Rust list_cloud_providers 返回的 context_window）。
+export function contextWindowForKey(providerKey) {
+  if (!providerKey) return 0;
+  var slash = providerKey.indexOf("/");
+  var providerId = slash > 0 ? providerKey.slice(0, slash) : providerKey;
+  var modelId = slash > 0 ? providerKey.slice(slash + 1) : "";
+  if (S.serverProvidersLoaded) {
+    var sp = S.serverProviders.find(function(x) { return x && x.id === providerId; });
+    if (sp) {
+      var models = Array.isArray(sp.models) ? sp.models : [];
+      var hit = modelId
+        ? models.find(function(m) { return m && m.id === modelId; })
+        : models[0];
+      if (hit) return modelContextWindow(hit);
+    }
+  }
+  var disk = S.providers.find(function(x) { return x.key === providerId; });
+  return disk && disk.context_window ? Number(disk.context_window) || 0 : 0;
+}
+
 // 内置隐藏模型名单：不再展示在 Agent 模型下拉中
 // 用数组 + indexOf 逐项精确匹配，避免对象属性查找命中 Object 原型链成员（constructor/toString 等）；
 // 任一项参数（model id / name / provider key）命中即隐藏。
@@ -230,7 +256,7 @@ export function updateModelDropdown() {
           key: key,
           providerId: sp.id,
           name: m.name || m.id,
-          context_window: m.context_window || 0,
+          ctx: modelContextWindow(m),
           supports_images: m.supports_images === true,
         });
       });
@@ -244,7 +270,7 @@ export function updateModelDropdown() {
       // 磁盘配置下 model_id 取的是 providers.<key>.models[0]（见 list_cloud_providers），
       // 离线态只能启动该模型，故命中即隐藏整个 provider 行；快照路径按单模型粒度过滤。
       if (isHiddenBuiltinModel(p.key, p.model_id || "", p.name || "")) return;
-      cloudEntries.push({ key: p.key, providerId: p.key, name: p.name, context_window: p.context_window || 0, supports_images: p.supports_images === true });
+      cloudEntries.push({ key: p.key, providerId: p.key, name: p.name, ctx: p.context_window || 0, supports_images: p.supports_images === true });
     });
   }
 
@@ -262,11 +288,11 @@ export function updateModelDropdown() {
     var isSelected = currentProvider === p.key ||
       (currentProvider === p.providerId && providerModelCount[p.providerId] === 1);
     item.className = "model-item" + (isSelected ? " selected" : "");
-    var ctxStr = p.context_window ? formatTokens(p.context_window) : "";
+    var ctxStr = p.ctx ? formatTokens(p.ctx) : "";
     item.innerHTML = '<span class="model-item-name">☁ ' + escapeHtml(p.name) + (p.supports_images ? ' 📷' : '') + '</span>' +
       (ctxStr ? '<span class="model-item-ctx">' + ctxStr + '</span>' : '');
     item.addEventListener("click", function() {
-      switchModel(p.key, p.name, p.context_window || 0);
+      switchModel(p.key, p.name, p.ctx);
     });
     dropdown.appendChild(item);
   });
