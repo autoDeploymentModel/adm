@@ -23,6 +23,7 @@
 - SPA 运行在 Tauri 主窗口内，**直接**调用 `window.__TAURI__.core.invoke` / `.event.listen`，无需 `postMessage` 代理。
 - `index.html` 初始化时把 `window.__adm_invoke` / `window.__adm_listen` 暴露给所有视图模块；视图模块通过这两个全局引用调用 IPC。
 - **共享状态** `window.__adm_state`（systemInfo / runningModelId / modelList 等）跨视图共享，切换不丢。
+- **模型生命周期事件由壳层常驻监听**（`index.html` 的 `initModelLifecycleNotices`）：`model-started` / `model-stopped` / `model-crashed` 在启动时统一订阅，同步 `runningModelId` / `runningModelPort` 并弹全局 toast。视图级监听只在对应页面 `mount` 期间有效——用户在 Agent 页时推理引擎崩溃，若只靠 `model_list.js` 的监听，运行标识会停在旧值，发送前的本地模型校验因此放行，请求直接打到已死端口（2026-11 日志：Vulkan DeviceLost 后两次「继续」均为 connection refused）。`model-crashed` 是 Rust 新增事件（见 [rust-backend.md](rust-backend.md)），视图侧不需要重复处理；`model_list.js` 仍保留自己的监听做卡片渲染。
 - 视图 `mount` 时 `listen()` 保存 unlisten 句柄，`unmount` 时统一调用以防事件重复绑定（泄漏）。
 - **Agent 页面**（`src/views/agent.js`）为独立 ESM 视图，由路由 `#/agent` 加载，不再使用 iframe / PTY 终端。
 - 子页面 → 父窗口导航：使用 `location.hash = "#/list"` 等 hash 路由。

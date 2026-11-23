@@ -465,6 +465,30 @@ pub async fn start_model(
     support_images: bool,
     model_filename: Option<String>,
 ) -> Result<(), AppError> {
+    start_model_inner(app, &state, model_id, params, support_images, model_filename)
+}
+
+/// 拉起 llama-server 的共用实现：Tauri 命令与「运行期崩溃自动重启」都走这里。
+/// 参数用 `&AppState` 而不是 `tauri::State`，监控线程才能在崩溃收尾后直接复用。
+pub fn start_model_inner(
+    app: tauri::AppHandle,
+    state: &AppState,
+    model_id: String,
+    params: LaunchParams,
+    support_images: bool,
+    model_filename: Option<String>,
+) -> Result<(), AppError> {
+    // 启动互斥 + 退出守卫必须放在最前：命令入口与崩溃自动重启会并发进入这里，
+    // 「是否已有模型在运行」的检查与真正 spawn 之间不能留窗口，否则会各拉起一个
+    // llama-server（后写状态者抢不到端口退出时还会把状态清成已停止）。
+    // cleanup_processes 置位 app_exiting 后，延迟中的自动重启也必须放弃拉起。
+    let _start_guard = state
+        .model_start_lock
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if state.app_exiting.load(Ordering::SeqCst) {
+        bail!("应用正在退出，已取消启动模型");
+    }
     {
         let pid_lock = state.running_process.lock().map_err(|e| e.to_string())?;
         if pid_lock.is_some() {
@@ -866,6 +890,17 @@ pub async fn start_model(
     state.set_model_running(true);
     state.bump_model_generation(); // 模型重启代次 +1，供 Agent 页判断是否需要重启 admAgent
 
+    // 记录本次启动参数：进程运行期崩溃（非启动失败）后按同一份参数自动拉起一次。
+    *state
+        .last_model_launch
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some(crate::app_state::ModelLaunchSpec {
+        model_id: model_id.clone(),
+        params: params.clone(),
+        support_images,
+        model_filename: model_filename.clone(),
+    });
+
     // 同步本地模型能力（supports_images 等）给运行中的 admAgent：
     // 服务端只在启动时读 admAgent.json，若它先于模型启动（如微信 Bridge 自动拉起），
     // 不同步会导致视觉模型被误判为不支持图片（图片附件被静默丢弃）
@@ -933,13 +968,21 @@ pub async fn start_model(
     std::thread::spawn(move || {
         use std::io::{BufRead, BufReader};
 
+        // 最后一行日志：运行期崩溃时随 model-crashed 一起上报，
+        // 让前端不必只显示一个退出码（llama.cpp 的致命错误只出现在 stderr）
+        let last_line = Arc::new(std::sync::Mutex::new(String::new()));
+
         // 并发读取 stdout 和 stderr，防止单个流阻塞导致另一个流无法读取
         let stdout_handle = if let Some(stdout) = child.stdout.take() {
             let app_c = app_clone.clone();
             let mid = model_id_clone.clone();
+            let last_line_out = last_line.clone();
             Some(std::thread::spawn(move || {
                 let reader = BufReader::new(stdout);
                 for line in reader.lines().map_while(Result::ok) {
+                    if !line.trim().is_empty() {
+                        *last_line_out.lock().unwrap_or_else(|e| e.into_inner()) = line.clone();
+                    }
                     app_c
                         .emit(
                             "model-log",
@@ -975,9 +1018,13 @@ pub async fn start_model(
         let stderr_handle = if let Some(stderr) = child.stderr.take() {
             let app_c = app_clone.clone();
             let mid = model_id_clone.clone();
+            let last_line_err = last_line.clone();
             Some(std::thread::spawn(move || {
                 let reader = BufReader::new(stderr);
                 for line in reader.lines().map_while(Result::ok) {
+                    if !line.trim().is_empty() {
+                        *last_line_err.lock().unwrap_or_else(|e| e.into_inner()) = line.clone();
+                    }
                     // llama.cpp 的日志走 stderr：就绪判据必须同时看这一路
                     if line.contains("llama server listening")
                         || line.contains("HTTP server listening")
@@ -1030,11 +1077,21 @@ pub async fn start_model(
             }
         }
 
-        // 未就绪就退出 = 启动异常（用户主动停止时不提示）：
+        // 未就绪就退出 = 启动异常；已就绪后退出 = 运行期崩溃（用户主动停止时都不提示）：
         // - 仅启动窗口内的退出算启动失败（跑起来很久后才崩属运行时故障，不套用启动失败文案）
         // - pid 校验：避免「停止后立刻重启」时旧进程的收尾误报到新进程上
         // - 端口复核：本进程退出后 /health 仍 200，说明之前那个 200 来自端口上的
         //   其它进程（本进程多半因端口被占用而绑定失败），不能算作已就绪
+        // model_stop_intent 在此只消费一次：启动失败与运行期崩溃共用同一个判定
+        let stop_intent = app_clone2
+            .state::<AppState>()
+            .model_stop_intent
+            .swap(false, Ordering::SeqCst);
+        let pid_is_current = {
+            let state = app_clone2.state::<AppState>();
+            let cur = *state.running_process.lock().unwrap_or_else(|e| e.into_inner());
+            cur == Some(pid)
+        };
         let child_ready = ready_child_exit.load(Ordering::SeqCst);
         let in_startup_window = !child_ready
             && started_at.elapsed() < std::time::Duration::from_secs(READY_PROBE_SECS);
@@ -1043,22 +1100,16 @@ pub async fn start_model(
         let is_ready = child_ready
             || (ready_probe_exit.load(Ordering::SeqCst) && !still_serving);
         let port_busy = !is_ready && still_serving;
-        let startup_failed = !is_ready
-            && in_startup_window
-            && !app_clone2
-                .state::<AppState>()
-                .model_stop_intent
-                .swap(false, Ordering::SeqCst)
-            && {
-                let state = app_clone2.state::<AppState>();
-                let cur = *state.running_process.lock().unwrap_or_else(|e| e.into_inner());
-                cur == Some(pid)
-            };
+        let startup_failed = !is_ready && in_startup_window && !stop_intent && pid_is_current;
+        // 运行期崩溃：曾经就绪（或已过启动窗口）后退出，且不是用户主动停止。
+        // 「停止后立刻重启」时 state 已指向新进程（pid_is_current=false），老进程的
+        // 收尾不得上报崩溃、也不得清掉新进程的运行状态。
+        let runtime_crash = !startup_failed && !stop_intent && pid_is_current && (is_ready || !in_startup_window);
+        let exit_code = match &exit_status {
+            Ok(status) => status.code(),
+            Err(_) => None,
+        };
         if startup_failed {
-            let exit_code = match &exit_status {
-                Ok(status) => status.code(),
-                Err(_) => None,
-            };
             app_clone2
                 .emit(
                     "model-error",
@@ -1077,8 +1128,9 @@ pub async fn start_model(
                 .ok();
         }
 
-        // 清除 AppState 中的状态，确保进程退出后可以重新启动
-        {
+        // 清除 AppState 中的状态，确保进程退出后可以重新启动。
+        // 只在 state 仍指向本进程时清：否则会把用户刚启动的新进程状态抹掉
+        if pid_is_current {
             let state = app_clone2.state::<AppState>();
             *state.running_process.lock().unwrap_or_else(|e| e.into_inner()) = None;
             *state.running_model_id.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -1086,15 +1138,104 @@ pub async fn start_model(
             state.set_model_running(false);
         }
 
-        app_clone2
-            .emit(
-                "model-stopped",
-                serde_json::json!({ "model_id": &model_id_clone2 }),
-            )
-            .ok();
+        // 只有 state 仍指向本进程时才通知前端「已停止」：用户「停止后立刻重启」时，
+        // 老进程的迟到事件会把新进程的运行态清掉（stop_model 自己会清状态，无需事件）
+        if pid_is_current {
+            app_clone2
+                .emit(
+                    "model-stopped",
+                    serde_json::json!({ "model_id": &model_id_clone2 }),
+                )
+                .ok();
+        }
+
+        if runtime_crash {
+            let reason = last_line.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            let auto_restart = take_crash_restart_slot(&app_clone2);
+            api_debug_log(|| {
+                format!(
+                    "Model: 运行期崩溃 model_id={} exit_code={:?} auto_restart={} reason={}",
+                    model_id_clone2, exit_code, auto_restart, reason
+                )
+            });
+            // 前端壳层监听该事件：同步「本地模型未运行」状态并弹出可操作提示
+            app_clone2
+                .emit(
+                    "model-crashed",
+                    serde_json::json!({
+                        "model_id": &model_id_clone2,
+                        "exit_code": exit_code,
+                        "reason": reason,
+                        "auto_restart": auto_restart,
+                    }),
+                )
+                .ok();
+            if auto_restart {
+                let spec = app_clone2
+                    .state::<AppState>()
+                    .last_model_launch
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
+                if let Some(spec) = spec {
+                    let restart_app = app_clone2.clone();
+                    std::thread::spawn(move || {
+                        // 等旧进程收尾与端口释放，再复用正常启动链路（会重新发 model-started）
+                        std::thread::sleep(std::time::Duration::from_secs(2));
+                        let state = restart_app.state::<AppState>();
+                        let already_running = state
+                            .running_process
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .is_some();
+                        if already_running {
+                            return; // 用户已手动启动，别重复拉起
+                        }
+                        if let Err(e) = start_model_inner(
+                            restart_app.clone(),
+                            &state,
+                            spec.model_id.clone(),
+                            spec.params.clone(),
+                            spec.support_images,
+                            spec.model_filename.clone(),
+                        ) {
+                            eprintln!("[model] 崩溃自动重启失败: {}", e);
+                            restart_app
+                                .emit(
+                                    "model-log",
+                                    serde_json::json!({
+                                        "model_id": &spec.model_id,
+                                        "line": format!("[ERROR] 崩溃自动重启失败: {}", e),
+                                        "source": "stderr",
+                                    }),
+                                )
+                                .ok();
+                        }
+                    });
+                }
+            }
+        }
     });
 
     Ok(())
+}
+
+/// 崩溃自动重启的节流：同一时间窗内只自动拉起一次，避免驱动级故障
+/// （如 Vulkan DeviceLost）造成「崩溃 → 重启 → 再崩溃」的无限循环。
+fn take_crash_restart_slot(app: &tauri::AppHandle) -> bool {
+    const AUTO_RESTART_WINDOW: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+    let state = app.state::<AppState>();
+    let mut last = state
+        .last_auto_restart
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(prev) = *last {
+        if prev.elapsed() < AUTO_RESTART_WINDOW {
+            return false;
+        }
+    }
+    *last = Some(std::time::Instant::now());
+    true
 }
 
 #[tauri::command]

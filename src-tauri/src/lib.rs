@@ -39,6 +39,21 @@ fn show_main_window(app: &tauri::AppHandle) {
 pub(crate) fn cleanup_processes(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
 
+    // 与 start_model_inner 互斥后再置退出标志：否则启动流程可能刚在同一把锁内
+    // 检查完 app_exiting、尚未 spawn/写入 running_process，退出清理就结束了，
+    // 新拉起的 llama-server 会变成孤儿。先拿锁能保证「检查→spawn」要么完整发生在
+    // 退出之前（随后被下面的强杀清理），要么看到标志直接放弃。
+    let _start_guard = state
+        .model_start_lock
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+
+    // 退出守卫：崩溃自动重启线程可能正在 2s 延迟中，必须让它在拉起新引擎前
+    // 看到退出标志，否则 cleanup 之后 spawn 的 llama-server 会成为孤儿进程
+    state
+        .app_exiting
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+
     // 强杀记录中的模型进程（整棵进程树）
     let pid_opt = state.running_process.lock().ok().and_then(|l| *l);
     if let Some(pid) = pid_opt {

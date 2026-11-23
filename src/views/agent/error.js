@@ -22,6 +22,8 @@ export var ERROR_CANCEL = "cancel";          // 已取消
 export var ERROR_STEP_CAP = "step_cap";      // 步数触顶（模型仍在干活但本轮预算耗尽，非故障）
 export var ERROR_THINKING_UNSUPPORTED = "thinking_unsupported"; // 模型不支持关闭思考（需用户切回思考档）
 export var ERROR_DOCKER_INSTALL = "docker_install"; // Docker Desktop 自动安装失败（引导用户手动安装）
+export var ERROR_ENGINE_CRASH = "engine_crash"; // 本地推理引擎因 GPU 故障崩溃（如 Vulkan DeviceLost）
+export var ERROR_ENGINE_DOWN = "engine_down";   // 本地推理引擎未运行（端口连接被拒，多为崩溃后未重启）
 export var ERROR_UNKNOWN = "unknown";        // 其它
 
 /**
@@ -125,6 +127,14 @@ var THINKING_UNSUPPORTED_RE = /thinking_mode_unsupported/i;
 // 「未检测到 Docker，请先点击「下载」自动安装（或手动安装：URL）」——URL 里的
 // docker-desktop 会让 "自动安装.*docker" 误匹配。
 var DOCKER_INSTALL_RE = /docker desktop 安装失败|docker\.dmg|docker\.app|手动安装 docker|自动安装 docker/i;
+// 本地推理引擎运行期故障（llama-server）：
+// - engine_crash：GPU 驱动重置/显存压力导致 Vulkan 设备丢失，llama.cpp 直接把
+//   "decode() failed: vk::Device::waitForFences: ErrorDeviceLost" 带回，
+//   随后进程退出（见 doc/rust-backend.md 的崩溃自动重启）。
+// - engine_down：本地端口连接被拒，说明引擎进程已不在（崩溃后未重启/被手动关闭）。
+// 两者必须早于 NETWORK_RE，否则只会显示笼统的“连接失败”，用户不知道该重启模型。
+var ENGINE_CRASH_RE = /devicelost|device[\s_-]?lost|vk::device|ggml_assert|cuda error/i;
+var ENGINE_DOWN_RE = /(?:127\.0\.0\.1|localhost|\[::1\])[^"]*(?:actively refused|connection refused|connectex|no connection could be made|ECONNREFUSED)/i;
 
 /**
  * 错误分类：优先按 ProviderError.type 精确分类（最稳），未命中再走关键词正则兜底。
@@ -141,6 +151,8 @@ export function classifyError(err) {
   if (STEP_CAP_RE.test(text)) return ERROR_STEP_CAP;
   if (THINKING_UNSUPPORTED_RE.test(text)) return ERROR_THINKING_UNSUPPORTED;
   if (DOCKER_INSTALL_RE.test(text)) return ERROR_DOCKER_INSTALL;
+  if (ENGINE_CRASH_RE.test(text)) return ERROR_ENGINE_CRASH;
+  if (ENGINE_DOWN_RE.test(text)) return ERROR_ENGINE_DOWN;
   if (USAGE_LIMIT_RE.test(text)) return ERROR_USAGE_LIMIT;
   if (RATE_LIMIT_RE.test(text)) return ERROR_RATE_LIMIT;
   if (QUOTA_RE.test(text)) return ERROR_QUOTA;
@@ -167,6 +179,8 @@ var FRIENDLY_ZH = {
   step_cap: "本轮已达步数上限，任务暂停",
   thinking_unsupported: "本模型不支持关闭思考，请切回思考模式",
   docker_install: "Docker 自动安装失败，请手动安装后重试：https://www.docker.com/products/docker-desktop/",
+  engine_crash: "推理引擎因显卡驱动重置退出，任务中断。请重新启动模型；若反复出现请降低上下文大小或只选独立显卡",
+  engine_down: "本地推理引擎未在运行，任务中断。请到「模型列表」重新启动模型后再发送",
   unknown: "操作失败，任务中断",
 };
 var FRIENDLY_EN = {
@@ -181,6 +195,8 @@ var FRIENDLY_EN = {
   step_cap: "Step limit reached. Task paused.",
   thinking_unsupported: "This model cannot disable reasoning. Please switch reasoning back on.",
   docker_install: "Automatic Docker installation failed. Please install Docker Desktop manually and retry: https://www.docker.com/products/docker-desktop/",
+  engine_crash: "The inference engine crashed after a GPU driver reset (DeviceLost). Task interrupted. Restart the model; if it keeps happening, lower the context size or use the discrete GPU only.",
+  engine_down: "The local inference engine is not running. Task interrupted. Restart the model in Model List and send again.",
   unknown: "Operation failed. Task interrupted.",
 };
 

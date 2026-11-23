@@ -1108,6 +1108,65 @@
       _agentBusyTipTimer = setTimeout(function () { tip.style.display = "none"; }, 2500);
     }
 
+    // 壳层全局提示（不依赖任何视图是否已挂载）：模型崩溃等后台事件要在
+    // Agent / 设置页同样可见
+    let _globalNoticeTimer = null;
+    function showGlobalToast(text, ms) {
+      let tip = document.getElementById("global-notice-tip");
+      if (!tip) {
+        tip = document.createElement("div");
+        tip.id = "global-notice-tip";
+        tip.className = "global-toast";
+        document.body.appendChild(tip);
+      }
+      tip.textContent = text;
+      tip.style.display = "block";
+      clearTimeout(_globalNoticeTimer);
+      _globalNoticeTimer = setTimeout(function () { tip.style.display = "none"; }, ms || 5000);
+    }
+
+    // ===== 本地推理引擎全局状态 =====
+    // model-* 事件原先只在模型列表页监听：用户在 Agent 页时推理引擎崩溃，
+    // window.__adm_state.runningModelId 会停留在旧值，下一次发送直接打到已死的
+    // 端口（日志实测：Vulkan DeviceLost 崩溃后两次「继续」都是 connection refused）。
+    // 壳层常驻，这里统一同步状态；崩溃提示也由壳层负责，避免视图切换导致丢失。
+    function initModelLifecycleNotices() {
+      if (!listen || !window.__adm_state) return;
+      const st = window.__adm_state;
+      const on = function (event, handler) {
+        try { listen(event, handler).catch(function () {}); } catch (_) {}
+      };
+      on("model-started", function (ev) {
+        const p = (ev && ev.payload) || {};
+        st.runningModelId = p.model_id || null;
+        st.runningModelPort = typeof p.port === "number" ? p.port : null;
+      });
+      on("model-stopped", function (ev) {
+        const p = (ev && ev.payload) || {};
+        // 只清对应模型：停止后立刻启动同名模型时，旧进程的迟到事件不得清掉新状态
+        if (!st.runningModelId || st.runningModelId === p.model_id) {
+          st.runningModelId = null;
+          st.runningModelPort = null;
+        }
+      });
+      on("model-crashed", function (ev) {
+        const p = (ev && ev.payload) || {};
+        st.runningModelId = null;
+        st.runningModelPort = null;
+        const code = (typeof p.exit_code === "number") ? p.exit_code : null;
+        const reason = typeof p.reason === "string" ? p.reason : "";
+        const gpuLost = /devicelost|device[\s_-]?lost|vk::device/i.test(reason);
+        let text = gpuLost
+          ? t("推理引擎因显卡驱动重置（DeviceLost）退出，常见于上下文过大或显存不足")
+          : t("推理引擎意外退出") + (code !== null ? _i18n.tV("（退出码 {code}）", { code: code }) : "");
+        text += p.auto_restart
+          ? t("。正在自动重启，模型加载完成后可重试本轮")
+          : t("。请到「模型列表」重新启动模型");
+        showGlobalToast(text, 8000);
+      });
+    }
+    initModelLifecycleNotices();
+
     // 暴露给视图模块（如 settings 调用）
     window.ADM = {
       showUpdateDialog,
