@@ -368,7 +368,7 @@ Windows：`%LOCALAPPDATA%\admAgent\cache\lsp`；macOS/Linux：`$XDG_CACHE_HOME/a
 - `priority`/`primary` 控制单语言候选顺序与主备；`guide` 提供不可自动修复时的安装指引（URL/命令/说明）。
 - 所有版本 pin 死，禁止 `@latest`；升级是显式动作。
 - manifest 随 admAgent 二进制发布（`go:embed`），不远程拉取；改 manifest 必须发版，避免未签名清单引入任意安装源。
-- manifest 与 powernap 目录解耦：manifest 决定运行时、入口和安装方式；同名 server 以 manifest 为准，powernap 只补 `filetypes`/`root_markers`/`init_options` 的缺省值。
+- manifest 与 powernap 目录解耦：manifest 决定运行时、入口和安装方式；同名 server 以 manifest 为准——`refreshManaged` 用 `AddServer` **整体替换** powernap 条目，powernap 的 `filetypes`/`root_markers`/`init_options` 默认值不会与 manifest 合并。因此 manifest 的 `rootMarkers` 必须是 powernap 默认的超集（至少不能更窄）：gopls 保留 `.git`，否则工作区根目录没有 `go.mod`/`go.work`、Go 模块在子目录的仓库永远不会自动启动 gopls（`lsp_*` 报 `no LSP client handles file`）。单测 `TestManagedGoplsRootMarkersKeepGit` 守护。
 - 当前 powernap 目录缺少一些常用 web server（`yamlls`、`jsonls`、`cssls`、`html`、`eslint`、`tailwindcss`、`astro`、`typescript-language-server`、`biome`），需要在我们自己的 manifest 中补。
 
 ### 5.3 解析与健康检查

@@ -64,7 +64,7 @@
 
 - **状态与修复 API 化**：LSP 状态、`reason`/`fix`/`guide`、安装、修复、回滚、卸载、job 进度统一由 `admAgent` 提供；桌面端只消费 API/SSE，不执行 `npm -g`/`pip`，不 patch `admAgent.json`。
 - **目录与锁**：默认 `<GlobalCacheDir()>/lsp`，可用 `lsp_install_dir` 覆盖；安装按 `servers/<name>/<version>/` 隔离，`state.json` 由 `.locks/state.lock` 跨进程串行化并原子写；安装命令本身由 `.locks/<name>.lock` 串行化。
-- **manifest**：`internal/lsp/managed/catalog.json` 随二进制嵌入，版本 pin 死；manifest 提供 runtime、package、入口、filetypes、root markers、license/source/guide，与 powernap 同名时 manifest 覆盖入口，powernap 只补缺省字段。
+- **manifest**：`internal/lsp/managed/catalog.json` 随二进制嵌入，版本 pin 死；manifest 提供 runtime、package、入口、filetypes、root markers、license/source/guide，与 powernap 同名时 manifest **整体替换** powernap 条目（`refreshManaged` 走 `AddServer`，不是字段合并）。因此 manifest 的 `rootMarkers` 不得比 powernap 默认更窄：gopls 必须保留 `.git`（powernap 默认 `go.work`/`go.mod`/`.git`），否则工作区根目录没有 `go.mod`/`go.work`（Go 模块在子目录，如本仓库 `admAgent/`）时 gopls 不会自动启动，`lsp_*` 工具报 `no LSP client handles file`；单测 `TestManagedGoplsRootMarkersKeepGit` 守护。
 - **运行时选择**：`options.lsp_runtime_preference=system|managed`（默认 system）；P0 使用系统 Node/Python/Go，托管 runtime 下载在 P2。`options.lsp_managed_runtime=ask|auto|off` 控制下载策略；桌面端自动修复触发已移除，只保留手动修复。
 - **API**：`GET /v1/lsp/catalog`、`POST /v1/lsp/doctor`、`POST /v1/lsp/install|fix|uninstall`、`GET /v1/lsp/jobs[...]`、`POST /v1/lsp/jobs/{id}/cancel`，以及按名称 `POST /v1/workspaces/{id}/lsps/{lsp}/start|restart`；显式 `start|restart` 绕过 `auto_lsp`、root markers 与不可用冷却；`GET /lsps` 的 `LSPClientInfo` 增加 reason/fix/guide/runtime/server_version/managed。
 - **fix 判定**：托管目录有 active 版本、或系统 PATH 已能解析到 manifest 入口（`exec.LookPath` 命中）时不下发 `fix`；`GET /v1/lsp/catalog` 同样跳过已在 PATH 上的服务器。否则系统安装（如 `~/go/bin/gopls`）会被误判为 `missing_package`，在已连接的客户端旁边显示「安装」。
