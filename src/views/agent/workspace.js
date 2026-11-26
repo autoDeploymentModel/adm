@@ -39,12 +39,16 @@ export async function enableAutoCompact() {
 // ===== 工作区切换 =====
 
 // 按当前状态池的会话重算标题栏文本（会话列表比 currentConv 新时以列表为准）。
-// currentConvId 为空时不动 DOM：此时 loadConversations 会自动选中/新建会话并自行写标题，
-// 这里抢先写占位文案会把「新会话」冲掉。
+// currentConvId 为空且本地列表为空时写占位文案（「选择或创建一个会话」）：否则热切换
+// 到没有当前会话的工作区时，标题栏会残留上一个工作区的会话名；列表非空则不动 DOM——
+// 自动打开上次会话正在进行，selectConversation 会写真实标题，这里不得抢先覆盖。
 function syncConvTitle() {
-  if (!S.currentConvId) return;
   var titleEl = document.getElementById("agent-conv-title");
   if (!titleEl) return;
+  if (!S.currentConvId) {
+    if ((S.conversations || []).length === 0) titleEl.textContent = _t("选择或创建一个会话");
+    return;
+  }
   var conv = null;
   var list = S.conversations || [];
   for (var i = 0; i < list.length; i++) {
@@ -149,7 +153,7 @@ export async function switchToWorkspace(wsId, wsPath) {
     ]);
 
     // SSE 监听是全局的（后端为每个 workspace 独立转发），不需要重新订阅
-    // 会话列表是首屏主体：等它（内部会自动选中会话并加载消息）
+    // 会话列表是首屏主体：等它（内部会自动打开上次会话并按页加载其消息）
     await loadConversations();
     updateContextUsage();
     updateStatusBar("ready", wsPath || null, 0);

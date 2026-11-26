@@ -958,6 +958,14 @@ Windows：`%LOCALAPPDATA%\admAgent\cache\lsp`；macOS/Linux：`$XDG_CACHE_HOME/a
 3. **安装/修复下沉 Go server**（原第 6 问）：Rust `LSP_FIX_TABLE`/`agent_lsp_fix` 不再扩展，桌面端后续接入 API 时删除本地实现。
 4. **`doc/server-api.md` 的 `state` 整数表述**（原第 10 问）：已修正；`LSPClientInfo` 字段表需补 `error_type`，本次新增 `reason`/`fix` 时一并更新。
 
+### 后续修复（2026-11-26）
+
+1. **LSP client 不再持有触发启动的 ctx**：client 的生命周期长于触发它的一次 tool 调用 / HTTP 请求。此前 `New` 把调用方 ctx 存进 `Client.ctx`，`Restart` 用它派生 close/init 超时——turn 结束后该 ctx 已取消，重启在 4ms 内直接 `context canceled`，并把新拉起的 server 进程留成孤儿。
+   - `Client` 删除 `ctx` 字段，`New` 不再接收 ctx；`Restart` 用独立 10s/`lsp.<name>.timeout` 超时，Initialize 失败或未 ready 时 `Kill()` 刚拉起的进程。
+   - `Manager.startServerLocked` 的 Initialize/WaitForServerReady 改用 `context.WithoutCancel(ctx)`：取消触发方（用户停止、HTTP 断开）不再把 client 打成 `StateError`；`RestartByName`/`StopAll` 用 `closeDetached`（独立 10s）收尾，避免被已取消的请求 ctx 跳过 shutdown 而留下进程。
+   - `Restart` 成功后重置 diagnostics 通知 latch（`resumeDiagnosticsNotify`），否则重启后的诊断数不再上报面板。
+   - 回归测试：`internal/lsp/restart_test.go`（用测试二进制自身做假 stdio LSP server，验证 Initialize→Restart 后仍 `StateReady`）。
+
 ### 待确认（附建议）
 
 1. **是否接受“共享运行时 + 按 server 安装 + 可选离线 pack”，而不是全量单二进制？**

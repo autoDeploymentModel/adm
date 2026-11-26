@@ -3,7 +3,7 @@ import { t as _t } from "../../i18n.js";
 import { S, store } from "./store.js";
 import { renderMarkdown, formatTime, splitSystemInfo, isFullyAtBottom } from "./utils.js";
 import { updateScrollBottomBtn, reportError, updateSessionStats } from "./ui.js";
-import { scheduleMessageOutline, loadEarlierMessages, isMessagesComplete } from "./session.js";
+import { scheduleMessageOutline } from "./session.js";
 import { undoToRound, syncRoundUndoState } from "./undo.js";
 import { log } from "./log.js";
 import { appendDecisionCard, appendDecisionResult, buildDecisionRawBlock, decisionFromPart, decisionReplayFromText, getActiveDecisionMode, hasDecisionSyntax, parseDecisionResult, stripDecisionControlText, stripDecisionRequestText } from "./decision_mode.js";
@@ -31,33 +31,6 @@ export function scheduleRenderMessages() {
       reportError(e, { prefix: _t("消息渲染失败: ") });
     }
   });
-}
-
-// ===== 消息分页哨兵（加载更早的消息）=====
-// 切换会话只拉最近一页消息（session.js 的 MSG_PAGE_SIZE），历史未拉全时在消息区
-// 顶部固定一条入口；点击后按 before 游标补拉一页（session.js loadEarlierMessages）。
-// 该节点由本函数独占管理：renderMessages 的清理循环会跳过它，轮节点都在它之后。
-function syncLoadEarlierControl(area) {
-  var existing = document.getElementById("agent-load-earlier");
-  if (S.messages.length === 0 || isMessagesComplete()) {
-    if (existing) existing.remove();
-    return;
-  }
-  if (existing) return;
-  var btn = document.createElement("div");
-  btn.id = "agent-load-earlier";
-  btn.className = "msg-load-earlier";
-  btn.textContent = _t("加载更早的消息");
-  btn.addEventListener("click", function() {
-    if (btn.dataset.loading === "1") return;
-    btn.dataset.loading = "1";
-    btn.textContent = _t("加载中...");
-    loadEarlierMessages().finally(function() {
-      btn.dataset.loading = "";
-      btn.textContent = _t("加载更早的消息");
-    });
-  });
-  area.insertBefore(btn, area.firstChild);
 }
 
 // ===== 拖拽选择保护 =====
@@ -250,7 +223,6 @@ export function renderMessages() {
       area.innerHTML = '<div class="empty-state"><span class="empty-state-icon">🤖</span><span class="empty-state-text">' + _t("开始一个新的对话") + '</span></div>';
       if (indicator) area.appendChild(indicator); // innerHTML 会清掉旧指示器，运行中需保留
     }
-    syncLoadEarlierControl(area);
     syncWorkingIndicator(area, null);
     updateScrollBottomBtn();
     // 消息清空（如切到新会话尚未加载）→ 调度刷新右侧大纲为空态
@@ -277,8 +249,6 @@ export function renderMessages() {
   var existingRounds = {};
   Array.prototype.slice.call(area.children).forEach(function(c) {
     if (c.id === "agent-working-indicator") return;
-    // 分页哨兵（加载更早的消息）由 syncLoadEarlierControl 管理
-    if (c.id === "agent-load-earlier") return;
     // 错误/警告/信息提示节点保留（否则 run_complete 后的 refreshMessages 会把刚显示的提示立即清掉）；
     // 本地常驻错误气泡（data-adm-local-error）除外——它随消息列表管理，不在列表时即移除
     if (c.classList && (c.classList.contains("warn") || c.classList.contains("info") ||
@@ -293,13 +263,8 @@ export function renderMessages() {
     c.remove();
   });
 
-  // 「加载更早的消息」哨兵固定在消息区顶部（分页未到底时显示）
-  syncLoadEarlierControl(area);
-
   // 轮级对齐 + 轮内消息级对齐
   var pos = 0;
-  // 顶部哨兵占据 children[0]，轮节点从它之后开始对齐
-  var roundBase = (area.firstElementChild && area.firstElementChild.id === "agent-load-earlier") ? 1 : 0;
   rounds.forEach(function(round, roundIdx) {
     var el = existingRounds[round.roundKey];
     if (el) delete existingRounds[round.roundKey];
@@ -320,7 +285,7 @@ export function renderMessages() {
       }
       alignMessagesInContainer(getRoundBody(el), round.items, decisionRequest, decisionCardKey);
     }
-    var expected = area.children[pos + roundBase];
+    var expected = area.children[pos];
     if (expected !== el) area.insertBefore(el, expected || null);
     pos++;
   });

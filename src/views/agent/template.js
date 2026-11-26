@@ -165,6 +165,26 @@ export const template = `
   }
   .conv-load-more:hover { color: var(--c-accent); background: var(--c-raise); }
 
+  /* 会话列表加载中占位（切换工作目录后列表尚未返回 / 工作区初始化中）：
+     必须与「暂无会话」区分，否则用户会把加载中误读成该目录没有对话 */
+  .conv-list-loading {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 12px 14px;
+    color: var(--c-text-3);
+    font-size: 12px;
+  }
+  .conv-list-spinner {
+    width: 10px;
+    height: 10px;
+    border: 2px solid var(--c-border);
+    border-top-color: var(--c-accent);
+    border-radius: 50%;
+    animation: agent-spin 0.8s linear infinite;
+    flex-shrink: 0;
+  }
+
   /* 会话项悬停操作按钮 */
   .conv-item-actions {
     display: none;
@@ -508,22 +528,6 @@ export const template = `
   /* 首轮无外上边距、末轮无外下边距，与 .msg-area 的 padding 形成紧凑视觉 */
   .msg-area > .msg-round:first-child { margin-top: 0; }
   .msg-area > .msg-round:last-child { margin-bottom: 0; }
-
-  /* 消息分页哨兵：历史未拉全时固定在消息区顶部，点击补拉更早的一页 */
-  .msg-load-earlier {
-    align-self: center;
-    margin: 6px auto 2px;
-    padding: 4px 12px;
-    font-size: 12px;
-    color: var(--c-accent, #3b82f6);
-    border: 1px dashed var(--c-border);
-    border-radius: 12px;
-    cursor: pointer;
-    user-select: none;
-    flex-shrink: 0;
-  }
-  .msg-load-earlier:hover { background: var(--c-bg-hover, rgba(255,255,255,0.08)); }
-  .msg-load-earlier[data-loading="1"] { color: var(--c-text-4); cursor: default; }
 
   /* 轮标题条：折叠后仅显示此条；点击切换展开/折叠 */
   .msg-round-header {
