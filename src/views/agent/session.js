@@ -19,10 +19,33 @@ var autoCreateStrikes = 0;
 var clearAllInFlight = false;
 
 // 会话列表分页大小：首次只拉一页，滚动到底部时增量加载，避免多会话工作区下
-// 全量拉取 + 全量渲染越来越慢。消息列表不分页：一次全量加载、按轮懒渲染正文
+// 全量拉取 + 全量渲染越来越慢。消息列表同样分页：切换会话只拉最近一页，
+// 向上滚动点「加载更早的消息」再按 before 游标补拉（服务端支持 limit/before）
 var CONV_PAGE_SIZE = 100;
 // 会话列表「加载更多」在飞标记
 var loadMoreConvsInFlight = false;
+
+// 消息分页大小（切换会话时只取最近 N 条）
+var MSG_PAGE_SIZE = 50;
+// 每个会话是否已加载全部历史：key = wsId + ":" + convId。
+// 值为 false 表示服务端还有更早的消息，消息区顶部显示「加载更早的消息」。
+var msgsCompleteByConv = new Map();
+
+function convMessagesKey(wsId, convId) {
+  return (wsId || "") + ":" + (convId || "");
+}
+
+function setMessagesComplete(wsId, convId, complete) {
+  if (!convId) return;
+  msgsCompleteByConv.set(convMessagesKey(wsId, convId), !!complete);
+}
+
+// 当前会话是否已把历史消息拉全（供 render.js 决定是否显示「加载更早的消息」）
+export function isMessagesComplete() {
+  if (!S.currentConvId) return true;
+  var wsId = S.serverInfo ? S.serverInfo.workspace_id : "";
+  return msgsCompleteByConv.get(convMessagesKey(wsId, S.currentConvId)) !== false;
+}
 
 // 同步当前会话 ID 给微信 Bridge（跟随模式下微信消息以此为目标会话）；fire-and-forget
 export function syncWxFollowSession() {
@@ -314,6 +337,7 @@ async function doClearAllConversations(wsId) {
   }
   clearAllInFlight = false;
   clearDecisionModes(wsId, Object.keys(deleted));
+  Object.keys(deleted).forEach(function(id) { msgsCompleteByConv.delete(convMessagesKey(wsId, id)); });
 
   // 本地状态收尾：列表按实际删除结果过滤；被删的当前会话清空消息；被删会话内
   // 的 run 服务端已取消，本地同步解除发送态（否则界面一直显示运行中）
@@ -654,6 +678,7 @@ function handleConvAction(action, convId) {
         api("DELETE", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions/" + convId)
           .then(function() {
             clearDecisionMode(S.serverInfo.workspace_id, convId);
+            msgsCompleteByConv.delete(convMessagesKey(S.serverInfo.workspace_id, convId));
             if (S.currentConvId === convId) {
               resetPermissionState();
               store.setCurrentConvId(S.serverInfo.workspace_id, null);
@@ -721,10 +746,13 @@ export async function selectConversation(convId) {
 
     // 单独获取消息列表（合并保留折叠插入的 _fold 等待气泡：消息在服务端尚未
     // 创建，直接覆盖会被抹掉；setMessagesKeepPending 按内容去重后合并回来）。
-    // 消息一次全量加载：默认只渲染每轮标题（折叠态），展开某轮时才渲染其正文
-    var msgs = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/sessions/" + convId + "/messages");
+    // 只拉最近一页：长会话切换不再整表传输 + 全量渲染；更早的消息由消息区顶部的
+    // 「加载更早的消息」按 before 游标补拉（loadEarlierMessages）。
+    var wsIdForPage = S.serverInfo.workspace_id;
+    var msgs = await api("GET", "/v1/workspaces/" + wsIdForPage + "/sessions/" + convId + "/messages?limit=" + MSG_PAGE_SIZE);
     if (!Array.isArray(msgs)) msgs = msgs.messages || [];
-    store.setMessagesKeepPending(S.serverInfo.workspace_id, msgs, convId);
+    setMessagesComplete(wsIdForPage, convId, msgs.length < MSG_PAGE_SIZE);
+    store.setMessagesKeepPending(wsIdForPage, msgs, convId);
     renderMessages();
 
     // 更新上下文用量（服务端重启后 context_tokens 不持久化会归 0，回退为本地估算）
@@ -794,6 +822,7 @@ export async function newConversation() {
     syncWxFollowSession();
     store.setMessages(S.serverInfo.workspace_id, []);
     store.setCurrentConv(S.serverInfo.workspace_id, resp);
+    setMessagesComplete(S.serverInfo.workspace_id, resp.id, true);
     store.setContextUsage(S.serverInfo.workspace_id, 0, S.contextUsage.max, false);
     await loadConversations();
     renderMessages();
@@ -806,7 +835,7 @@ export async function newConversation() {
 }
 
 // 刷新当前会话的消息列表（合并保留本地待落库的临时气泡，见 selectConversation 说明）。
-// 消息不分页：整表重拉后按轮懒渲染正文，历史轮默认保持折叠态
+// 这里仍整表重拉：调用方是压缩收尾/断线重连等低频路径，需要完整历史对齐。
 export async function refreshMessages() {
   if (!S.currentConvId || !S.serverInfo) return;
   var convId = S.currentConvId;
@@ -815,9 +844,58 @@ export async function refreshMessages() {
     // 等待期间用户可能已切走：结果属于旧会话，丢弃（否则会覆盖新会话的消息列表）
     if (S.currentConvId !== convId) return;
     if (!Array.isArray(msgs)) msgs = msgs.messages || [];
+    // 整表已对齐，分页状态一并收敛（顶部不再显示「加载更早的消息」）
+    setMessagesComplete(S.serverInfo.workspace_id, convId, true);
     store.setMessagesKeepPending(S.serverInfo.workspace_id, msgs, convId);
     renderMessages();
   } catch (_) {}
+}
+
+// 加载更早的消息：按 before 游标补拉一页，前插到消息列表并保持当前阅读位置。
+// 供消息区顶部的「加载更早的消息」按钮调用（render.js），最多每次 MSG_PAGE_SIZE 条。
+var loadEarlierInFlight = false;
+export async function loadEarlierMessages() {
+  if (loadEarlierInFlight || !S.currentConvId || !S.serverInfo) return;
+  if (isMessagesComplete()) return;
+  var wsId = S.serverInfo.workspace_id;
+  var convId = S.currentConvId;
+  var oldest = (S.messages || []).find(function(m) { return m && m.id; });
+  if (!oldest) return;
+
+  var area = document.getElementById("agent-msg-area");
+  var prevHeight = area ? area.scrollHeight : 0;
+  var prevTop = area ? area.scrollTop : 0;
+
+  loadEarlierInFlight = true;
+  try {
+    var page = await api(
+      "GET",
+      "/v1/workspaces/" + wsId + "/sessions/" + convId + "/messages?limit=" + MSG_PAGE_SIZE + "&before=" + encodeURIComponent(oldest.id)
+    );
+    if (!Array.isArray(page)) page = (page && page.messages) || [];
+    if (S.currentConvId !== convId) return;
+    var added = store.prependMessages(wsId, page);
+    // 返回空页 / 全是已加载过的消息（旧版服务端忽略分页参数）都视为到底，避免反复请求
+    if (added === 0 || page.length < MSG_PAGE_SIZE) {
+      setMessagesComplete(wsId, convId, true);
+    }
+    // 强制手动滚动语义渲染：auto 模式会先滚到底部，把用户正在看的位置甩掉
+    var wasManual = S.manualScrollMode;
+    S.manualScrollMode = true;
+    renderMessages();
+    S.manualScrollMode = wasManual;
+    // 前插内容在视口上方：把新增高度补回 scrollTop，保持用户正在看的位置
+    if (area) {
+      S.programmaticScroll = true;
+      S.lastProgrammaticScroll = Date.now();
+      area.scrollTop = prevTop + (area.scrollHeight - prevHeight);
+      S.programmaticScroll = false;
+    }
+  } catch (e) {
+    reportError(e, { prefix: _t("加载更早的消息失败: ") });
+  } finally {
+    loadEarlierInFlight = false;
+  }
 }
 
 // 本地估算历史消息占用的上下文 token 数。

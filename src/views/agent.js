@@ -157,22 +157,24 @@ async function _doInit(seq) {
       showWarning(_t("Agent 初始化失败，对话可能暂时无法进行（发送时会自动重试）"));
     }
 
-    // 获取 Agent 信息 (当前模型等)
-    try {
-      var info = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent");
-      store.setAgentInfo(S.serverInfo.workspace_id, info);
-      var ctxLen = modelContextWindow(info && info.model);
-      if (ctxLen) {
-        store.setContextUsage(S.serverInfo.workspace_id, S.contextUsage.used, ctxLen, S.contextUsage.estimated);
-      }
-      updateContextUsage();
-    } catch (e) {
-      console.warn("[agent] 获取 agentInfo 失败:", e);
-    }
-
-    // 把本地权限模式（skip 直通）同步到服务端（复用已有工作区时服务端保留的是旧状态，可能与本地不一致）
-    // + 全局默认开启自动压缩（Compact 模式）。两者独立，并行执行
+    // Agent 信息 / 权限模式同步 / 自动压缩彼此独立：并行发出（init 之后才有效），
+    // 不再逐个 await —— 每次挂载省下两轮往返
     await Promise.all([
+      (async function() {
+        try {
+          var info = await api("GET", "/v1/workspaces/" + S.serverInfo.workspace_id + "/agent");
+          store.setAgentInfo(S.serverInfo.workspace_id, info);
+          var ctxLen = modelContextWindow(info && info.model);
+          if (ctxLen) {
+            store.setContextUsage(S.serverInfo.workspace_id, S.contextUsage.used, ctxLen, S.contextUsage.estimated);
+          }
+          updateContextUsage();
+        } catch (e) {
+          console.warn("[agent] 获取 agentInfo 失败:", e);
+        }
+      })(),
+      // 把本地权限模式（skip 直通）同步到服务端（复用已有工作区时服务端保留的是旧状态，可能与本地不一致）
+      // + 全局默认开启自动压缩（Compact 模式）
       syncModeToServer().catch(function(e) { console.warn("[agent] syncModeToServer 失败:", e); }),
       enableAutoCompact().catch(function(e) { console.warn("[agent] enableAutoCompact 失败:", e); }),
     ]);

@@ -352,6 +352,22 @@ class Store {
     }
   }
 
+  // 消息分页：把更早的一页（升序）前插到当前列表，按 id 去重。
+  // 返回实际新增条数——0 表示这一页全是已加载过的消息（旧服务端忽略分页参数时），
+  // 调用方据此把会话标记为「已加载全部」避免反复请求。
+  prependMessages(wsId, list) {
+    var ws = this.workspaces.get(wsId);
+    if (!ws) return 0;
+    var known = {};
+    ws.messages.forEach(function(m) { if (m && m.id) known[m.id] = true; });
+    var fresh = (list || []).filter(function(m) { return m && m.id && !known[m.id]; });
+    if (fresh.length === 0) return 0;
+    ws.messages = fresh.concat(ws.messages);
+    this.workspacesObj[wsId] = ws.snapshot();
+    if (wsId === this.activeWsId) this.bindToS();
+    return fresh.length;
+  }
+
   updateMessage(wsId, msg) {
     var ws = this.workspaces.get(wsId);
     if (!ws) return;

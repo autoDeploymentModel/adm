@@ -1199,7 +1199,21 @@ POST /v1/workspaces/{id}/config/compact
 
 ---
 
-### 5.5 设置 Provider API Key
+### 5.5 从磁盘重载配置
+
+```
+POST /v1/workspaces/{id}/config/reload
+```
+
+无请求体。让该工作区的 `ConfigStore` 重新读盘（全局 `admAgent.json` + 工作区配置），成功后向订阅方推送一次 `config_changed` 事件。
+
+用途：其他工作区通过 `config/set scope:0` 往全局配置写入了 provider/模型时，只有**写入方**的工作区触发了 autoReload；桌面端切回目标工作区时用本端点补齐，**不写文件**。旧做法是回写同一个 `api_key` 借 `config/set` 的副作用强制重载——每次切换都要付一次配置文件写 + 全量解析 + flock，切工作目录卡顿有它一份。
+
+**响应**：`200 OK`（无响应体）
+
+---
+
+### 5.6 设置 Provider API Key
 
 ```
 POST /v1/workspaces/{id}/config/provider-key
@@ -2201,18 +2215,19 @@ GUI 准备退出或升级：
 | 46 | POST | `/v1/workspaces/{id}/config/remove` | 移除配置字段 |
 | 47 | POST | `/v1/workspaces/{id}/config/model` | 设置模型 |
 | 48 | POST | `/v1/workspaces/{id}/config/compact` | 设置 Compact 模式 |
-| 49 | POST | `/v1/workspaces/{id}/config/provider-key` | 设置 API Key |
-| 50 | GET | `/v1/workspaces/{id}/project/needs-init` | 检查项目初始化 |
-| 51 | POST | `/v1/workspaces/{id}/project/init` | 标记已初始化 |
-| 52 | GET | `/v1/workspaces/{id}/project/init-prompt` | 初始化提示 |
-| 53 | GET | `/v1/workspaces/{id}/skills` | Skills 列表 |
-| 54 | POST | `/v1/workspaces/{id}/skills/read` | 读取 Skill |
-| 55 | POST | `/v1/workspaces/{id}/mcp/refresh-tools` | 刷新 MCP 工具 |
-| 56 | POST | `/v1/workspaces/{id}/mcp/read-resource` | 读取 MCP 资源 |
-| 57 | POST | `/v1/workspaces/{id}/mcp/get-prompt` | 获取 MCP Prompt |
-| 58 | GET | `/v1/workspaces/{id}/mcp/states` | MCP 状态 |
-| 59 | POST | `/v1/workspaces/{id}/mcp/refresh-prompts` | 刷新 MCP Prompts |
-| 60 | POST | `/v1/workspaces/{id}/mcp/refresh-resources` | 刷新 MCP Resources |
-| 61 | POST | `/v1/workspaces/{id}/mcp/docker/enable` | 启用 Docker MCP |
-| 62 | POST | `/v1/workspaces/{id}/mcp/docker/disable` | 禁用 Docker MCP |
-| 63 | GET | `/v1/docs/` | Swagger 文档 |
+| 49 | POST | `/v1/workspaces/{id}/config/reload` | 从磁盘重载配置（不写文件） |
+| 50 | POST | `/v1/workspaces/{id}/config/provider-key` | 设置 API Key |
+| 51 | GET | `/v1/workspaces/{id}/project/needs-init` | 检查项目初始化 |
+| 52 | POST | `/v1/workspaces/{id}/project/init` | 标记已初始化 |
+| 53 | GET | `/v1/workspaces/{id}/project/init-prompt` | 初始化提示 |
+| 54 | GET | `/v1/workspaces/{id}/skills` | Skills 列表 |
+| 55 | POST | `/v1/workspaces/{id}/skills/read` | 读取 Skill |
+| 56 | POST | `/v1/workspaces/{id}/mcp/refresh-tools` | 刷新 MCP 工具 |
+| 57 | POST | `/v1/workspaces/{id}/mcp/read-resource` | 读取 MCP 资源 |
+| 58 | POST | `/v1/workspaces/{id}/mcp/get-prompt` | 获取 MCP Prompt |
+| 59 | GET | `/v1/workspaces/{id}/mcp/states` | MCP 状态 |
+| 60 | POST | `/v1/workspaces/{id}/mcp/refresh-prompts` | 刷新 MCP Prompts |
+| 61 | POST | `/v1/workspaces/{id}/mcp/refresh-resources` | 刷新 MCP Resources |
+| 62 | POST | `/v1/workspaces/{id}/mcp/docker/enable` | 启用 Docker MCP |
+| 63 | POST | `/v1/workspaces/{id}/mcp/docker/disable` | 禁用 Docker MCP |
+| 64 | GET | `/v1/docs/` | Swagger 文档 |

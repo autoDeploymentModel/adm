@@ -2,7 +2,7 @@
 import { t as _t } from "../../i18n.js";
 import { S, invoke, store } from "./store.js";
 import { api } from "./api.js";
-import { updateContextUsage, exitManualScrollMode, clearErrorNotices, reportError, clearSendSafetyTimer, updateStatusBar, updateSendButton, showConfirm } from "./ui.js";
+import { updateContextUsage, exitManualScrollMode, clearErrorNotices, reportError, clearSendSafetyTimer, updateStatusBar, updateSendButton, showConfirm, showInitProgress, hideInitProgress } from "./ui.js";
 import { log } from "./log.js";
 import { modelContextWindow } from "./utils.js";
 import { renderMessages, renderTodos } from "./render.js";
@@ -16,13 +16,20 @@ import { updateDecisionModeUI } from "./decision_mode.js";
 // ===== 会话上下文压缩 =====
 // 全局默认开启自动压缩（Compact 模式）：上下文接近上限时服务端自动生成摘要压缩，
 // 无需用户手动干预（scope=0 全局配置，幂等，每次初始化确保开启，不提供设置开关）
+// 已成功开启的 workspace：服务端侧 SetCompactMode 对「同值」也会跳过写盘，这里再挡一层，
+// 避免每次切回都发一次无意义的请求。
+var autoCompactEnabledFor = new Set();
+
 export async function enableAutoCompact() {
   if (!S.serverInfo || !S.serverInfo.workspace_id) return;
+  var wsId = S.serverInfo.workspace_id;
+  if (autoCompactEnabledFor.has(wsId)) return;
   try {
-    await api("POST", "/v1/workspaces/" + S.serverInfo.workspace_id + "/config/compact", {
+    await api("POST", "/v1/workspaces/" + wsId + "/config/compact", {
       scope: 0,
       enabled: true
     });
+    autoCompactEnabledFor.add(wsId);
     console.log("[agent] 自动压缩（Compact 模式）已开启");
   } catch (e) {
     console.warn("[agent] 开启自动压缩失败:", e);
@@ -49,23 +56,38 @@ function syncConvTitle() {
 
 // 多 workspace 架构：切换 tab 时保存当前 workspace 状态到状态池，
 // 恢复目标 workspace 状态。旧 workspace 的 agent run 在后台继续执行。
+//
+// 性能约定（切换卡顿的根治点）：
+// - 本地状态与可见文案先落地：点击后立即看到新工作目录名与已缓存会话，
+//   不再等所有网络请求跑完才更新选择器（原实现最后一步才 updateWorkspaceSelector）；
+// - 只有「必须先完成」的请求串行等待（首访 /agent/init，随后 /sessions），
+//   其余并发或 fire-and-forget（原来首访是 8+ 次串行往返 + 3 次配置文件写入）；
+// - 不再用 config/set 触发配置重载：改调只读的 /config/reload（见 refreshProvidersOnSwitch）。
 export async function switchToWorkspace(wsId, wsPath) {
   if (!wsId) return;
+  var switchStart = performance.now();
   log.debug("WS", "workspace.switchTo: " + wsId + " path=" + wsPath);
 
   // 在 setActive 之前判断是否首次访问：
   // store.setActive → registerWorkspace 会创建空快照，之后 S.workspaces[wsId] 永远 truthy
   var isFirstVisit = !store.workspaces.has(wsId);
 
-  // 通知 Rust 后端切换激活 workspace（用于微信路由等）
-  try { await invoke("switch_workspace", { workspaceId: wsId }); } catch (_) {}
-
   // Store 统一处理：保存旧 workspace 状态 + 切换 activeWsId + 恢复目标 workspace
   store.setActive(wsId);
-  updateDecisionModeUI();
   S.workspaceInfo = { id: wsId, path: wsPath || "", name: wsPath ? wsPath.split(/[\\/]/).pop() : _t("默认工作区") };
   // 记录 path → wsId 映射，供 remove_workdir / validate_workdirs 清理状态池使用
   if (wsPath) S.wsIdByPath[wsPath] = wsId;
+
+  // 立刻刷新可见状态（工作目录名 / 决策模式 / 状态栏 / 发送按钮）：
+  // 切换的「卡顿感」主要来自这里——旧实现把选择器更新放在最后一个 await 之后。
+  updateWorkspaceSelector();
+  updateDecisionModeUI();
+  updateStatusBar(S.isSending ? "busy" : "ready", wsPath || null, S.contextUsage.used);
+  updateSendButton();
+
+  // 通知 Rust 后端切换激活 workspace（用于微信路由等）。纯内存操作，仍 await 以保住
+  // 「先切 active、再做后续同步」的顺序；它排在可见 UI 更新之后，不拖首帧。
+  try { await invoke("switch_workspace", { workspaceId: wsId }); } catch (_) {}
 
   if (!isFirstVisit) {
     // 恢复已保存的状态（store.setActive 已恢复，但 UI 需手动刷新）
@@ -73,71 +95,82 @@ export async function switchToWorkspace(wsId, wsPath) {
     renderTodos(S.currentConv && Array.isArray(S.currentConv.todos) ? S.currentConv.todos : []);
     renderConversationList();
     updateContextUsage();
-    updateStatusBar(S.isSending ? "busy" : "ready", wsPath || null, S.contextUsage.used);
     // 标题栏必须按恢复后的会话重算：store 只恢复数据不改 DOM，
     // 不重算会保留上一个工作区的会话标题（切回老工作区时标题栏停留旧工作区的对话记录）
     syncConvTitle();
-    // 刷新服务端数据：后台运行可能已更新会话标题、上下文用量、Agent 信息
-    loadConversations().then(syncConvTitle);
+    // 切回工作区后对账 PDF 批次（其它 tab 期间 run_complete 被按 active workspace 过滤）
+    reconcilePdfBatching();
+    // 同步微信 follow session，防止微信消息仍用旧 workspace 的 session ID
+    syncWxFollowSession();
+
+    // 后台刷新服务端数据（后台运行可能已更新会话标题、上下文用量、Agent 信息）：
+    // 全部 fire-and-forget，切换动画和首屏渲染不等它们
+    loadConversations().then(syncConvTitle).catch(function(e) {
+      log.warn("WS", "切回后刷新会话列表失败: " + e);
+    });
     refreshAgentInfo();
     loadTools();
-  } else {
-    // 首次进入该 workspace：初始化
+    refreshProvidersOnSwitch(wsId).catch(function(e) {
+      log.warn("WS", "刷新 provider 列表失败: " + e);
+    });
+
+    log.debug("WS", "workspace.switchTo(warm) done in " + Math.round(performance.now() - switchStart) + "ms");
+    return;
+  }
+
+  // 首次进入该 workspace：初始化
+  showInitProgress(_t("正在初始化工作目录..."));
+  try {
     clearSendSafetyTimer();
     resetPermissionState();
     exitManualScrollMode();
     clearErrorNotices();
     renderMessages();
     renderTodos(S.currentConv && Array.isArray(S.currentConv.todos) ? S.currentConv.todos : []);
+    renderConversationList();
     document.getElementById("agent-conv-title").textContent = _t("选择或创建一个会话");
 
-    // 重新初始化 Agent
+    // 重新初始化 Agent：服务端创建工作区时不再自动构建 coordinator（见 backend
+    // app.WithDeferredAgentInit），这里是该工作区唯一一次真实构建。
     try { await api("POST", "/v1/workspaces/" + wsId + "/agent/init"); } catch (_) {}
-    await syncModeToServer();
-    await enableAutoCompact();
-    try {
-      var info = await api("GET", "/v1/workspaces/" + wsId + "/agent");
-      store.setAgentInfo(wsId, info);
-      var ctxLen = modelContextWindow(info && info.model);
-      if (ctxLen) {
-        store.setContextUsage(wsId, S.contextUsage.used, ctxLen, S.contextUsage.estimated);
-      }
-    } catch (_) {}
+
+    // 以下三项彼此独立：并行发出，不再逐个 await（原来 3 次串行往返）
+    await Promise.all([
+      syncModeToServer().catch(function(e) { console.warn("[agent] 同步权限模式失败:", e); }),
+      enableAutoCompact().catch(function(e) { console.warn("[agent] 开启自动压缩失败:", e); }),
+      (async function() {
+        var info = await api("GET", "/v1/workspaces/" + wsId + "/agent");
+        store.setAgentInfo(wsId, info);
+        var ctxLen = modelContextWindow(info && info.model);
+        if (ctxLen) {
+          store.setContextUsage(wsId, S.contextUsage.used, ctxLen, S.contextUsage.estimated);
+        }
+      })().catch(function(e) { console.warn("[agent] 获取 agentInfo 失败:", e); })
+    ]);
+
     // SSE 监听是全局的（后端为每个 workspace 独立转发），不需要重新订阅
-    // 刷新对话列表
+    // 会话列表是首屏主体：等它（内部会自动选中会话并加载消息）
     await loadConversations();
-    await loadTools();
     updateContextUsage();
     updateStatusBar("ready", wsPath || null, 0);
-    // 首次进入后保存到状态池（store.setActive 已注册，store 方法写入时自动快照）
+    updateSendButton();
+    reconcilePdfBatching();
+    syncWxFollowSession();
+
+    // 工具面板 / 云端模型列表与首屏无关：后台加载
+    loadTools();
+    refreshProvidersOnSwitch(wsId).catch(function(e) {
+      log.warn("WS", "刷新 provider 列表失败: " + e);
+    });
+  } finally {
+    hideInitProgress();
+    log.debug("WS", "workspace.switchTo(cold) done in " + Math.round(performance.now() - switchStart) + "ms");
   }
-
-  // 切回工作区后必须重算工具栏：其它 tab 期间该 workspace 的 run_complete 只更新状态池
-  // 不触发 UI 副作用（sse.js 按 active workspace 过滤），「停止」按钮的显隐只由
-  // updateSendButton 维护，不在此重算会保留上一个工作区的可见性——表现为任务早已结束
-  // 停止按钮仍常驻，或切进正在运行的工作区却没有停止按钮
-  updateSendButton();
-
-  // 切回工作区后对账 PDF 批次：其它 tab 期间该 workspace 的 run_complete 不被处理
-  // （SSE 事件按 active workspace 过滤），有剩余计划时在此按 is_busy 恢复推进
-  reconcilePdfBatching();
-
-  // 刷新云端模型列表：切换 workspace 后目标 workspace 的服务端 ConfigStore 可能过期
-  // （在另一个 workspace 添加云端模型时 config/set scope:0 只触发当前 workspace 的 autoReload），
-  // 需要重新加载 S.providers（全局 admAgent.json，始终最新）、触发目标 workspace 配置重载、
-  // 再拉取 /providers 快照并更新模型下拉。
-  await refreshProvidersOnSwitch(wsId);
-
-  updateWorkspaceSelector();
-  updateDecisionModeUI();
-  // 切换工作区后同步微信 follow session，防止微信消息仍用旧 workspace 的 session ID
-  syncWxFollowSession();
 }
 
 // 切换 workspace 后刷新云端模型 provider 列表。
 // 1) 从 admAgent.json 重新加载 S.providers（全局文件，始终最新）
-// 2) 对目标 workspace 触发一次 config/set（scope:0），强制其 ConfigStore autoReload，
-//    从而拾取全局配置文件中其他 workspace 添加的云端模型
+// 2) 让目标 workspace 的 ConfigStore 重新读盘（只读的 /config/reload）
 // 3) 拉取目标 workspace 的 /providers 快照并更新模型下拉
 async function refreshProvidersOnSwitch(wsId) {
   try {
@@ -148,16 +181,24 @@ async function refreshProvidersOnSwitch(wsId) {
 
   // 目标 workspace 的 ConfigStore 可能未加载最新的全局配置（cloud providers 在
   // 其他 workspace 通过 config/set scope:0 写入全局文件时只触发了那个 workspace 的
-  // autoReload）。用第一个 provider 的 api_key 做一次幂等 config/set 来触发 reload。
-  if (S.providers.length > 0 && S.serverInfo) {
-    var trigger = S.providers[0];
-    try {
-      await api("POST", "/v1/workspaces/" + wsId + "/config/set", {
-        scope: 0,
-        key: "providers." + trigger.key + ".api_key",
-        value: trigger.api_key || ""
-      });
-    } catch (_) {}
+  // autoReload）。用 /config/reload 触发一次重读即可——它不写文件。
+  // 旧实现回写同一个 api_key 借 config/set 的副作用强制 reload，每次切换都要付
+  // 一次配置文件写 + 全量解析（Windows 上还有 flock）。
+  try {
+    await api("POST", "/v1/workspaces/" + wsId + "/config/reload");
+  } catch (e) {
+    log.warn("WS", "config/reload 失败，尝试旧版回写触发: " + e);
+    // 兼容不支持 /config/reload 的旧版 sidecar：退回「回写同一 api_key」触发 autoReload
+    if (S.providers.length > 0) {
+      var trigger = S.providers[0];
+      try {
+        await api("POST", "/v1/workspaces/" + wsId + "/config/set", {
+          scope: 0,
+          key: "providers." + trigger.key + ".api_key",
+          value: trigger.api_key || ""
+        });
+      } catch (_) {}
+    }
   }
 
   // 重置服务端快照（旧快照属于上一个 workspace），重新拉取目标 workspace 的 provider 列表
@@ -318,9 +359,13 @@ async function doSwitchWorkDir(path) {
       reportError(new Error("server not ready"), { prefix: _t("切换工作目录失败: ") });
       return;
     }
+    // 创建工作区可能涉及配置加载 / 数据库连接 / 技能扫描，给用户一个明确的进行中提示；
+    // 成功后的 switchToWorkspace 会接管（并最终收起）这条进度条。
+    showInitProgress(_t("正在打开工作目录..."));
     // 通过 Rust 后端创建 workspace（启动独立 SSE 转发）
     var wsInfo = await invoke("create_workspace", { path: path, clientId: S.clientId });
     if (!wsInfo || !wsInfo.workspace_id) {
+      hideInitProgress();
       reportError(new Error("server returned no workspace id"), { prefix: _t("切换工作目录失败: ") });
       return;
     }
@@ -329,7 +374,10 @@ async function doSwitchWorkDir(path) {
     // 切换到新 workspace（保存旧状态，恢复新状态）
     await switchToWorkspace(wsInfo.workspace_id, path);
   } catch (e) {
+    hideInitProgress();
     reportError(e, { prefix: _t("切换工作目录失败: ") });
+  } finally {
+    hideInitProgress();
   }
 }
 
