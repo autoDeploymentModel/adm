@@ -56,6 +56,8 @@ var EXT_MIME = {
   "md": "text/markdown",
   "markdown": "text/markdown",
   "json": "application/json",
+  "jsonl": "application/jsonl",
+  "ndjson": "application/x-ndjson",
   "csv": "text/csv",
   "xml": "text/xml",
   "yaml": "text/yaml",
@@ -366,5 +368,5 @@ function isSupportedMime(mime) {
   if (!mime) return false;
   if (mime.indexOf("image/") === 0) return true;
   if (mime.indexOf("text/") === 0) return true;
-  return ["application/json", "application/xml", "application/yaml", "application/x-yaml", "application/javascript"].indexOf(mime) >= 0;
+  return ["application/json", "application/jsonl", "application/x-ndjson", "application/ndjson", "application/xml", "application/yaml", "application/x-yaml", "application/javascript"].indexOf(mime) >= 0;
 }

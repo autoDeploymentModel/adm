@@ -1,8 +1,14 @@
 # 附件：剪贴板粘贴与 PDF 分批（桌面端）
 
-> 范围：`src/views/agent/attach.js` / `pdf.js` / `pdf_batch.js` + `src-tauri/src/pages/agent.rs`，含三平台剪贴板差异与 pdf.js 用法。
+> 范围：`src/views/agent/attach.js` / `pdf.js` / `pdf_batch.js` + `src-tauri/src/pages/agent.rs`，含三平台剪贴板差异、文本附件 MIME 白名单（与服务端 `message.IsTextMime` 联动）与 pdf.js 用法。
 
 ---
+
+## 文本附件 MIME 白名单（桌面端 + 服务端）
+
+- **两处判定必须同步**：桌面端 `attach.js` 的 `EXT_MIME`（扩展名 → MIME，浏览器上报空/`application/octet-stream` 时兜底）与 `isSupportedMime`（浏览器直接上报的 application 型 MIME）；服务端 `message.IsTextMime`（`admAgent/internal/message/attachment.go`）决定是否当作文本附件、把 `view` 分段读取引导注入 `<system_info>`。新增文本类型三处同改，漏一处就是"桌面端能附加、服务端回暂不支持"（或反之，命中 `attachment_ingest.go` 错误矩阵 #1）。
+- **JSON Lines（`.jsonl` / `.ndjson`）**：两端已按 `application/jsonl` / `application/x-ndjson`（另收 `application/ndjson`）纳入白名单。这类文件是逐行 JSON 文本，`view` 能读，但单行超过 `MaxLineLength`(2000B) 会被截断加 `...`（`tools/view.go`），单条记录常超长——服务端 ingest 对 JSONL 注入专用 `jq` 引导（`attachment_ingest.go` 的 `IsJSONLinesMime` 分支，不再给通用 `view` 引导），按字段查询/聚合走 bash 内置 `jq`。
+- **TUI 例外**：TUI 附件用内容嗅探 `http.DetectContentType`（`internal/ui/model/ui.go` 的 `mimeOf`），JSONL 会判成 `text/plain`，不依赖扩展名白名单。
 
 ## 附件粘贴（跨平台差异，`agent.js` paste 事件 + `agent.rs` read_clipboard_files）
 
