@@ -1,68 +1,79 @@
-# ADM — Agent 指南
+# AGENTS.md — AI 开发实施规格
 
-本文件只做**索引**：命令速查 + 代码/文档地图 + 少量硬规则。约定、踩坑记录与设计决策都在 `doc/` 下，
-动手前按下面的索引打开对应文档，不要凭记忆猜。
+> ADM = Tauri 桌面端（`src/` + `src-tauri/`）+ Go Agent 服务端 / TUI（`admAgent/`），两个前端共用同一 server。
+> 本文件只写执行规格：流程、边界、验证、文档路由、诊断。细节全在 `doc/`，与代码冲突时以代码为准。
 
-## 开发命令（始终使用 `pnpm`，不要用 `npm`/`yarn`）
+## 0. 执行流程
 
-- `pnpm tauri dev` — 热重载开发模式
-- `pnpm tauri build` — 生产构建
-- `pnpm tauri clean` — 清理构建产物
-- `pnpm tauri:build:windows` / `:macos` / `:linux` — 跨平台构建
-- `pnpm typecheck` — 前端类型检查（tsc --noEmit，只检查不产出，改完前端必跑）
+1. 判定改动端：桌面端或 `admAgent/`，只改一端；用户未明确要求时不跨端。
+2. 按「文档路由」读对应文档与 `*-plan.md`，不凭记忆猜约定。
+3. 读现有实现（grep / LSP）后做最小必要修改，沿用现有风格与依赖。
+4. 跑「验证矩阵」全部命中项，失败先修绿。
+5. 同一次改动内同步文档；完整映射见 [`doc/conventions.md#文档同步更新强制`](doc/conventions.md#文档同步更新强制)。
 
-### admAgent（Go，`admAgent/` 目录内执行）
-- `go build ./...` — 编译检查
-- `go test ./internal/... -count=1` — 全量单测（Windows 上 `internal/shell` 的 shebang 测试依赖 /bin/bash、`internal/server` 与 `internal/backend`（`TestBackend_ReloadSkills`）偶发 TempDir 句柄/文件锁抖动，属环境问题可忽略——均可在未改动的 HEAD 上复现）
-- `go test ./internal/agent/ -run 'TestName' -count=1` — 单个测试
-- `scripts/eval.sh` / `scripts/eval.ps1` — agent 行为 eval（手动入口，**不接入构建链路**；退出码 0 通过 / 1 回归 / 2 跳过）。判分器自测：`go test ./internal/eval/ -count=1`
-- `build.ps1` — Windows 构建脚本；改完 Go 代码必须重新编译打包 sidecar 才在 ADM 里生效
-- 运行时日志：`%LOCALAPPDATA%\admAgent\cache\admAgent.log`（Windows）/ `~/.cache/admAgent/admAgent.log`（macOS、Linux）。单文件、每次启动截断重写（`GlobalLogPath()`），直接读内容为准；注意 Windows 目录列表可能显示 0 字节。panic 栈单独写同目录 `admAgent-panic.log`（只追加、超 8MB 轮转 `.prev`；回合 goroutine 的 recover 与 runtime fatal 都进这里），排查“对话突然中断 / 服务异常退出”先看它。排查“对话突然中断”类问题 grep `Loop step response|ending turn|nudg`：`text_bytes=0` 但 `output_tokens` 很大 = 模型输出全部漏进 reasoning（典型为 localModel 在 40k+ 上下文下退化）
+## 1. 硬边界
 
-## 硬规则（违反会返工）
+- 桌面端 = `src/` + `src-tauri/`；TUI / 服务端 = `admAgent/`。未经明确指示不混改两端。
+- `admAgent/` 可直接改：先搜源码确认现状；行为 / 契约改动必须同步文档并跑 Go 构建与相关测试。
+- 只用 `pnpm`（不用 `npm` / `yarn`）；仓库没有 linter / formatter / JS 测试框架，不要新增。
+- 工作目录切换（下拉 / 添加 / 删除）仅桌面端；TUI 只显示当前目录（`PrettyPath`）。
+- 新约定写进对应主题文档，不堆回本文件；本文件最多加索引行。
+- 文档写清「为什么」（踩坑原因、被否方案）；引用代码用符号名 / 路径，尽量不写行号。
+- 契约字符串（开关名、配置键、事件名、错误 token，如 `options.bash_allow_all`、`thinking_mode_unsupported`）必须与代码逐字一致。
+- `doc/*-plan.md`、`doc/*patch-*.md` 是历史记录，不随实现改写；行为变化写主题文档，必要时在开头补「后续变更见 …」。
 
-1. **先确认改动目标**：桌面端 = `src/` + `src-tauri/`，TUI / 服务端 = `admAgent/`；未经明确指示不混改两端。
-2. **`admAgent/` 可修改**：改前先搜源码确认现状；行为/契约改动必须同步文档，并跑 `go build ./...` 与相关 `go test`。
-3. **改完 Go 代码必须重新编译并推送 sidecar**（`admAgent/build.ps1` → `pnpm agent:push`）才在 ADM 里生效。
-4. 前端改动跑 `pnpm typecheck`；仓库没有 linter / formatter / 测试框架，不要新增。
-5. **代码改动必须同步更新对应文档**：同一次改动里改完，映射表见 [`doc/conventions.md`](doc/conventions.md#文档同步更新强制)；行为/契约变了而文档没跟，视为改动未完成。
-6. 复杂问题排查需要日志时，按 `doc/conventions.md` 的类型标记写 `adm_api_debug.log`。
+## 2. 验证矩阵（收尾必跑）
 
-## 文档索引
-
-| 文档 | 内容（什么时候读） |
+| 改动 | 命令 |
 | --- | --- |
-| [`doc/frontend-architecture.md`](doc/frontend-architecture.md) | SPA 视图模块结构、样式/类型约定、Tauri IPC、多 workspace 并发与 Agent server 模式 |
-| [`doc/frontend-agent-conventions.md`](doc/frontend-agent-conventions.md) | Agent 视图错误处理、自动续跑、假完成检测、拖拽保护、每轮撤销入口、轮级对话记录大纲、同目录多会话并行（前台状态模型） |
-| [`doc/attachments.md`](doc/attachments.md) | 剪贴板粘贴（三平台差异）与 PDF 分批转图 |
-| [`doc/rust-backend.md`](doc/rust-backend.md) | Rust 命令地图、应用自升级、下载链路、VC++ / Vulkan 运行库预检、平台差异 |
-| [`doc/docker-image-models.md`](doc/docker-image-models.md) | 图片生成 / 文本生成语音模型的 Docker 部署链路、按模型类型区分的端口与挂载、取消与清理、模型页加载顺序 |
-| [`doc/admAgent-server.md`](doc/admAgent-server.md) | 服务端 loop 抖动恢复、压缩与事实块、系统提示词预算与提示词缓存、归档编号、决策模式、工具与权限边界（撤销清理的会话 ID 校验、bash 只读白名单、工作区包含性判断、符号链接、LSP 通知路径）、工作区生命周期与切换性能（延迟/幂等 agent init、config revision 缓存、rail3 清理、MCP 单例）、代理链路、配置词表 |
-| [`doc/admAgent-context-compaction-flow.md`](doc/admAgent-context-compaction-flow.md) | 压缩机制全流程：触发路径、参数派生、Summarize 13 步、取回通路、熔断与日志、审核风险点 |
-| [`doc/agent-settings.md`](doc/agent-settings.md) | Agent 设置项、推理强度与思考开关、云端模型 `can_reason`、开关写入链路 |
-| [`doc/build-and-release.md`](doc/build-and-release.md) | CI、构建与发布、内置 admAgent 分发、Linux 打包/更新链路 |
-| [`doc/conventions.md`](doc/conventions.md) | 工作边界、工作目录功能归属、代码↔文档同步映射表（改动收尾必查）、调试日志格式与标记 |
-| [`doc/server-api.md`](doc/server-api.md) | admAgent HTTP API（服务端权威文档） |
-| [`doc/admAgent-eval-harness-plan.md`](doc/admAgent-eval-harness-plan.md) | agent 行为 eval：`admAgent eval` + `scripts/eval.{ps1,sh}`、任务/判分器定义、基线判定 |
-| `doc/llamacpp.txt` / `doc/llamacpp-macos.txt` | llama-server CLI 启动参数 |
-| `doc/model_list.json` | 模型清单 |
+| 前端 `src/`、`jsconfig`、类型声明 | `pnpm typecheck` |
+| `admAgent/` Go 代码 | 在 `admAgent/` 内 `go build ./...` + `go test ./internal/... -count=1`；单测用 `-run 'TestName'` |
+| Go 改动要在 ADM 内生效 | `admAgent/build.ps1` → `pnpm agent:push`（重编并推送 sidecar，缺一不生效） |
+| agent 行为回归 | `admAgent/scripts/eval.sh` / `eval.ps1`（手动，退出码 0 通过 / 1 回归 / 2 跳过）；判分器自测 `go test ./internal/eval/ -count=1` |
+| Rust / 打包 / CI | `pnpm tauri build`；跨平台 `pnpm tauri:build:windows` / `:macos` / `:linux` |
+| 手动联调 | `pnpm tauri dev`；清理产物 `pnpm tauri clean` |
 
-方案与实施记录（改动相关模块前先读，避免重复踩坑）：
+环境噪声不算回归（未改动 HEAD 上同样复现）：Windows 下 `internal/shell` shebang 测试需 `/bin/bash`；`internal/server`、`internal/backend`（`TestBackend_ReloadSkills`）偶发 TempDir 句柄 / 文件锁抖动。
 
-- [`doc/admAgent-fact-block-and-recall-refs-plan.md`](doc/admAgent-fact-block-and-recall-refs-plan.md) — 确定性事实块 + 归档编号 `#N` + `recall` 区间/展开取回
+## 3. 文档路由（改前必读，改后同步）
+
+| 改动落点 | 文档 |
+| --- | --- |
+| 外壳 / 视图 / 路由 / IPC / 类型（`src/index.html`、`src/views/*.js`、`jsconfig.json`、`src/types.d.ts`） | [`doc/frontend-architecture.md`](doc/frontend-architecture.md) |
+| Agent 视图交互与状态（`src/views/agent/` 的 store / render / ui / sse / autocontinue / workspace） | [`doc/frontend-agent-conventions.md`](doc/frontend-agent-conventions.md) |
+| 剪贴板粘贴、PDF 附件（`attach.js`、`pdf.js`、Rust `read_clipboard_files` / `clipboard_*`） | [`doc/attachments.md`](doc/attachments.md) |
+| `src-tauri/src/**`：自升级、下载、运行库预检、平台差异 | [`doc/rust-backend.md`](doc/rust-backend.md) |
+| Docker 模型链路与模型页（`docker_model.rs`、`model_list.js`） | [`doc/docker-image-models.md`](doc/docker-image-models.md) |
+| Agent 设置项与开关写入（`settings.rs`、`agent.rs` 的 `sync_*`、设置 / 模型 / memory 视图） | [`doc/agent-settings.md`](doc/agent-settings.md) |
+| admAgent 服务端行为与前后端契约（loop / 压缩 / 事实块 / 归档编号 / 决策模式 / 代理 / 配置词表 / part 类型） | [`doc/admAgent-server.md`](doc/admAgent-server.md) |
+| 压缩机制细节（触发、Summarize、取回、熔断） | [`doc/admAgent-context-compaction-flow.md`](doc/admAgent-context-compaction-flow.md) |
+| HTTP API 端点 / 字段（`admAgent/internal/server`、`internal/proto`） | [`doc/server-api.md`](doc/server-api.md) |
+| CI、打包、sidecar 分发（`build.yml`、`prepare-agent-binary.mjs`、`tauri.conf.json`） | [`doc/build-and-release.md`](doc/build-and-release.md) |
+| agent 行为 eval（`admAgent/internal/eval`、`internal/cmd/eval.go`、fixture / 基线） | [`doc/admAgent-eval-harness-plan.md`](doc/admAgent-eval-harness-plan.md) |
+| 工作边界、调试日志标记、文档同步映射 | [`doc/conventions.md`](doc/conventions.md) |
+| llama-server 启动参数 / 模型清单 | `doc/llamacpp.txt` / `doc/model_list.json` |
+
+改相关模块前先读的设计记录，避免重复踩坑：
+
+- [`doc/admAgent-fact-block-and-recall-refs-plan.md`](doc/admAgent-fact-block-and-recall-refs-plan.md) — 事实块 + 归档编号 `#N` + `recall` 区间 / 展开
 - [`doc/admAgent-parallel-sessions-file-guards.md`](doc/admAgent-parallel-sessions-file-guards.md) — 同目录多会话并行的服务端写保护
-- [`doc/admAgent-undo-anchor-plan.md`](doc/admAgent-undo-anchor-plan.md) — 每轮/跨轮撤销的服务端方案（anchor 参数、快照保留窗口、非 git 目录），**待审核，未落地**
-- [`doc/admAgent-prefix-budget-plan.md`](doc/admAgent-prefix-budget-plan.md) — 固定前缀（系统提示词 + 工具 schema）瘦身与预算守卫：bash 描述里的 git 剧本已搬进 skill、前缀预算单测与日志落地（8.9k），按窗口分档/MCP 延迟未做
+- [`doc/admAgent-prefix-budget-plan.md`](doc/admAgent-prefix-budget-plan.md) — 固定前缀瘦身与预算守卫（git 剧本已搬入 skill）
+- [`doc/admAgent-lsp-managed-runtime-plan.md`](doc/admAgent-lsp-managed-runtime-plan.md) — LSP 现行实现 + 托管 runtime（P0 / SSE 进度 / Node 托管已落地）
 - [`doc/admAgent-patch-bash-allow-all.md`](doc/admAgent-patch-bash-allow-all.md) — `options.bash_allow_all`
 - [`doc/admAgent-patch-project-memory-sync.md`](doc/admAgent-patch-project-memory-sync.md) — `options.project_memory_sync`
-- [`doc/admAgent-lsp-managed-runtime-plan.md`](doc/admAgent-lsp-managed-runtime-plan.md) — 现行 LSP 实现（powernap 目录、自动启动、诊断、8 个工具）+ 运行时托管/按 server 安装方案：**P0 核心、安装进度 SSE、Node 托管 runtime、桌面 API 切换已落地**；离线 pack / API token 未做
-- [`doc/agent-decision-mode-server-plan.md`](doc/agent-decision-mode-server-plan.md) / [`doc/agent-decision-output-plan.md`](doc/agent-decision-output-plan.md) — 决策输出模式（服务端方案 / 前端 MVP 记录）
+- [`doc/agent-decision-mode-server-plan.md`](doc/agent-decision-mode-server-plan.md) / [`doc/agent-decision-output-plan.md`](doc/agent-decision-output-plan.md) — 决策输出模式
+- [`doc/admAgent-undo-anchor-plan.md`](doc/admAgent-undo-anchor-plan.md) — 每轮 / 跨轮撤销（**待审核，未落地**）
 
-## 项目结构
+## 4. 代码地图
 
-- **项目结构**：
-  - `admAgent/` — Go TUI（Bubbletea/lipgloss/ultraviolet）+ 共享后端服务器（Go），两个前端共用此 server
-  - `src/` + `src-tauri/` — Tauri 桌面端（vanilla JS 前端 + Rust 后端）
-  - `adm-binaries/` — 二进制仓库（ADM 与 admAgent 共用；本地 clone 由编译产物直写，`pnpm agent:push` 强制覆盖远端，CI 自动 checkout 到同名目录）
-  - `website/` — 营销网站
-  - `scripts/` — 工具脚本
+- `admAgent/` — Go TUI（Bubbletea / lipgloss / ultraviolet）+ 共享后端 server；HTTP API 见 `doc/server-api.md`
+- `src/` + `src-tauri/` — Tauri 桌面端：vanilla JS 前端、Rust 后端
+- `adm-binaries/` — 二进制仓库（编译产物直写；`pnpm agent:push` 覆盖远端，CI 自动 checkout）
+- `website/` — 营销网站；`scripts/` — 仓库级工具脚本（Go 专用脚本在 `admAgent/scripts/`）
+
+## 5. 运行时诊断
+
+- admAgent 日志：`%LOCALAPPDATA%\admAgent\cache\admAgent.log`（Windows）/ `~/.cache/admAgent/admAgent.log`；单文件、每次启动截断，直接读内容（Windows 目录列表可能显示 0 字节）。
+- panic 栈：同目录 `admAgent-panic.log`（追加，超 8MB 轮转 `.prev`）。排查「对话突然中断 / 服务异常退出」先看它，再看 `adm_api_debug.log` 的 `SSE !` 时间线。
+- 「对话中断」grep `Loop step response|ending turn|nudg`：`text_bytes=0` 但 `output_tokens` 很大 = 输出全漏进 reasoning（典型为 localModel 在 40k+ 上下文退化）。
+- 桌面端调试日志：`adm_api_debug.log`（路径与 `UI:` / `HTTP >` / `SSE =` 等类型标记见 `doc/conventions.md`）；Rust 用 `api_debug_log!`，JS 用 `invoke("agent_debug_log", ...)`。
