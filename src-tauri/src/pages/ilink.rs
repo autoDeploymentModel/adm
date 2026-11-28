@@ -1335,6 +1335,27 @@ fn flow_log(_app: &tauri::AppHandle, stage: &str, detail: &str) {
     }
     eprintln!("[ilink][flow] {} | {}", stage, detail);
     let flat: String = detail.replace('\n', " ↵ ").chars().take(1500).collect();
+    let lower = stage.to_lowercase();
+    let evt = if lower.contains("inbound") || stage.contains("入站") || stage.contains("收到") {
+        Some("ilink.inbound")
+    } else if lower.contains("forward") || stage.contains("转发") {
+        Some("ilink.forward")
+    } else if lower.contains("reply") || stage.contains("回投") {
+        Some("ilink.reply")
+    } else if lower.contains("error") || lower.contains("fail") || stage.contains("失败") {
+        Some("ilink.error")
+    } else {
+        None
+    };
+    if let Some(evt) = evt {
+        let level = if evt == "ilink.error" { crate::common::logging::Level::Error } else { crate::common::logging::Level::Info };
+        crate::common::logging::emit(level, "ilink", evt, "iLink flow", serde_json::json!({
+            "stage": stage,
+            "message_hash": crate::common::logging::hash_for_log(&flat),
+            "bytes": flat.len(),
+            "chat_hash": "",
+        }), serde_json::Value::Null, "desktop").ok();
+    }
     agent::api_debug_log(|| format!("ilink: [{}] {}", stage, flat));
 }
 

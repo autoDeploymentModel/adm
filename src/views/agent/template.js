@@ -2127,7 +2127,7 @@ export const template = `
               <span>${_t("记录调试日志")}</span>
               <button type="button" class="browse-btn" id="settings-open-log-dir" style="margin-left:auto;">${_t("打开日志目录")}</button>
             </div>
-            <div class="param-desc">${_t("开启后在 app 数据目录写入 adm_api_debug.log（记录与 admAgent 的关键 API/事件交互，含你发送的消息正文，供排查对话中断）；关闭或重启软件会自动清空日志")}</div>
+            <div class="param-desc">${_t("开启后写入 JSONL 日志（adm-desktop.jsonl / admAgent.jsonl 的关键事件、耗时与 token；默认不记录消息正文、命令或工具入参）；关闭后仅保留 WARN/ERROR，历史日志不会清空")}</div>
           </div>
         </div>
         <div class="param-row">

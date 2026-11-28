@@ -40,14 +40,13 @@
 - 方案 / 实施记录（`doc/*-plan.md`、`doc/*patch-*.md`）是历史记录，**不随实现演进改写**；行为变化写进主题文档，必要时在记录开头补一行「后续变更见 …」。
 - 收尾自检：本次每个改动落点都能在上表命中，且对应文档已更新。
 
-## 调试日志（`adm_api_debug.log`）
+## JSONL 日志（`adm-desktop.jsonl` / `admAgent.jsonl`）
 
-- **调试日志统一写入 `adm_api_debug.log`**：复杂问题排查需要日志时，Rust 端用 `api_debug_log!`，前端 JS 用 `invoke("agent_debug_log", { line: "..." })`，统一写入 `~/Library/Application Support/com.adm.admapp/adm_api_debug.log`（macOS）或 `%LOCALAPPDATA%\ADM\adm_api_debug.log`（Windows；`get_data_dir` 在 Windows 返回 exe 同目录，即安装目录下）。日志必须带类型标记便于过滤：
-  - `UI:` 前缀 — 前端 JS 日志（SSE 事件过滤、状态变更、消息处理等）
-  - `HTTP >` / `HTTP <` — HTTP 请求/响应
-  - `SSE =` / `SSE !` — SSE 连接/断开
-  - `< message created` / `< run_complete` / `< agent_event` — SSE 事件转发
-  - `UpdateModels:` / `readyWg:` — admAgent 服务端诊断日志
-  - `ilink: [阶段]` — 微信 Bot 流程（登录/工作区复用/入站消息/SSE 转发/回投），原 `ilink_flow_debug.log` 已并入本文件
-  日志格式：`{epoch_ms} {HH:MM:SS.mmm 本地时间} {类型标记} {内容}`，由 Rust 端统一格式化。调试模式开关：设置→调试模式（`config.json` 的 `debug_logging` 字段）。
-- **admAgent 崩溃日志单独落盘**：服务端自身的 slog 写 `%LOCALAPPDATA%\admAgent\cache\admAgent.log`（每次启动截断），panic 栈写同目录的 `admAgent-panic.log`（只追加，超 8MB 轮转为 `.prev`；每进程启动写一行 `process start pid=`）：回合 goroutine 的 recover 走 `log.WritePanic("agent.run", …)`，recover 不到的 fatal（并发 map 写、栈溢出等）由 `debug.SetCrashOutput` 兜底。排查“对话突然中断/服务异常退出”先看这个文件，再看 `adm_api_debug.log` 的 `SSE !` 时间线。
+- 新日志统一为 schema v1 JSONL，契约见 [`admAgent-log-schema.json`](admAgent-log-schema.json) 与 [`admAgent-ai-logging-plan.md`](admAgent-ai-logging-plan.md)。桌面端只写 `adm-desktop.jsonl`，Go server/TUI 只写 `admAgent.jsonl`；旧 `adm_api_debug.log`、`admAgent.log`、`admAgent-panic.log` 只读发现，不再创建或续写。
+- 写入必须经共享 writer：跨进程锁、100ms/50 条批量、20MB + 3 备份、锁内轮转。WARN/ERROR 与 turn/tool 终态立即 flush。不要恢复启动截断或长期持有日志句柄，否则会丢跨重启证据并写入已轮转 inode。
+- `session/run/turn/step/tool_call/req/conn/boot` 是关联键；`run` 对应客户端提交，`turn` 对应实际执行生命周期。压缩重排队和 provider 重试保留 turn，独立排队 prompt 才新建 turn。
+- `agent.turn.end` / `tool.call.end` 必须经 CAS finalizer，正常、取消、panic、fallback 只写一条权威终态。SIGKILL 后由 `admAgent.jsonl` 的 `proc.start/exit/heartbeat` 与未闭合 start 补 `terminal_source=inferred` 的终态。
+- 默认 allowlist：ID、模型、工具名、错误码、状态、耗时、token/字节、路径 hash。prompt、工具入参、命令、stdout/stderr、body、配置值不得进入普通事件；panic/raw/payload 是 `sensitive=true` 的同文件例外，payload 默认关闭。
+- 路径默认 hash；`ADM_LOG_PATHS=1` 才记录绝对路径。payload 默认关闭，`ADMAGENT_LOG_PAYLOAD=1`（Go）/ `ADM_LOG_PAYLOAD=1`（桌面）才写 `llm.payload` / `raw.payload`，且必须 `sensitive=true`。`ADMAGENT_LOG_DIR`、`ADM_LOG_DIR`、`ADM_DESKTOP_LOG` 只覆盖日志目录，不改变其他缓存目录。
+- 查询用 `admAgent logs`，诊断用 `admAgent diagnose`；默认排除 raw/payload，panic 只返回摘要。`admAgent_logs` 默认限定当前 workspace/session 并返回缺失来源与旧 schema 信息。
+- 桌面 `Settings.debug_logging` 控制 Info/Debug；关闭后 WARN/ERROR 仍落盘。旧 `agent_debug_log(line)` 保留兼容，但内部也转 JSONL；新代码使用 structured/batch/flush 命令。

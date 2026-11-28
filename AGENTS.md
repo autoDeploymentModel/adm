@@ -63,6 +63,7 @@
 - [`doc/admAgent-patch-project-memory-sync.md`](doc/admAgent-patch-project-memory-sync.md) — `options.project_memory_sync`
 - [`doc/agent-decision-mode-server-plan.md`](doc/agent-decision-mode-server-plan.md) / [`doc/agent-decision-output-plan.md`](doc/agent-decision-output-plan.md) — 决策输出模式
 - [`doc/admAgent-undo-anchor-plan.md`](doc/admAgent-undo-anchor-plan.md) — 每轮 / 跨轮撤销（**待审核，未落地**）
+- [`doc/admAgent-ai-logging-plan.md`](doc/admAgent-ai-logging-plan.md) — 双 JSONL 文件日志系统实施规格：`adm-desktop.jsonl` / `admAgent.jsonl`（已落地；schema 见 `doc/admAgent-log-schema.json`）
 
 ## 4. 代码地图
 
@@ -73,7 +74,8 @@
 
 ## 5. 运行时诊断
 
-- admAgent 日志：`%LOCALAPPDATA%\admAgent\cache\admAgent.log`（Windows）/ `~/.cache/admAgent/admAgent.log`；单文件、每次启动截断，直接读内容（Windows 目录列表可能显示 0 字节）。
-- panic 栈：同目录 `admAgent-panic.log`（追加，超 8MB 轮转 `.prev`）。排查「对话突然中断 / 服务异常退出」先看它，再看 `adm_api_debug.log` 的 `SSE !` 时间线。
-- 「对话中断」grep `Loop step response|ending turn|nudg`：`text_bytes=0` 但 `output_tokens` 很大 = 输出全漏进 reasoning（典型为 localModel 在 40k+ 上下文退化）。
-- 桌面端调试日志：`adm_api_debug.log`（路径与 `UI:` / `HTTP >` / `SSE =` 等类型标记见 `doc/conventions.md`）；Rust 用 `api_debug_log!`，JS 用 `invoke("agent_debug_log", ...)`。
+- admAgent 日志：Windows `%LOCALAPPDATA%\admAgent\log\admAgent.jsonl`，macOS/Linux `~/.cache/admAgent/admAgent.jsonl`；跨重启追加，20MB+3 轮转。
+- 桌面日志：Windows `%LOCALAPPDATA%\ADM\logs\adm-desktop.jsonl`，macOS `~/Library/Application Support/com.adm.admapp/logs/adm-desktop.jsonl`，Linux `~/.local/share/com.adm.admapp/logs/adm-desktop.jsonl`。
+- panic 与恢复：panic 栈在同文件 `proc.panic`（`sensitive=true`）；启动恢复从 `proc.start/exit/heartbeat` 与未闭合 turn/tool 推断 `server_exit`。查询用 `admAgent logs`，打包用 `admAgent diagnose`。
+- 「对话中断」grep `llm.step.response|agent.turn.end|tool.call.end|sse.stream.detach`：`text_bytes=0` 但 `output_tokens` 很大 = 输出全漏进 reasoning（典型为 localModel 在 40k+ 上下文退化）。
+- 旧 `adm_api_debug.log` / `admAgent.log` / `admAgent-panic.log` 只读发现，不再续写。

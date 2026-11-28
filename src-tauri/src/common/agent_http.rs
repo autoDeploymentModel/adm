@@ -352,12 +352,22 @@ pub async fn send(
     path: &str,
     body: Option<serde_json::Value>,
 ) -> Result<(u16, Vec<u8>), String> {
+    send_with_request_id(client, method, path, body, None).await
+}
+
+pub async fn send_with_request_id(
+    client: &AgentHttpClient,
+    method: &str,
+    path: &str,
+    body: Option<serde_json::Value>,
+    request_id: Option<&str>,
+) -> Result<(u16, Vec<u8>), String> {
     use http_body_util::BodyExt;
     use http_body_util::Full;
     use hyper::body::Bytes;
 
     let uri = uri_for(path)?;
-    let mut builder = hyper::Request::builder().method(method).uri(uri);
+    let mut builder = hyper::Request::builder().method(method).uri(uri).header("x-adm-req-id", request_id.map(str::to_string).unwrap_or_else(|| crate::common::logging::new_id("r")));
     if body.is_some() {
         builder = builder.header("content-type", "application/json");
     }
@@ -391,6 +401,7 @@ pub async fn stream_get(
     let req = hyper::Request::builder()
         .method("GET")
         .uri(uri)
+        .header("x-adm-req-id", crate::common::logging::new_id("r"))
         .body(Full::new(Bytes::new()))
         .map_err(|e| format!("构建请求失败: {}", e))?;
     let resp = client

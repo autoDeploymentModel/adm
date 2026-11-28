@@ -58,6 +58,7 @@ pub struct AppState {
     pub sys: Mutex<System>,
     /// admAgent server 子进程（全局唯一，所有 workspace 共享）
     pub agent_child: Mutex<Option<tokio::process::Child>>,
+    pub agent_child_started: Mutex<Option<std::time::Instant>>,
     /// 多 workspace 会话（按 workspace_id 索引）
     pub agent_sessions: Mutex<HashMap<String, AgentServerSession>>,
     /// 当前激活的 workspace ID（用于微信路由等需要"当前 tab"的场景）
@@ -108,6 +109,7 @@ impl AppState {
             downloading_phase: Mutex::new(HashMap::new()),
             sys: Mutex::new(System::new_all()),
             agent_child: Mutex::new(None),
+            agent_child_started: Mutex::new(None),
             agent_sessions: Mutex::new(HashMap::new()),
             active_workspace_id: Mutex::new(None),
             agent_start_lock: tokio::sync::Mutex::new(()),

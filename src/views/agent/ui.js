@@ -4,6 +4,7 @@ import { S, store, invoke } from "./store.js";
 import { api } from "./api.js";
 import { formatTokens, isMsgAreaAtBottom, isFullyAtBottom } from "./utils.js";
 import { getErrorMessage, friendlyError } from "./error.js";
+import { log } from "./log.js";
 
 // 退出手动滚动模式（切换会话/工作区时调用，避免把旧会话的滚动位置带到新会话）
 export function exitManualScrollMode() {
@@ -417,6 +418,7 @@ export function reportError(err, opts) {
   if (!text) return;
   // 原始错误只进日志，不进 UI（中文界面不出现英文报错）
   console.warn("[agent] reportError 原始错误:", getErrorMessage(err));
+  log.error("ui", "ui.error", getErrorMessage(err), { source: "reportError", component: "agent", stack: err && err.stack ? String(err.stack).slice(0, 32768) : "" });
   showNotice(text, opts.level || "error");
 }
 

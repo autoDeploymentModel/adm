@@ -428,6 +428,21 @@
     const listen = window.__TAURI__?.event?.listen || window.__TAURI_INTERNALS__?.listen;
     window.__adm_invoke = invoke;
     window.__adm_listen = listen;
+    const _structuredLog = await import("./views/agent/log.js");
+    window.addEventListener("error", function(event) {
+      if (event.source !== window) return;
+      _structuredLog.log.error("ui", "ui.error", event.message || "Uncaught UI error", { source: "window", component: "shell", stack: event.error && event.error.stack ? String(event.error.stack).slice(0, 32768) : "" });
+    });
+    window.addEventListener("unhandledrejection", function(event) {
+      var reason = event.reason;
+      _structuredLog.log.error("ui", "ui.error", reason && reason.message ? reason.message : String(reason), { source: "unhandledrejection", component: "shell", stack: reason && reason.stack ? String(reason.stack).slice(0, 32768) : "" });
+    });
+    window.addEventListener("reportError", function(event) {
+      var error = event.error;
+      _structuredLog.log.error("ui", "ui.error", error && error.message ? error.message : String(error), { source: "reportError", component: "shell", stack: error && error.stack ? String(error.stack).slice(0, 32768) : "" });
+    });
+    addEventListener("pagehide", function() { if (invoke) invoke("agent_debug_log_flush").catch(function() {}); });
+    document.addEventListener("visibilitychange", function() { if (document.visibilityState === "hidden" && invoke) invoke("agent_debug_log_flush").catch(function() {}); });
 
     // 预加载 i18n 模块并同步绑定 t()（顶层 await，后续所有动态文本走 t）
     const _i18n = await import("./i18n.js");
@@ -1332,6 +1347,8 @@
       const clean = hash.replace(/^#/, "");
       const qIndex = clean.indexOf("?");
       const path = qIndex >= 0 ? clean.substring(0, qIndex) : clean;
+      _structuredLog.log.debug("ui.route", "ui.route.change", "Route changed", { from: window.__adm_state.route || "", to: path, busy: !!window.__adm_state.agentBusy });
+      window.__adm_state.route = path;
       const queryStr = qIndex >= 0 ? clean.substring(qIndex + 1) : "";
       const params = {};
       if (queryStr) {

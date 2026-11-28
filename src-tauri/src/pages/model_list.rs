@@ -914,6 +914,8 @@ pub fn start_model_inner(
         }),
     )
     .ok();
+    crate::common::logging::emit(crate::common::logging::Level::Info, "model", "model.start", "Local model started", serde_json::json!({"model": model_id, "port": port}), serde_json::Value::Null, "desktop").ok();
+    crate::common::logging::emit(crate::common::logging::Level::Info, "model", "model.ready", "Local model ready", serde_json::json!({"model": model_id, "port": port, "dur_ms": 0}), serde_json::Value::Null, "desktop").ok();
 
     let app_clone = app.clone();
     let model_id_clone = model_id.clone();
@@ -1147,6 +1149,7 @@ pub fn start_model_inner(
                     serde_json::json!({ "model_id": &model_id_clone2 }),
                 )
                 .ok();
+            crate::common::logging::emit(crate::common::logging::Level::Warn, "model", "model.exit", "Local model exited", serde_json::json!({"model": model_id_clone2, "exit_code": exit_code, "reason_code": if runtime_crash { "crash" } else { "stopped" }, "auto_restart": 0}), serde_json::Value::Null, "desktop").ok();
         }
 
         if runtime_crash {
@@ -1170,6 +1173,7 @@ pub fn start_model_inner(
                     }),
                 )
                 .ok();
+            crate::common::logging::emit(crate::common::logging::Level::Error, "model", "model.crash", "Local model crashed", serde_json::json!({"model": model_id_clone2, "exit_code": exit_code, "reason_code": "runtime_crash", "auto_restart": auto_restart}), serde_json::Value::Null, "desktop").ok();
             if auto_restart {
                 let spec = app_clone2
                     .state::<AppState>()
@@ -1182,6 +1186,7 @@ pub fn start_model_inner(
                     std::thread::spawn(move || {
                         // 等旧进程收尾与端口释放，再复用正常启动链路（会重新发 model-started）
                         std::thread::sleep(std::time::Duration::from_secs(2));
+                        crate::common::logging::emit(crate::common::logging::Level::Warn, "model", "model.restart", "Restarting crashed local model", serde_json::json!({"model": spec.model_id, "reason_code": "runtime_crash", "auto_restart": 1}), serde_json::Value::Null, "desktop").ok();
                         let state = restart_app.state::<AppState>();
                         let already_running = state
                             .running_process

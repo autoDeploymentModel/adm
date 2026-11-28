@@ -191,6 +191,12 @@ function onSSEEventReceived(event) {
   }
   if (!skipLog) {
     log.debug("SSE", "event: " + evType0 + " ws: " + eventWsId + " activeWs: " + S.activeWsId + " currentConv: " + S.currentConvId);
+    var sseInner = (rawData0.payload || {}).payload || {};
+    log.debug("ui.sse", "ui.sse.event", "SSE event received", { type: evType0, bytes: JSON.stringify(rawData0).length }, { ws: eventWsId, session: sseInner.session_id, run: sseInner.run_id });
+  }
+  if (evType0 === "run_complete") {
+    var doneInner = (rawData0.payload || {}).payload || {};
+    log.info("ui.run", "ui.run_complete", "Agent run completed", { ok: !doneInner.error, error_code: doneInner.error ? "unknown" : "", incomplete_todos: doneInner.incomplete_todos || 0 }, { ws: eventWsId, session: doneInner.session_id, run: doneInner.run_id });
   }
 
   // 统一走 Store：自动处理跨 workspace 一致性

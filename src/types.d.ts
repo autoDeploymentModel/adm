@@ -18,6 +18,19 @@ declare global {
     follow: boolean;
   }
 
+  interface AdmStructuredLogEntry {
+    ts_ms?: number;
+    ui_seq?: number;
+    doc?: string;
+    origin?: "ui" | "desktop" | "sidecar";
+    lvl?: "debug" | "info" | "warn" | "error";
+    comp: string;
+    evt: string;
+    msg: string;
+    trace?: Record<string, unknown>;
+    [key: string]: unknown;
+  }
+
   interface Window {
     /** Tauri invoke（index.html 初始化时暴露给所有视图模块） */
     __adm_invoke: (cmd: string, args?: Record<string, unknown>) => Promise<any>;

@@ -338,9 +338,11 @@ async function sendText(overrideText, filesOverride, expectedTarget) {
     // 折叠插入不带 run_id（服务端下一步边界折叠进当前轮）；独立轮次才带 run_id 关联生命周期
     if (!foldIn) body.run_id = runId;
     if (attachments.length > 0) body.attachments = attachments;
-    try {
-      await api("POST", "/v1/workspaces/" + workspaceId + "/agent", body);
-    } catch (sendErr) {
+      var sendTrace = { ws: workspaceId, session: sessionId, run: runId || S.activeRun && S.activeRun.runId };
+      log.info("ui.send", "ui.send", "User prompt submitted", { attachments: attachments.length, prompt_bytes: new TextEncoder().encode(body.prompt || "").length }, sendTrace);
+      try {        await api("POST", "/v1/workspaces/" + workspaceId + "/agent", body);
+      } catch (sendErr) {
+        log.error("ui.send", "ui.send.error", "Prompt submission failed", { error_code: "ipc_error", error: String(sendErr) }, sendTrace);
       // coordinator 被失败的 init 置空（如曾切到服务端未加载的 provider）：
       // 重建后重试一次，避免用户卡在永久性的“agent coordinator not initialized”
       if (String(sendErr).indexOf("agent coordinator not initialized") < 0) throw sendErr;

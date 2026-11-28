@@ -79,6 +79,8 @@ pub(crate) fn cleanup_processes(app: &tauri::AppHandle) {
 
     // 停止 docker 部署的模型容器（图片生成 / 语音合成；强杀进程时不会执行，改由启动时对账恢复）
     crate::pages::docker_model::cleanup_on_exit(&state);
+    common::logging::emit(common::logging::Level::Info, "desktop.app", "desktop.app.exit", "Desktop application exiting", serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"os":std::env::consts::OS}), serde_json::Value::Null, "desktop").ok();
+    let _ = common::logging::flush();
 }
 
 
@@ -95,8 +97,8 @@ pub fn run() {
         .manage(AppState::new())
         .manage(ilink::IlinkManaged::default())
         .setup(|app| {
-            // 调试日志：按持久化设置恢复开关（开启时截断重建 → 每次重启清空上次日志），
-            // 早于任何 admAgent 交互，确保本次会话从头开始记录。
+            common::logging::init().map_err(|e| format!("failed to initialize JSONL logger: {e}"))?;
+            common::logging::emit(common::logging::Level::Info, "desktop.app", "desktop.app.start", "Desktop application started", serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"os":std::env::consts::OS,"log_dir":common::logging::path().parent().map(|p| p.display().to_string()).unwrap_or_default(),"writer_health":common::logging::health()}), serde_json::Value::Null, "desktop").ok();
             agent::init_debug_logging(app.handle());
 
             // admAgent.json 备份与损坏恢复：首次启动备份；检测到损坏时弹窗引导从备份恢复
@@ -274,8 +276,12 @@ pub fn run() {
             agent::create_workspace,
             agent::switch_workspace,
             agent::agent_debug_log,
+            common::logging::agent_debug_log_structured,
+            common::logging::agent_debug_log_batch,
+            common::logging::agent_debug_log_flush,
             agent::set_debug_logging,
             agent::open_debug_log_dir,
+            agent::export_diagnostics,
             agent::read_attachment_file,
             agent::is_directory,
             agent::check_git_repo,

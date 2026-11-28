@@ -4,6 +4,14 @@
 
 ---
 
+## 结构化日志（Agent 视图）
+
+- 所有前端日志走 `views/agent/log.js`，不再直接 invoke 旧 `agent_debug_log`。新接口为 `log.debug/info/warn/error(comp, evt, msg, attrs, trace)`；旧两参数调用仍兼容，但新代码必须写精确事件名。
+- logger 自动带 `origin=ui/doc/ui_seq/ts_ms`，100ms/50 条批量；WARN/ERROR 立即发送。`pagehide` 与隐藏页面时 best-effort flush。`Settings.debug_logging` 关闭时仍保留 WARN/ERROR。
+- trace 只使用契约键，发送动作带 `ws/session/run`，SSE 带 `ws/session/run/type/bytes`；不得把 prompt、工具入参、命令、响应正文塞进 attrs。
+- `window.onerror`、`unhandledrejection`、`reportError` 与 `ui.js reportError` 统一写 `ui.error`；message/stack 脱敏后可见，stack 上限 32KB。
+- `store.js` 的 `_log` 只是统一 logger 的薄封装；不要恢复内联 IPC 日志，否则会绕过批量、级别与脱敏。
+
 ## 前端错误处理（Agent 视图，`src/views/agent/`）
 
 - **统一提取**：所有服务端错误（API invoke 抛错、SSE 事件内嵌 error）先用 `error.js` 的 `getErrorMessage()` 提取可读文本（兼容 string / Error / `{"error":{"message","type"}}` / 其它对象），再用 `classifyError()` 分类（quota/timeout/network/not_found/cancel/unknown）。

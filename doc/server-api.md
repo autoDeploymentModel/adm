@@ -326,11 +326,50 @@ GET /v1/health
 
 **请求参数**：无
 
-**响应**：`200 OK`（无响应体）
+**响应**：`200 OK`
+
+```json
+{
+  "schema_version": 1,
+  "boot": "UUID",
+  "proc_start_token": "hash",
+  "pid": 12345,
+  "role": "server",
+  "log_level": "info",
+  "payload_enabled": false,
+  "writer_health": {"dropped": 0, "errors": 0, "healthy": true},
+  "log_file": "/absolute/path/admAgent.jsonl",
+  "desktop_log": "/absolute/path/adm-desktop.jsonl"
+}
+```
+
+`log_file/desktop_log` 仅本地或授权调用方可见；TCP 对外响应不包含路径。旧 server 可能返回空响应体，客户端需兼容并记录 warning。
+
+### 1.2 注册桌面日志来源
+
+```
+POST /v1/log/source
+```
+
+请求体：
+
+```json
+{"desktop_log":"/absolute/path/adm-desktop.jsonl","boot":"UUID","schema":1}
+```
+
+server 校验绝对路径、文件名与 schema 后保存在内存；成功返回 `{"ok":true}`。该端点仅本地/授权访问。
+
+### 1.3 修改进程日志级别
+
+```
+POST /v1/log/level
+```
+
+请求体：`{"level":"debug|info|warn|error"}`。修改是进程级全局操作，写 `log.level.change` 审计事件；成功返回 `{"ok":true}`。该端点仅本地/授权访问。
 
 ---
 
-### 1.2 获取版本信息
+### 1.4 获取版本信息
 
 ```
 GET /v1/version
@@ -362,7 +401,7 @@ GET /v1/version
 
 ---
 
-### 1.3 获取全局配置
+### 1.5 获取全局配置
 
 ```
 GET /v1/config
@@ -376,7 +415,7 @@ GET /v1/config
 
 ---
 
-### 1.4 发送控制命令
+### 1.6 发送控制命令
 
 ```
 POST /v1/control
@@ -413,7 +452,7 @@ POST /v1/control
 
 ---
 
-### 1.5 回收客户端
+### 1.7 回收客户端
 
 ```
 DELETE /v1/clients/{client_id}

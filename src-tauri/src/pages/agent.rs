@@ -2268,6 +2268,15 @@ fn stop_agent_server_internal(state: &tauri::State<'_, AppState>) -> Result<(), 
     // 终止子进程（只杀本进程拉起的，共享 server 不杀）
     let old_child = state.agent_child.lock().map_err(|e| e.to_string())?.take();
     if let Some(mut child) = old_child {
+        let pid = child.id().unwrap_or(0);
+        if let Ok(Some(status)) = child.try_wait() {
+            let uptime = state.agent_child_started.lock().ok().and_then(|g| *g).map(|t| t.elapsed().as_millis()).unwrap_or(0);
+            crate::common::logging::emit(crate::common::logging::Level::Error, "desktop.server", "desktop.server.died", "Owned admAgent server died", serde_json::json!({"child_pid":pid,"server_boot":crate::common::logging::boot(),"exit_code":status.code(),"uptime_ms":uptime,"restart_attempt":0,"evidence":"child_exit"}), serde_json::Value::Null, "desktop").ok();
+        } else {
+        let uptime = state.agent_child_started.lock().ok().and_then(|g| *g).map(|t| t.elapsed().as_millis()).unwrap_or(0);
+        let reason = if state.app_exiting.load(Ordering::Relaxed) { "app_exit" } else { "user_stop" };
+        crate::common::logging::emit(crate::common::logging::Level::Info, "desktop.server", "desktop.server.stop", "Stopping owned admAgent server", serde_json::json!({"child_pid":pid,"reason":reason,"uptime_ms":uptime}), serde_json::Value::Null, "desktop").ok();
+        *state.agent_child_started.lock().map_err(|e| e.to_string())? = None;
         #[cfg(target_os = "windows")]
         {
             if let Some(pid) = child.id() {
@@ -2278,6 +2287,7 @@ fn stop_agent_server_internal(state: &tauri::State<'_, AppState>) -> Result<(), 
             }
         }
         let _ = child.start_kill();
+        }
     }
     Ok(())
 }
@@ -2372,11 +2382,13 @@ pub async fn start_agent_server(
         .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
     let mut child: Option<tokio::process::Child> = if health_check(&probe_client).await {
         eprintln!("[admAgent] 检测到已运行的 admAgent server，直接复用");
+        crate::common::logging::emit(crate::common::logging::Level::Info, "desktop.server", "desktop.server.reuse", "Reusing admAgent server", serde_json::json!({"transport":transport.display(),"server_version":"unknown"}), serde_json::Value::Null, "desktop").ok();
         None
     } else {
         // 没有运行中的 server：拉起子进程（不传 --host，服务端绑定平台默认传输）
         let mut cmd = tokio::process::Command::new(&agent_path);
         cmd.arg("server");
+        cmd.env("ADM_DESKTOP_LOG", crate::common::logging::path());
         if !workdir.is_empty() {
             cmd.arg("--cwd").arg(&workdir);
         }
@@ -2404,6 +2416,9 @@ pub async fn start_agent_server(
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("启动 admAgent server 失败: {}", e))?;
+        let child_pid = child.id().unwrap_or(0);
+        *state.agent_child_started.lock().map_err(|e| e.to_string())? = Some(std::time::Instant::now());
+        crate::common::logging::emit(crate::common::logging::Level::Info, "desktop.server", "desktop.server.spawn", "Spawned admAgent server", serde_json::json!({"binary_path":agent_path.display().to_string(),"arg_count":2,"known_flags":["server","--cwd"],"args_hash":crate::common::logging::hash_for_log(&workdir),"child_pid":child_pid,"log_dir":crate::common::logging::path().parent().map(|p| p.display().to_string()).unwrap_or_default()}), serde_json::Value::Null, "desktop").ok();
 
         // 后台读取 stdout/stderr 用于日志记录，同时 emit "model-log" 事件到全局启动日志
         let app_for_stdout = app.clone();
@@ -2420,6 +2435,7 @@ pub async fn start_agent_server(
                             for line in text.lines() {
                                 if line.is_empty() { continue; }
                                 eprintln!("[admAgent server] {}", line);
+                                crate::common::logging::raw_line("stdout", line);
                                 app_for_stdout.emit("model-log",
                                     serde_json::json!({ "line": format!("[Agent] {}", line), "source": "stdout" })).ok();
                             }
@@ -2443,6 +2459,7 @@ pub async fn start_agent_server(
                             for line in text.lines() {
                                 if line.is_empty() { continue; }
                                 eprintln!("[admAgent server ERROR] {}", line);
+                                crate::common::logging::raw_line("stderr", line);
                                 app_for_stderr.emit("model-log",
                                     serde_json::json!({ "line": format!("[Agent] {}", line), "source": "stderr" })).ok();
                             }
@@ -2472,6 +2489,7 @@ pub async fn start_agent_server(
                         child = None;
                         break;
                     }
+                    let _ = agent_exit_state(&app);
                     bail!("admAgent server 进程已意外退出，退出码: 见上方日志");
                 }
             }
@@ -2481,6 +2499,8 @@ pub async fn start_agent_server(
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
     }
+
+    let _ = agent_http::send(&probe_client, "POST", "/v1/log/source", Some(serde_json::json!({"desktop_log":crate::common::logging::path().display().to_string(),"boot":crate::common::logging::boot(),"schema":1}))).await;
 
     // 使用前端传入的 client_id，确保 SSE 流、POST /v1/workspaces、
     // current-session 全用同一个 client_id（Go 服务端要求 current-session
@@ -2564,6 +2584,8 @@ async fn forward_sse_events(
     app: &tauri::AppHandle, transport: &AgentTransport, workspace_id: &str, client_id: &str, stop: Arc<AtomicBool>,
 ) -> Result<(), AppError> {
     let path = format!("/v1/workspaces/{}/events?client_id={}", workspace_id, client_id);
+    let conn = crate::common::logging::new_id("c");
+    let trace = serde_json::json!({"ws":workspace_id,"client":client_id,"conn":conn});
     println!("[agent] forward_sse_events URL: {}", path);
     // SSE 是无限期长连接：只能限制建连耗时，绝不能给流本身设总超时（同原注释：
     // workspace 靠 SSE 流引用计数存活，最后一条流断开会立即 teardown workspace，
@@ -2579,13 +2601,15 @@ async fn forward_sse_events(
                 if stop.load(Ordering::Relaxed) { return Ok(()); }
                 // 连不上时检查 admAgent 进程是否已退出：已退出则通知前端自愈重启，
                 // 避免在死进程上无限空转、前端只能看到 "admAgent server 未运行"
-                if agent_process_exited(app) {
+                if matches!(agent_exit_state(app), AgentExitState::Died { .. }) {
                     println!("[agent] forward_sse_events: admAgent 进程已退出，通知前端自动重启");
                     api_debug_log(|| "SSE ! admAgent 进程已退出，通知前端自动重启".to_string());
                     let _ = app.emit("agent-server-died", serde_json::json!({}));
                     return Ok(());
                 }
                 println!("[agent] forward_sse_events 连接失败: {}", e);
+                crate::common::logging::emit(crate::common::logging::Level::Warn, "desktop.server", "desktop.server.unreachable", "admAgent server unreachable", serde_json::json!({"transport":transport.display(),"err":e}), trace.clone(), "desktop").ok();
+                crate::common::logging::emit(crate::common::logging::Level::Warn, "desktop.sse", "desktop.sse.disconnect", "Desktop SSE disconnected", serde_json::json!({"reason":"network","reconnect_in_ms":3000}), trace.clone(), "desktop").ok();
                 api_debug_log(|| format!("SSE ! 连接失败: {}", e));
                 tokio::time::sleep(Duration::from_secs(3)).await; continue;
             }
@@ -2595,6 +2619,7 @@ async fn forward_sse_events(
             tokio::time::sleep(Duration::from_secs(3)).await; continue;
         }
         println!("[agent] forward_sse_events SSE 已连接 workspace: {}", workspace_id);
+        crate::common::logging::emit(crate::common::logging::Level::Info, "desktop.sse", "desktop.sse.connect", "Desktop SSE connected", serde_json::json!({"status":status,"attempt":1}), trace.clone(), "desktop").ok();
         api_debug_log(|| format!("SSE = 已连接 workspace={} client={}", workspace_id, client_id));
 
         use futures_util::StreamExt;
@@ -2658,21 +2683,33 @@ async fn forward_sse_events(
         // 任何等待都在扩大 server 自杀的竞争窗口
         if !stop.load(Ordering::Relaxed) {
             println!("[agent] forward_sse_events 流断开，立即重连");
+            crate::common::logging::emit(crate::common::logging::Level::Warn, "desktop.sse", "desktop.sse.disconnect", "Desktop SSE disconnected", serde_json::json!({"reason":"stream_eof","reconnect_in_ms":0}), trace.clone(), "desktop").ok();
             api_debug_log(|| "SSE ! 流断开，立即重连".to_string());
         }
     }
 }
 
-/// 检查 admAgent server 子进程是否已退出（供 SSE 转发循环的自愈判断）。
-/// 会话已被清理（正常 stop 流程）时返回 false，由 sse_stop 标志让循环自行退出。
-/// 复用的共享 server（无子进程）无法探测进程状态，返回 true 让前端尝试重启：
-/// start_agent_server 会先探活，真死才重新拉起，活着的共享 server 不受影响。
-fn agent_process_exited(app: &tauri::AppHandle) -> bool {
+#[derive(Debug, PartialEq, Eq)]
+enum AgentExitState {
+    Alive,
+    Died { exit_code: Option<i32>, uptime_ms: u128 },
+    Unknown,
+}
+
+/// P0 只把 owned child 的实际退出判为 died；共享 server 的传输失败保持 unknown。
+fn agent_exit_state(app: &tauri::AppHandle) -> AgentExitState {
     let state = app.state::<AppState>();
-    let mut c = match state.agent_child.lock() { Ok(g) => g, Err(_) => return false };
-    match c.as_mut() {
-        Some(child) => matches!(child.try_wait(), Ok(Some(_))),
-        None => true, // 共享 server 无子进程，无法探测；返回 true 让前端尝试重启（start_agent_server 会先探活）
+    let mut child = match state.agent_child.lock() { Ok(g) => g, Err(_) => return AgentExitState::Unknown };
+    let Some(process) = child.as_mut() else { return AgentExitState::Unknown };
+    match process.try_wait() {
+        Ok(Some(status)) => {
+            let pid = process.id().unwrap_or(0);
+            let uptime = state.agent_child_started.lock().ok().and_then(|g| *g).map(|t| t.elapsed().as_millis()).unwrap_or(0);
+            crate::common::logging::emit(crate::common::logging::Level::Error, "desktop.server", "desktop.server.died", "Owned admAgent server died", serde_json::json!({"child_pid":pid,"exit_code":status.code(),"uptime_ms":uptime,"restart_attempt":0,"evidence":"child_exit"}), serde_json::Value::Null, "desktop").ok();
+            AgentExitState::Died { exit_code: status.code(), uptime_ms: uptime }
+        }
+        Ok(None) => AgentExitState::Alive,
+        Err(_) => AgentExitState::Unknown,
     }
 }
 
@@ -2688,111 +2725,27 @@ static LOG_ENABLED: AtomicBool = AtomicBool::new(false);
 pub fn is_debug_logging_enabled() -> bool {
     LOG_ENABLED.load(Ordering::Relaxed)
 }
-// 日志文件句柄：None = 尚未打开 / 打开失败。开关打开时截断重建，
-// 为“每次重启软件自动清空上次日志”：重启后首次 enable 时 File::create 截断。
-static LOG_FILE: std::sync::OnceLock<std::sync::Mutex<Option<std::fs::File>>> = std::sync::OnceLock::new();
 
-fn log_file_cell() -> &'static std::sync::Mutex<Option<std::fs::File>> {
-    LOG_FILE.get_or_init(|| std::sync::Mutex::new(None))
+/// JSONL 日志路径；不再创建或删除旧文本日志。
+fn api_debug_log_path(_app: &tauri::AppHandle) -> Option<PathBuf> {
+    Some(crate::common::logging::path())
 }
 
-/// 调试日志文件路径：app 数据目录（与 config.json 同处）下的 adm_api_debug.log。
-/// 不用 exe 同目录：正式安装下 Windows 的 Program Files 不可写、macOS 会污染
-/// .app 签名；app 数据目录始终可写且不影响安装包完整性。
-fn api_debug_log_path(app: &tauri::AppHandle) -> Option<PathBuf> {
-    let dir = config::get_data_dir(Some(app)).ok()?;
-    Some(dir.join("adm_api_debug.log"))
-}
-
-/// 开启调试日志：首次开启（含重启后）截断重建日志文件（清空上次），
-/// 已处于开启态时幂等返回（不重复截断）——否则调试期间每次保存设置
-/// 都会把本会话已积累的日志清空（排查中断时往往会顺手改模型/参数）。
-/// 返回日志文件路径供前端展示。
-fn enable_api_debug_log(app: &tauri::AppHandle) -> Option<PathBuf> {
-    let path = api_debug_log_path(app)?;
-    if LOG_ENABLED.load(Ordering::Relaxed) {
-        return Some(path); // 已开启：保持追加，不重复截断
-    }
-    let file = std::fs::File::create(&path).ok()?; // 截断：从关到开 / 重启后首次全新
-    if let Ok(mut cell) = log_file_cell().lock() {
-        *cell = Some(file);
-    }
+fn enable_api_debug_log(_app: &tauri::AppHandle) -> Option<PathBuf> {
     LOG_ENABLED.store(true, Ordering::Relaxed);
-    println!("[agent] 调试日志已开启: {}", path.display());
-    Some(path)
+    crate::common::logging::set_level(crate::common::logging::Level::Debug);
+    Some(crate::common::logging::path())
 }
 
-/// 关闭调试日志：置位关关、释放句柄并删除日志文件，避免过期日志残留
-/// （否则“打开日志目录”会定位到一份不再更新的旧日志，容易误读）。
-fn disable_api_debug_log(app: &tauri::AppHandle) {
+fn disable_api_debug_log(_app: &tauri::AppHandle) {
     LOG_ENABLED.store(false, Ordering::Relaxed);
-    if let Ok(mut cell) = log_file_cell().lock() {
-        *cell = None;
-    }
-    if let Some(path) = api_debug_log_path(app) {
-        let _ = std::fs::remove_file(&path);
-    }
+    crate::common::logging::set_level(crate::common::logging::Level::Warn);
 }
 
 /// 单行日志内容去换行 + 截断。
 fn api_log_snippet(s: &str, max: usize) -> String {
     let flat = s.replace('\n', " ↵ ");
     flat.chars().take(max).collect()
-}
-
-/// 将 JSON Value 中包含敏感关键词的 key（api_key/secret/password/token）的值替换为 "***"，
-/// 用于 HTTP 请求体日志脱敏，避免 API Key 等凭据明文写入 adm_api_debug.log。
-fn mask_sensitive_json(value: &serde_json::Value) -> String {
-    let mut v = value.clone();
-    mask_sensitive_in_place(&mut v);
-    api_log_snippet(&v.to_string(), 800)
-}
-fn mask_sensitive_in_place(value: &mut serde_json::Value) {
-    const SENSITIVE: &[&str] = &["api_key", "apikey", "secret", "password", "token"];
-    match value {
-        serde_json::Value::Object(map) => {
-            // 1) 字段名本身含敏感词 → 直接遮蔽其值
-            let keys_to_mask: Vec<String> = map.keys()
-                .filter(|k| {
-                    let lower = k.to_lowercase();
-                    SENSITIVE.iter().any(|sk| lower.contains(sk))
-                })
-                .cloned()
-                .collect();
-            for k in keys_to_mask {
-                if let Some(v) = map.get_mut(&k) {
-                    if !matches!(v, serde_json::Value::Null | serde_json::Value::Bool(_)) {
-                        *v = serde_json::Value::String("***".to_string());
-                    }
-                }
-            }
-            // 2) config/set 场景：key 字段值含敏感词时，遮蔽同对象的 value 字段
-            //    body = {"scope":0,"key":"providers.xxx.api_key","value":"sk-..."}
-            let key_is_sensitive = map.get("key")
-                .and_then(|v| v.as_str())
-                .map(|s| {
-                    let lower = s.to_lowercase();
-                    SENSITIVE.iter().any(|sk| lower.contains(sk))
-                })
-                .unwrap_or(false);
-            if key_is_sensitive {
-                if let Some(v) = map.get_mut("value") {
-                    if !matches!(v, serde_json::Value::Null | serde_json::Value::Bool(_)) {
-                        *v = serde_json::Value::String("***".to_string());
-                    }
-                }
-            }
-            for (_, v) in map.iter_mut() {
-                mask_sensitive_in_place(v);
-            }
-        }
-        serde_json::Value::Array(arr) => {
-            for v in arr.iter_mut() {
-                mask_sensitive_in_place(v);
-            }
-        }
-        _ => {}
-    }
 }
 
 /// 写一条 admAgent API 交互日志。开关关闭时一次 atomic load 即返回（闭包
@@ -2805,23 +2758,9 @@ pub(crate) fn api_debug_log<F: FnOnce() -> String>(line: F) {
     if !LOG_ENABLED.load(Ordering::Relaxed) {
         return;
     }
-    use std::io::Write;
-    if let Ok(mut cell) = log_file_cell().lock() {
-        if let Some(f) = cell.as_mut() {
-            let content = line();
-            // 空内容（如 summarize_sse_event 对噪音事件返回 None）不写，
-            // 避免产生只有时间戳的空行。
-            if content.is_empty() { return; }
-            let ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis())
-                .unwrap_or(0);
-            let _ = writeln!(
-                f, "{} {} {}",
-                ms, chrono::Local::now().format("%H:%M:%S%.3f"),
-                content
-            );
-        }
+    let content = line();
+    if !content.is_empty() {
+        crate::common::logging::raw_line("desktop", &content);
     }
 }
 
@@ -2937,26 +2876,23 @@ pub async fn agent_http_request(
     // 只读 GET 多为高频轮询（每轮 run 后刷 /agent /sessions /messages），是主噪音：
     // 成功时不记，只在出错时留痕；改状态的操作（发消息/切模式/权限）才记请求行。
     let is_get = method.eq_ignore_ascii_case("GET");
-    if !is_get {
-        api_debug_log(|| format!(
-            "HTTP > {} {}{}",
-            method.to_uppercase(), path,
-            body.as_ref().map(|b| format!(" body={}", mask_sensitive_json(b))).unwrap_or_default()
-        ));
-    }
+    let req = crate::common::logging::new_id("r");
+    let level = if is_get { crate::common::logging::Level::Debug } else { crate::common::logging::Level::Info };
+    let request_bytes = body.as_ref().map(|b| serde_json::to_vec(b).map(|v| v.len()).unwrap_or(0)).unwrap_or(0);
+    let request_path = path.split('?').next().unwrap_or("").chars().take(256).collect::<String>();
+    crate::common::logging::emit(level, "desktop.http", "desktop.http.request", "Desktop HTTP request", serde_json::json!({"req":req,"method":method.to_uppercase(),"path":request_path,"path_hash":crate::common::logging::hash_for_log(&path),"bytes":request_bytes}), serde_json::Value::Null, "desktop").ok();
     let client = build_client(&AgentTransport::default_host(), Duration::from_secs(5))
         .map_err(|e| format!("创建 HTTP 客户端失败: {}", e))?;
     // 180s：与 admAgent 服务端图片直调识别的整体超时（describeOverallTimeout）
     // 保持一致——识别在 HTTP 超时前返回或降级，避免“前端报错、后台继续跑”。
     let (status, bytes) = tokio::time::timeout(
         Duration::from_secs(180),
-        agent_http::send(&client, &method, &path, body),
+        agent_http::send_with_request_id(&client, &method, &path, body, Some(&req)),
     )
     .await
     .map_err(|_| "HTTP 请求超时".to_string())?
     .map_err(|e| {
-        // 网络失败一律留痕（含 GET）：连不上 server 是中断的关键线索。
-        api_debug_log(|| format!("HTTP ! {} {} 请求失败({}ms): {}", method.to_uppercase(), path, started.elapsed().as_millis(), e));
+        crate::common::logging::emit(crate::common::logging::Level::Warn, "desktop.http", "desktop.http.response", "Desktop HTTP transport failed", serde_json::json!({"req":req,"status":0,"dur_ms":started.elapsed().as_millis(),"bytes":0,"err":e}), serde_json::Value::Null, "desktop").ok();
         format!("HTTP 请求失败: {}", e)
     })?;
 
@@ -2965,7 +2901,7 @@ pub async fn agent_http_request(
     // 进度），空 body / 解析失败回落空对象，兼容 fire-and-forget 调用方。
     // 204 No Content: 删除等操作
     if status == 202 || status == 204 {
-        api_debug_log(|| format!("HTTP < {} {} {} ({}ms)", status, method.to_uppercase(), path, started.elapsed().as_millis()));
+        crate::common::logging::emit(level, "desktop.http", "desktop.http.response", "Desktop HTTP response", serde_json::json!({"req":req,"status":status,"dur_ms":started.elapsed().as_millis(),"bytes":bytes.len()}), serde_json::Value::Null, "desktop").ok();
         return Ok(decode_success_body(status, &bytes));
     }
 
@@ -2974,9 +2910,7 @@ pub async fn agent_http_request(
     if status == 200 {
         // 成功响应不 dump body（GET /messages 等会打一大坡）；只记非 GET 的一行状态+耗时。
         let result = decode_success_body(status, &bytes);
-        if !is_get {
-            api_debug_log(|| format!("HTTP < 200 {} {} ({}ms)", method.to_uppercase(), path, started.elapsed().as_millis()));
-        }
+        crate::common::logging::emit(level, "desktop.http", "desktop.http.response", "Desktop HTTP response", serde_json::json!({"req":req,"status":status,"dur_ms":started.elapsed().as_millis(),"bytes":bytes.len()}), serde_json::Value::Null, "desktop").ok();
         return Ok(result);
     }
 
@@ -2985,11 +2919,7 @@ pub async fn agent_http_request(
     // 空列表/空聊天（表现为“列表加载不出来”且控制台无任何报错）
     let text = String::from_utf8_lossy(&bytes).to_string();
     let snippet: String = text.chars().take(300).collect();
-    api_debug_log(|| format!(
-        "HTTP ! {} {} {} ({}ms) err={}",
-        status, method.to_uppercase(), path, started.elapsed().as_millis(),
-        api_log_snippet(&snippet, 300)
-    ));
+    crate::common::logging::emit(crate::common::logging::Level::Warn, "desktop.http", "desktop.http.response", "Desktop HTTP error response", serde_json::json!({"req":req,"status":status,"dur_ms":started.elapsed().as_millis(),"bytes":bytes.len()}), serde_json::Value::Null, "desktop").ok();
     bail!("HTTP {} {} {}: {}", status, method.to_uppercase(), path, snippet);
 }
 
@@ -3358,9 +3288,9 @@ pub async fn pick_workdir_folder(app: tauri::AppHandle) -> Result<String, AppErr
     Ok(path.to_string_lossy().to_string())
 }
 
-/// 启动时根据持久化设置恢复调试日志开关（config.json 的 debug_logging）。
-/// 开启时截断重建日志文件 —— 实现“每次重启软件自动清空上次日志”。
-/// 在 setup 阶段调用，早于任何 admAgent 交互。
+/// 启动时根据持久化设置恢复日志级别（config.json 的 debug_logging）。
+/// 日志文件已在 lib.rs setup 中无条件初始化；这里只切换 Info/Debug 级别，
+/// 关闭时 WARN/ERROR 仍会落盘，不截断、不删除 JSONL 历史。
 pub fn init_debug_logging(app: &tauri::AppHandle) {
     let data_dir = match config::get_data_dir(Some(app)) {
         Ok(d) => d,
@@ -3373,7 +3303,9 @@ pub fn init_debug_logging(app: &tauri::AppHandle) {
         .map(|s| s.debug_logging)
         .unwrap_or(false);
     if enabled {
-        enable_api_debug_log(app);
+        enable_api_debug_log(&app);
+    } else {
+        disable_api_debug_log(&app);
     }
 }
 
@@ -3389,7 +3321,7 @@ pub async fn set_debug_logging(app: tauri::AppHandle, enabled: bool) -> Result<S
         }
     } else {
         disable_api_debug_log(&app);
-        Ok(String::new())
+        Ok(crate::common::logging::path().to_string_lossy().to_string())
     }
 }
 
@@ -3398,8 +3330,31 @@ pub async fn set_debug_logging(app: tauri::AppHandle, enabled: bool) -> Result<S
 /// 仅在 debug_logging 开启时写入（与 api_debug_log 同一个开关）。
 #[tauri::command]
 pub async fn agent_debug_log(_app: tauri::AppHandle, line: String) -> Result<(), AppError> {
-    api_debug_log(|| format!("UI: {}", line));
+    crate::common::logging::raw_line("ui", &format!("UI: {line}"));
     Ok(())
+}
+
+/// 导出诊断包：优先调用 sidecar CLI，使用与 `admAgent diagnose` 完全相同的收集/脱敏规则。
+/// `include_sensitive` 必须由用户在预览后显式确认。
+#[tauri::command]
+pub async fn export_diagnostics(app: tauri::AppHandle, out: String, include_sensitive: bool, since: Option<String>) -> Result<String, AppError> {
+    let binary = adm_agent_path(&app)?;
+    let out_path = PathBuf::from(&out);
+    if let Some(parent) = out_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("创建诊断目录失败: {e}"))?;
+        }
+    }
+    let mut cmd = tokio::process::Command::new(binary);
+    cmd.arg("diagnose").arg("--out").arg(&out_path).arg("--since").arg(since.unwrap_or_else(|| "30m".to_string()));
+    if include_sensitive { cmd.arg("--include-sensitive"); }
+    #[cfg(target_os = "windows")]
+    {
+        cmd.creation_flags(0x08000000);
+    }
+    let output = tokio::time::timeout(Duration::from_secs(120), cmd.output()).await.map_err(|_| "诊断包导出超时".to_string())?.map_err(|e| format!("启动诊断导出失败: {e}"))?;
+    if !output.status.success() { bail!("诊断导出失败: {}", String::from_utf8_lossy(&output.stderr)); }
+    Ok(out_path.to_string_lossy().to_string())
 }
 
 /// 在系统文件管理器中打开调试日志所在位置（app 数据目录）。

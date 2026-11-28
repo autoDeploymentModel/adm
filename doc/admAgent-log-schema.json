@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://admagent.local/schemas/admAgent-log-schema.json",
+  "title": "admAgent JSONL log event v1",
+  "type": "object",
+  "required": ["v", "ts", "ts_ms", "seq", "lvl", "proc", "pid", "boot", "origin", "comp", "evt", "msg"],
+  "properties": {
+    "v": {"const": 1},
+    "ts": {"type": "string", "format": "date-time"},
+    "ts_ms": {"type": "integer"},
+    "seq": {"type": "integer", "minimum": 0},
+    "lvl": {"enum": ["debug", "info", "warn", "error"]},
+    "proc": {"enum": ["admAgent-server", "admAgent-tui", "adm-desktop"]},
+    "pid": {"type": "integer", "minimum": 1},
+    "boot": {"type": "string", "format": "uuid"},
+    "origin": {"enum": ["server", "tui", "desktop", "ui", "sidecar"]},
+    "doc": {"type": "string", "format": "uuid"},
+    "src": {"type": "string"},
+    "comp": {"type": "string"},
+    "evt": {"type": "string"},
+    "msg": {"type": "string"},
+    "trace": {"$ref": "#/$defs/trace"},
+    "dur_ms": {"type": "integer", "minimum": 0},
+    "err": {"$ref": "#/$defs/error"},
+    "sensitive": {"type": "boolean"},
+    "truncated": {"type": "array", "items": {"type": "string"}},
+    "ts_source": {"enum": ["receipt"]},
+    "clock_uncertain": {"type": "boolean"}
+  },
+  "allOf": [
+    {"if": {"properties": {"origin": {"const": "ui"}}, "required": ["origin"]}, "then": {"required": ["doc"]}},
+    {"if": {"properties": {"evt": {"enum": ["proc.panic", "http.panic", "raw.line", "raw.payload", "llm.payload"]}}, "required": ["evt"]}, "then": {"required": ["sensitive"], "properties": {"sensitive": {"const": true}}}}
+  ],
+  "additionalProperties": true,
+  "$defs": {
+    "trace": {
+      "type": "object",
+      "properties": {
+        "ws": {"type": "string"}, "client": {"type": "string"}, "session": {"type": "string"},
+        "run": {"type": "string"}, "turn": {"type": "string"}, "attempt": {"type": "integer"},
+        "parent_turn": {"type": "string"}, "prev_boot": {"type": "string"}, "server_boot": {"type": "string"},
+        "msg": {"type": "string"}, "step": {"type": "integer"}, "tool_call": {"type": "string"},
+        "req": {"type": "string"}, "conn": {"type": "string"}, "permission": {"type": "string"},
+        "hook": {"type": "string"}, "lsp": {"type": "string"}, "mcp": {"type": "string"},
+        "model": {"type": "string"}, "job": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "error": {
+      "type": "object",
+      "required": ["code"],
+      "properties": {
+        "code": {"enum": ["provider_auth", "provider_rate_limit", "provider_timeout", "provider_unavailable", "provider_invalid_request", "provider_context_overflow", "provider_stream_interrupted", "reasoning_overrun", "tool_timeout", "tool_cancelled", "tool_permission_denied", "tool_validation", "tool_not_found", "tool_execution", "tool_loop", "max_steps", "empty_output", "compaction_failed", "stale_read", "must_read", "hook_blocked", "hook_error", "lsp_unavailable", "lsp_error", "mcp_unavailable", "mcp_error", "sse_disconnected", "server_exited", "ipc_error", "config_invalid", "config_reload_failed", "session_gone", "summarize_cooldown", "storage_error", "log_write_failed", "disk_full", "panic", "internal_error", "unknown"]},
+        "retryable": {"type": "boolean"}, "status": {"type": "integer"},
+        "provider": {"type": "string"}, "text": {"type": "string", "maxLength": 500}
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -19,15 +19,13 @@
 
 // 临时消息内容匹配工具（utils.js 无任何导入，不存在循环依赖）
 import { stripSystemInfoText, getTextFromParts } from "./utils.js";
+import { log } from "./log.js";
 
 export const invoke = window.__adm_invoke;
 export const listen = window.__adm_listen;
 
-// store.js 不能直接 import log.js（log.js 用 window.__adm_invoke 不依赖 store，
-// 但为避免未来循环依赖风险，直接内联写日志）
 function _log(level, cat, msg) {
-  try { invoke("agent_debug_log", { line: "[" + cat + "][" + level + "] " + msg }).catch(function() {}); } catch (_) {}
-  console.log("[agent][" + cat + "] " + msg);
+  log[level](cat, msg);
 }
 
 // 快照冻结辅助：浅拷贝（数组 slice / 对象 assign）后冻结，外部只能读不能改

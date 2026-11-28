@@ -478,6 +478,7 @@ async fn install_zip_common(
     })?;
     // 清理暂存目录中可能残留的其他内容
     let _ = std::fs::remove_dir_all(&staging);
+    crate::common::logging::emit(crate::common::logging::Level::Info, "skills", "skills.load", "Skill installed", serde_json::json!({"name": name, "source": "store", "bytes": 0, "overwrite": overwrite}), serde_json::Value::Null, "desktop").ok();
     api_debug_log(|| format!("Skills: 安装成功 name={} dir={} overwrite={}", name, final_dir.display(), overwrite));
 
     // 5. 删除 zip 临时文件

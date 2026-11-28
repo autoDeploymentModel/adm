@@ -556,7 +556,7 @@ const EN = {
   " 修复失败：": " fix failed: ",
   "LSP 启动失败时将自动安装修复": "LSP startup failures will be fixed automatically",
   "LSP 启动失败时仅提示，不自动安装": "LSP startup failures will only be reported, not fixed automatically",
-  "开启后在 app 数据目录写入 adm_api_debug.log（记录与 admAgent 的关键 API/事件交互，含你发送的消息正文，供排查对话中断）；关闭或重启软件会自动清空日志": "When on, writes adm_api_debug.log in the app data directory (records key API/event interactions with admAgent, including your message text, for troubleshooting interruptions); disabling it or restarting the app clears the log",
+  "开启后写入 JSONL 日志（adm-desktop.jsonl / admAgent.jsonl 的关键事件、耗时与 token；默认不记录消息正文、命令或工具入参）；关闭后仅保留 WARN/ERROR，历史日志不会清空": "When on, writes structured JSONL logs (key events, durations and token counts in adm-desktop.jsonl / admAgent.jsonl; message text, commands and tool inputs are not recorded by default); when off only WARN/ERROR are kept and history is preserved",
   "开启调试日志失败: ": "Failed to enable debug logging: ",
   "开始一个新的对话": "Start a new conversation",
   "本会话正在运行，请先停止本轮后再撤销": "This session is running; stop the current turn before undoing",
